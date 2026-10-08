@@ -1,0 +1,12 @@
+{
+  "name": "@personal-ai-os/permissions",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --build",
+    "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test"
+  }
+}
