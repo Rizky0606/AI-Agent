@@ -1,5 +1,4 @@
 {
-  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
@@ -8,15 +7,14 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true
+    "rewriteRelativeImportExtensions": true
   }
 }

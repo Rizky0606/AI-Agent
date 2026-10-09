@@ -1,0 +1,485 @@
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { ProgressBar } from '../components/ProgressBar.tsx';
+import { StatusPill } from '../components/StatusPill.tsx';
+import { theme } from '../components/Theme.ts';
+import {
+  useCancelTask,
+  usePauseTask,
+  useResumeTask,
+  useTask,
+  useTaskEvents,
+} from '../hooks/use-queries.ts';
+import { TaskEventsWebSocketClient } from '../services/task-events-websocket.ts';
+import type { TaskEventEnvelope } from '@personal-ai-os/shared';
+
+export interface TaskDetailScreenProps {
+  taskId: string;
+  onBack: () => void;
+  onNavigateToApproval?: (approvalId: string) => void;
+}
+
+export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
+  taskId,
+  onBack,
+  onNavigateToApproval,
+}) => {
+  const { data: task, isLoading, refetch } = useTask(taskId);
+  const { data: initialEvents } = useTaskEvents(taskId);
+  const [liveEvents, setLiveEvents] = useState<TaskEventEnvelope[]>([]);
+
+  const pauseMutation = usePauseTask();
+  const resumeMutation = useResumeTask();
+  const cancelMutation = useCancelTask();
+
+  useEffect(() => {
+    if (initialEvents) {
+      setLiveEvents(initialEvents);
+    }
+  }, [initialEvents]);
+
+  // Realtime streaming of task events with auto-replay
+  useEffect(() => {
+    const ws = new TaskEventsWebSocketClient({
+      taskId,
+      onEvent: (evt) => {
+        setLiveEvents((prev) => {
+          if (prev.some((e) => e.id === evt.id)) return prev;
+          return [...prev, evt];
+        });
+        void refetch();
+      },
+    });
+
+    void ws.connect();
+    return () => {
+      ws.disconnect();
+    };
+  }, [taskId, refetch]);
+
+  if (isLoading || !task) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator color={theme.colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  const checkpoint = task.checkpoint;
+  const currentStep = checkpoint?.stepIndex ?? 1;
+  const totalSteps = checkpoint?.totalSteps ?? 4;
+  const pendingSteps = Math.max(0, totalSteps - currentStep);
+
+  // Filter and transform events into clean human summaries, stripping raw runtime noise
+  const humanTimeline = liveEvents.map((evt) => {
+    let title = 'Pembaruan Tugas';
+    let detail = '';
+
+    switch (evt.eventType) {
+      case 'task.created':
+        title = 'Tugas Dibuat';
+        detail = 'Tugas dimasukkan ke dalam antrean eksekusi sistem.';
+        break;
+      case 'task.started':
+        title = 'Eksekusi Dimulai';
+        detail = 'Asisten AI mulai menganalisis rencana kerja.';
+        break;
+      case 'task.progress':
+        title = `Progres: ${evt.payload?.progress ?? 0}%`;
+        detail =
+          typeof evt.payload?.action === 'string'
+            ? `Langkah: ${evt.payload.action.replace('_', ' ')}`
+            : 'Menjalankan instruksi berurutan...';
+        break;
+      case 'task.tool_call':
+        title = 'Penggunaan Alat / Resource';
+        detail =
+          typeof evt.payload?.action === 'string'
+            ? `Menjalankan alat: ${evt.payload.action}`
+            : 'Pemeriksaan resource selesai.';
+        break;
+      case 'task.waiting_approval':
+        title = 'Menunggu Persetujuan Anda ⚠️';
+        detail =
+          typeof evt.payload?.action === 'string'
+            ? `Operasi berisiko (${evt.payload?.riskLevel ?? 'HIGH'}): ${evt.payload.action}`
+            : 'Memerlukan otorisasi pengguna untuk melanjutkan.';
+        break;
+      case 'task.completed':
+        title = 'Tugas Selesai';
+        detail = 'Semua instruksi berhasil dieksekusi.';
+        break;
+      case 'task.failed':
+        title = 'Tugas Gagal';
+        detail =
+          typeof evt.payload?.error === 'string'
+            ? evt.payload.error
+            : 'Terjadi kendala saat mengeksekusi langkah.';
+        break;
+      case 'task.resumed':
+        title = 'Tugas Dilanjutkan';
+        detail = 'Persetujuan diberikan, eksekusi dilanjutkan.';
+        break;
+      case 'task.paused':
+        title = 'Tugas Dijeda';
+        detail = 'Eksekusi dihentikan sementara.';
+        break;
+      case 'task.cancelled':
+        title = 'Tugas Dibatalkan';
+        detail = 'Pengguna membatalkan proses pengerjaan.';
+        break;
+    }
+
+    return {
+      id: evt.id,
+      title,
+      detail,
+      time: new Date(evt.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+  });
+
+  return (
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
+          <Text style={styles.backBtnText}>←</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          Detail Tugas
+        </Text>
+        <StatusPill status={task.status} />
+      </View>
+
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Waiting Approval Alert Banner */}
+        {task.status === 'waiting_approval' ? (
+          <View style={styles.approvalBanner}>
+            <Text style={styles.bannerTitle}>⚠️ Persetujuan Diperlukan</Text>
+            <Text style={styles.bannerDesc}>
+              Tugas ini dihentikan sementara karena aksi yang akan dijalankan memerlukan konfirmasi
+              izin dari Anda.
+            </Text>
+            {onNavigateToApproval && task.checkpoint?.actionState?.approvalId ? (
+              <TouchableOpacity
+                style={styles.bannerActionBtn}
+                onPress={() =>
+                  onNavigateToApproval(task.checkpoint?.actionState?.approvalId as string)
+                }
+              >
+                <Text style={styles.bannerActionText}>Buka Kotak Persetujuan →</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* Overview Card */}
+        <View style={styles.card}>
+          <Text style={styles.taskKindTitle}>{task.kind.replace('_', ' ').toUpperCase()}</Text>
+
+          <View style={styles.progressRow}>
+            <Text style={styles.label}>Penyelesaian</Text>
+            <Text style={styles.percentText}>{task.progress}%</Text>
+          </View>
+          <ProgressBar progress={task.progress} />
+
+          <View style={styles.statsGrid}>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Langkah Selesai</Text>
+              <Text style={styles.statValue}>
+                {currentStep} / {totalSteps}
+              </Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Sisa Langkah</Text>
+              <Text style={styles.statValue}>{pendingSteps}</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Percobaan</Text>
+              <Text style={styles.statValue}>
+                {task.attempt} / {task.maxAttempts}
+              </Text>
+            </View>
+          </View>
+
+          {task.error ? (
+            <View style={styles.errorNotice}>
+              <Text style={styles.errorText}>Keterangan Masalah: {task.error}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Action Controls */}
+        <View style={styles.controlsRow}>
+          {task.status === 'running' ? (
+            <TouchableOpacity
+              style={[styles.controlBtn, styles.pauseBtn]}
+              onPress={() => pauseMutation.mutate(task.id)}
+            >
+              <Text style={styles.controlBtnText}>Jeda (Pause)</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {task.status === 'paused' ? (
+            <TouchableOpacity
+              style={[styles.controlBtn, styles.resumeBtn]}
+              onPress={() => resumeMutation.mutate(task.id)}
+            >
+              <Text style={styles.controlBtnText}>Lanjutkan (Resume)</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {task.status !== 'completed' &&
+          task.status !== 'cancelled' &&
+          task.status !== 'failed' ? (
+            <TouchableOpacity
+              style={[styles.controlBtn, styles.cancelBtn]}
+              onPress={() => cancelMutation.mutate(task.id)}
+            >
+              <Text style={styles.controlBtnText}>Batalkan</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {/* Human-Friendly Timeline */}
+        <View style={styles.timelineSection}>
+          <Text style={styles.sectionHeading}>Aktivitas yang Dilakukan</Text>
+          {humanTimeline.length === 0 ? (
+            <Text style={styles.emptyTimelineText}>Belum ada aktivitas tercatat.</Text>
+          ) : (
+            humanTimeline.map((item, idx) => (
+              <View key={item.id || idx} style={styles.timelineItem}>
+                <View style={styles.timelineDot} />
+                <View style={styles.timelineBody}>
+                  <View style={styles.timelineHeaderRow}>
+                    <Text style={styles.timelineTitle}>{item.title}</Text>
+                    <Text style={styles.timelineTime}>{item.time}</Text>
+                  </View>
+                  <Text style={styles.timelineDetail}>{item.detail}</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.surfaceBorder,
+  },
+  backBtn: {
+    padding: theme.spacing.xs,
+    marginRight: theme.spacing.sm,
+  },
+  backBtnText: {
+    color: theme.colors.primary,
+    fontSize: 22,
+    fontWeight: 'bold',
+  },
+  headerTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scrollContent: {
+    padding: theme.spacing.md,
+  },
+  approvalBanner: {
+    backgroundColor: theme.colors.riskMediumBg,
+    borderColor: theme.colors.warning,
+    borderWidth: 1,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+  },
+  bannerTitle: {
+    color: theme.colors.warning,
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  bannerDesc: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: theme.spacing.sm,
+  },
+  bannerActionBtn: {
+    backgroundColor: theme.colors.warning,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: theme.borderRadius.sm,
+    alignSelf: 'flex-start',
+  },
+  bannerActionText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  card: {
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.md,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+    marginBottom: theme.spacing.md,
+  },
+  taskKindTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: theme.spacing.sm,
+  },
+  progressRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  label: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+  },
+  percentText: {
+    color: theme.colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.surfaceBorder,
+  },
+  statBox: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  statLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    marginBottom: 2,
+  },
+  statValue: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  errorNotice: {
+    backgroundColor: theme.colors.dangerBg,
+    padding: theme.spacing.sm,
+    borderRadius: theme.borderRadius.sm,
+    marginTop: theme.spacing.md,
+  },
+  errorText: {
+    color: theme.colors.danger,
+    fontSize: 12,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    marginBottom: theme.spacing.lg,
+  },
+  controlBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: theme.borderRadius.sm,
+    alignItems: 'center',
+    marginHorizontal: 4,
+  },
+  pauseBtn: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+  },
+  resumeBtn: {
+    backgroundColor: theme.colors.primary,
+  },
+  cancelBtn: {
+    backgroundColor: theme.colors.dangerBg,
+    borderWidth: 1,
+    borderColor: theme.colors.danger,
+  },
+  controlBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  timelineSection: {
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.md,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+  },
+  sectionHeading: {
+    color: theme.colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: theme.spacing.md,
+  },
+  emptyTimelineText: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+  },
+  timelineItem: {
+    flexDirection: 'row',
+    marginBottom: theme.spacing.md,
+  },
+  timelineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.primary,
+    marginTop: 5,
+    marginRight: theme.spacing.sm,
+  },
+  timelineBody: {
+    flex: 1,
+  },
+  timelineHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  timelineTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  timelineTime: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+  },
+  timelineDetail: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+});

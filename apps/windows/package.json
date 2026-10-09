@@ -3,10 +3,27 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "src/index.ts",
   "scripts": {
-    "build": "tsc --build",
-    "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
+    "build": "tsc --noEmit && vite build",
+    "lint": "eslint src test --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@personal-ai-os/permissions": "workspace:*",
+    "@personal-ai-os/shared": "workspace:*",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/react": "~18.3.18",
+    "@types/react-dom": "~18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.0"
   }
 }

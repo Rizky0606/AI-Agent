@@ -1,0 +1,42 @@
+{
+  "name": "research-quality-checklist",
+  "version": "1.0.0",
+  "description": "Checklist verifikasi kualitas riset, validitas rujukan, anti-halusinasi sitasi, dan konsistensi sumber independen.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string" },
+      "sources": { "type": "array" },
+      "claims": { "type": "array" }
+    },
+    "required": ["query", "sources", "claims"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "passed": { "type": "boolean" },
+      "qualityScore": { "type": "number" },
+      "items": { "type": "array" },
+      "unbackedClaims": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["passed", "qualityScore", "items", "unbackedClaims"]
+  },
+  "toolRequirements": [],
+  "permissions": [
+    {
+      "action": "tool:inspect_research_quality",
+      "resource": "research://citations",
+      "scope": "workspace",
+      "riskLevel": "LOW",
+      "reason": "Audit kredibilitas sumber dan pemetaan sitasi rujukan riset."
+    }
+  ],
+  "compatibility": {
+    "agentCoreVersion": ">=0.2.0",
+    "platforms": ["node", "linux", "windows"]
+  },
+  "metadata": {
+    "category": "research_assurance",
+    "author": "personal-ai-os"
+  }
+}

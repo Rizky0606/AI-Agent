@@ -1,5 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
-  "include": ["src/**/*.ts"]
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": ["src/**/*", "test/**/*", "App.tsx", "index.ts"]
 }

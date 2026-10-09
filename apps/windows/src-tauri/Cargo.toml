@@ -1,0 +1,21 @@
+[package]
+name = "personal-ai-os-windows"
+version = "0.1.0"
+description = "Personal AI OS Windows Agent Tauri 2 application"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = [] }
+tauri-plugin-shell = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+thiserror = "2.0"
+tracing = "0.1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

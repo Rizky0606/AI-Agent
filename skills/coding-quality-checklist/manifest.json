@@ -1,0 +1,42 @@
+{
+  "name": "coding-quality-checklist",
+  "version": "1.0.0",
+  "description": "Checklist verifikasi kualitas kode, kepatuhan arsitektur, pemindaian kredensial sensitif, dan bukti pengujian.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "codeOrDiff": { "type": "string" },
+      "testResultsSummary": { "type": "string" },
+      "modifiedFiles": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["codeOrDiff"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "passed": { "type": "boolean" },
+      "score": { "type": "number" },
+      "items": { "type": "array" },
+      "criticalIssues": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["passed", "score", "items"]
+  },
+  "toolRequirements": [],
+  "permissions": [
+    {
+      "action": "tool:inspect_code_quality",
+      "resource": "workspace://code",
+      "scope": "workspace",
+      "riskLevel": "LOW",
+      "reason": "Audit statis dan inspeksi diff untuk menjamin standar kualitas kode."
+    }
+  ],
+  "compatibility": {
+    "agentCoreVersion": ">=0.2.0",
+    "platforms": ["node", "linux", "windows"]
+  },
+  "metadata": {
+    "category": "quality_assurance",
+    "author": "personal-ai-os"
+  }
+}

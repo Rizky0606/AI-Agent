@@ -1,12 +1,26 @@
 {
   "name": "@personal-ai-os/agent-worker",
   "private": true,
-  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "build": "tsc --build",
-    "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src test --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.4"
+  },
+  "dependencies": {
+    "@personal-ai-os/agent-core": "workspace:*",
+    "@personal-ai-os/evaluator": "workspace:*",
+    "@personal-ai-os/mcp": "workspace:*",
+    "@personal-ai-os/memory": "workspace:*",
+    "@personal-ai-os/permissions": "workspace:*",
+    "@personal-ai-os/shared": "workspace:*",
+    "@personal-ai-os/tools": "workspace:*",
+    "bullmq": "^6.3.11",
+    "ioredis": "^5.11.1"
   }
 }

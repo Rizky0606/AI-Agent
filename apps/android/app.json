@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Personal AI OS",
+    "slug": "personal-ai-os",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "personal-ai",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.personalai.os"
+    },
+    "android": {
+      "package": "com.personalai.os"
+    },
+    "plugins": ["expo-secure-store"]
+  }
+}
