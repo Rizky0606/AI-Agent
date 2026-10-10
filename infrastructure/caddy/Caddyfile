@@ -1,8 +1,9 @@
 {
-  email {$ACME_EMAIL}
+  auto_https off
+  admin off
 }
 
-{$PUBLIC_HOSTNAME} {
+:80 {
   encode gzip
   reverse_proxy api:3000
 }
