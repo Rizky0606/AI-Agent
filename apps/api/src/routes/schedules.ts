@@ -85,6 +85,22 @@ export const registerSchedulesRoutes = async (
         });
       }
 
+      // Accept {kind, payload} shape and normalize to TaskPayload {kind, input}
+      const rawPayload = body.taskPayload as unknown as Record<string, unknown>;
+      const normalizedTaskPayload = {
+        kind: String(rawPayload.kind ?? ''),
+        input: (rawPayload.input ?? rawPayload.payload ?? {}) as Record<string, unknown>,
+        priority: typeof rawPayload.priority === 'number' ? rawPayload.priority : undefined,
+      };
+      if (!normalizedTaskPayload.kind) {
+        return reply.code(400).send({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'taskPayload.kind wajib diisi',
+          },
+        });
+      }
+
       try {
         const job = schedulerEngine.registerSchedule({
           userId: user.id,
@@ -95,7 +111,7 @@ export const registerSchedulesRoutes = async (
           cronExpression: body.cronExpression,
           timezone: body.timezone,
           missedRunPolicy: body.missedRunPolicy,
-          taskPayload: body.taskPayload,
+          taskPayload: normalizedTaskPayload,
         });
 
         return reply.code(201).send({ schedule: job });
