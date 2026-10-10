@@ -1,24 +1,33 @@
 # Verifikasi 9Router — 2026-10-10
 
-Sumber: `node --experimental-strip-types scripts/verify-9router.ts` dijalankan di VPS (servernic) dengan `NINEROUTER_API_KEY` dari `.env` (key tidak dicetak). Endpoint: `https://9router.ojixx.my.id/v1`.
+Sumber: `scripts/verify-9router.ts` + probe manual curl di VPS (servernic), key dari `.env` (tidak pernah dicetak). Endpoint: `https://9router.ojixx.my.id/v1`.
 
-## Hasil probe otomatis
+## Hasil probe otomatis (scripts/verify-9router.ts)
 | Probe | Status | Bukti |
 | --- | --- | --- |
 | Connectivity | available | `GET /models` tanpa auth → HTTP 401 (server hidup) |
-| Authentication + model list | available | `GET /models` dengan key → HTTP 200, 257 model, fields `id`,`object`,`owned_by` |
-| Streaming | SKIPPED | butuh `NINEROUTER_ALLOW_BILLABLE_PROBES=true` (berbayar) |
-| Tool calling | SKIPPED | idem |
-| Vision | SKIPPED | idem |
-| Usage/cost metadata | SKIPPED | idem |
-| Context window | inconclusive | tidak diuji (prompt besar = biaya) |
-| Rate limits | inconclusive | tidak ada header rate-limit pada respons |
+| Authentication + model list | available | `GET /models` dengan key → HTTP 200, 257 model |
+| Streaming/tool/vision (billable) | skipped oleh skrip | butuh `NINEROUTER_ALLOW_BILLABLE_PROBES=true` |
 
-## Kandidat DEFAULT_CHAT_MODEL (dari daftar model, belum diuji inference)
-- `or/anthropic/claude-sonnet-4-6` / `-4.5`, `or/anthropic/claude-opus-4.6`…`-5.5`, `or/anthropic/claude-haiku-4.5`, `or/anthropic/claude-fable-5`/`-5.1`
-- `or/deepseek/deepseek-chat`, `or/deepseek/deepseek-reasoner`, `or/google/gemini-3.5-flash`, `or/openai/gpt-4o(-mini)`
-- Gratis: `agentic/deepseek-v4.1-flash-free`, `agentic/muse-spark-1.3-free`, `agentic/qwen3.8-flash-free`
+## Probe manual per model (2026-10-10)
+Kategori provider `zrouter/` (pilihan pemilik): chat/streaming/tool/vision → **HTTP 402 `insufficient_balance`** pada `zrouter/gpt-5.6-terra`, `zrouter/gemini-3.8-flash`, `zrouter/deepseek-v4.1-flash`, `zrouter/glm-5.3-flash`. Akun perlu top-up PAYG/Token Plan untuk semua model berbayar.
 
-## Keputusan menunggu pemilik
-1. `DEFAULT_CHAT_MODEL` belum diisi. Rekomendasi: `or/anthropic/claude-sonnet-4-6` (chat+streaming), atau `agentic/deepseek-v4.1-flash-free` jika ingin tanpa biaya.
-2. Streaming/tool-calling/vision belum terverifikasi nyata. Untuk menguji: set `NINEROUTER_ALLOW_BILLABLE_PROBES=true` lalu jalankan ulang verify (perkiraan biaya kecil, beberapa request inference tunggal).
+Model gratis lain:
+| Model | Chat | Streaming | Tool calling | Vision |
+| --- | --- | --- | --- | --- |
+| `agentic/space-bunny-free` | OK (jawab "OK") | OK (9 chunks, SSE, [DONE]) | OK (`tool_calls` get_weather{"city":"Jakarta"}, finish_reason=tool_calls) | TIDAK (model menyatakan no vision support) |
+| `agentic/deepseek-v4.1-flash-free` | 429 `free_shared_pool_exhausted` (kuota harian global habis, reset 00:00 WIB) | — | — | — |
+| `agentic/qwen3.8-flash-free` | 403 `model_not_available` di plan free | — | — | — |
+| `hubmix/gemini-3.8-flash-free` | 404 `model_retired` | — | — | — |
+| `hubmix/minimax-m3-free` | 400 `no_available_channel` | — | — | — |
+| `or/google/gemini-3.5-flash` | 402 out of credits | — | — | — |
+
+## Context window
+- `/models` tidak menyediakan metadata context_length/context_window.
+- Uji input panjang `agentic/space-bunny-free`: payload ~12.000 kata diterima, `usage.prompt_tokens=12975` tanpa error → setidaknya ~13k token berfungsi praktis. Batas atas tidak diuji (biaya/limit).
+
+## Keputusan & rekomendasi
+- **DEFAULT_CHAT_MODEL diset ke `agentic/space-bunny-free`** — satu-satunya model yang LULUS chat+streaming+tool calling saat ini (gratis, tanpa top-up). Catatan: melayani via `zen-space-bunny-free`, reasoning-heavy (output di `reasoning_content`).
+- Vision: TIDAK tersedia pada model gratis yang hidup. Perlu top-up (mis. `zrouter/gemini-3.8-flash` atau `or/...`) bila fitur vision dibutuhkan.
+- Rate limit: error 402/429 menyertakan "(reset after Xm)" — backoff per request, tanpa header rate-limit standar.
+- Jalankan ulang probe: `sh scripts/.probe-zrouter.sh <model-id>` (helper lokal, tidak di-commit; hasil tetap terdokumentasi di sini).
