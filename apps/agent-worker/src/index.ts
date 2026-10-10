@@ -165,3 +165,92 @@ export const startWorkerProcess = async (): Promise<{
     console.error('[agent-worker] Error recovering dangling tasks:', recErr);
   }
 
+  console.log(
+    JSON.stringify({
+      service: 'agent-worker',
+      status: 'running',
+      concurrency: workerConcurrency,
+    }),
+  );
+
+  let isClosing = false;
+  const closeAll = async (): Promise<void> => {
+    if (isClosing) return;
+    isClosing = true;
+    await workerHandle.close();
+    await broadcaster.close(true);
+    await sqlClient.end({ timeout: 5 });
+  };
+
+  return {
+    close: closeAll,
+    worker: workerHandle.worker,
+    executor: workerHandle.executor,
+  };
+};
+
+// Standalone execution if started directly via process
+const isMainModule = (): boolean => {
+  if (!process.argv[1]) return false;
+  try {
+    const currentFilePath = fileURLToPath(import.meta.url);
+    const executedPath = resolve(process.argv[1]);
+    return currentFilePath === executedPath;
+  } catch {
+    return process.argv[1].endsWith('agent-worker/src/index.ts');
+  }
+};
+
+if (isMainModule()) {
+  let keepAliveInterval: NodeJS.Timeout | undefined;
+
+  startWorkerProcess()
+    .then((handle) => {
+      let isShuttingDown = false;
+      const shutdown = async (signal: string): Promise<void> => {
+        if (isShuttingDown) return;
+        isShuttingDown = true;
+        if (keepAliveInterval) clearInterval(keepAliveInterval);
+        try {
+          unlinkSync(healthFile);
+        } catch {
+          // Ignore
+        }
+        console.log(`[agent-worker] Received ${signal}. Shutting down gracefully...`);
+        try {
+          await handle.close();
+          console.log('[agent-worker] Graceful shutdown completed.');
+          process.exit(0);
+        } catch (err) {
+          console.error('[agent-worker] Error during shutdown:', err);
+          process.exit(1);
+        }
+      };
+
+      process.once('SIGTERM', () => {
+        void shutdown('SIGTERM');
+      });
+      process.once('SIGINT', () => {
+        void shutdown('SIGINT');
+      });
+
+      const healthFile = process.env.HEALTHCHECK_FILE ?? '/tmp/healthy';
+      const touchHealth = () => {
+        try {
+          writeFileSync(healthFile, Date.now().toString());
+        } catch {
+          // Best effort
+        }
+      };
+      touchHealth();
+
+      // Keep process event loop alive indefinitely while waiting for jobs
+      keepAliveInterval = setInterval(() => {
+        touchHealth();
+      }, 15_000);
+    })
+    .catch((err) => {
+      console.error('[agent-worker] Fatal startup error:', err);
+      process.exit(1);
+    });
+}
