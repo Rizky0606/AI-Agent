@@ -1,48 +1,24 @@
-# Verifikasi 9Router
+# Verifikasi 9Router — 2026-10-10
 
-Tanggal assessment: 2026-10-09 (Asia/Jakarta)  
-Endpoint: `https://9router.ojixx.my.id/v1`
+Sumber: `node --experimental-strip-types scripts/verify-9router.ts` dijalankan di VPS (servernic) dengan `NINEROUTER_API_KEY` dari `.env` (key tidak dicetak). Endpoint: `https://9router.ojixx.my.id/v1`.
 
-## Hasil nyata
+## Hasil probe otomatis
+| Probe | Status | Bukti |
+| --- | --- | --- |
+| Connectivity | available | `GET /models` tanpa auth → HTTP 401 (server hidup) |
+| Authentication + model list | available | `GET /models` dengan key → HTTP 200, 257 model, fields `id`,`object`,`owned_by` |
+| Streaming | SKIPPED | butuh `NINEROUTER_ALLOW_BILLABLE_PROBES=true` (berbayar) |
+| Tool calling | SKIPPED | idem |
+| Vision | SKIPPED | idem |
+| Usage/cost metadata | SKIPPED | idem |
+| Context window | inconclusive | tidak diuji (prompt besar = biaya) |
+| Rate limits | inconclusive | tidak ada header rate-limit pada respons |
 
-| Kemampuan                           | Status      | Bukti / batasan                                                                                                             |
-| ----------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Konektivitas HTTPS ke `GET /models` | tersedia    | Probe menerima respons HTTP `401`; DNS, TLS, dan HTTP endpoint dapat dijangkau. Respons ini bukan bukti key valid.          |
-| Autentikasi bearer                  | belum diuji | Tidak ada `NINEROUTER_API_KEY` atau `NINE_ROUTER_API_KEY` di environment proses assessment.                                 |
-| Daftar model                        | belum diuji | Membutuhkan bearer key; model tidak boleh diasumsikan dari dokumen rencana.                                                 |
-| Streaming                           | belum diuji | Probe billable tidak dijalankan tanpa key, model eksplisit, dan opt-in biaya.                                               |
-| Tool calling                        | belum diuji | Sama; tidak boleh dipromosikan sebagai capability sebelum respons tool-call nyata diterima.                                 |
-| Vision                              | belum diuji | Sama; perlu model vision yang dipilih eksplisit.                                                                            |
-| Context window                      | belum diuji | Tidak ada metadata model terautentikasi. Probe tidak mengirim konteks besar karena berbiaya dan tidak aman sebagai default. |
-| Rate limit                          | belum diuji | Respons `401` tidak membawa header rate-limit. Tidak dilakukan load test terhadap gateway bersama.                          |
-| Usage / biaya                       | belum diuji | Tidak ada completion terautentikasi yang dapat diperiksa untuk `usage` atau metadata harga.                                 |
+## Kandidat DEFAULT_CHAT_MODEL (dari daftar model, belum diuji inference)
+- `or/anthropic/claude-sonnet-4-6` / `-4.5`, `or/anthropic/claude-opus-4.6`…`-5.5`, `or/anthropic/claude-haiku-4.5`, `or/anthropic/claude-fable-5`/`-5.1`
+- `or/deepseek/deepseek-chat`, `or/deepseek/deepseek-reasoner`, `or/google/gemini-3.5-flash`, `or/openai/gpt-4o(-mini)`
+- Gratis: `agentic/deepseek-v4.1-flash-free`, `agentic/muse-spark-1.3-free`, `agentic/qwen3.8-flash-free`
 
-## Skrip reproducible
-
-Skrip [verify-9router.ts](../../scripts/verify-9router.ts) tidak menyimpan atau mencetak API key. Mode default hanya menguji konektivitas dan **tidak** mengirim completion yang dapat ditagih.
-
-```powershell
-$env:NINEROUTER_API_KEY = 'key-dari-secret-manager-atau-session-env'
-node --experimental-strip-types scripts/verify-9router.ts
-```
-
-Untuk menguji endpoint inference, tetapkan model yang memang disetujui dan opt-in eksplisit terhadap biaya:
-
-```powershell
-$env:NINEROUTER_TEST_MODEL = 'model-id-dari-GET-models'
-$env:NINEROUTER_ALLOW_BILLABLE_PROBES = 'true'
-node --experimental-strip-types scripts/verify-9router.ts
-```
-
-Keluaran JSON merekam status HTTP, header rate-limit yang ada, field metadata model, `usage`, dan `cost`/`costs`/`pricing` bila provider mengirimkannya. Simpan keluaran itu sebagai artefak internal yang telah direview; jangan memasukkan key maupun isi percakapan sensitif ke dokumen ini.
-
-## Kriteria penerimaan ulang
-
-- `GET /models` dengan key valid menghasilkan daftar model dan field capability/context yang nyata.
-- Streaming menerima sedikitnya satu chunk non-kosong dan `content-type` direkam.
-- Tool calling menghasilkan `tool_calls` atau kegagalan kompatibilitas yang terdokumentasi.
-- Vision menjawab request gambar 1×1 yang dikirim script.
-- Completion sederhana mengungkap apakah token usage dan biaya tersedia.
-- Header rate-limit, atau ketiadaannya, dicatat dari respons sukses.
-
-Hasil saat ini tidak membuktikan kompatibilitas OpenAI penuh; hanya keterjangkauan endpoint tanpa kredensial.
+## Keputusan menunggu pemilik
+1. `DEFAULT_CHAT_MODEL` belum diisi. Rekomendasi: `or/anthropic/claude-sonnet-4-6` (chat+streaming), atau `agentic/deepseek-v4.1-flash-free` jika ingin tanpa biaya.
+2. Streaming/tool-calling/vision belum terverifikasi nyata. Untuk menguji: set `NINEROUTER_ALLOW_BILLABLE_PROBES=true` lalu jalankan ulang verify (perkiraan biaya kecil, beberapa request inference tunggal).
