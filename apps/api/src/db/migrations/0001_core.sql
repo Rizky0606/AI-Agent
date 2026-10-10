@@ -40,6 +40,7 @@ CREATE TABLE tasks (
   idempotency_key varchar(128), lease_expires_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT tasks_project_scope_fk FOREIGN KEY (project_id, user_id) REFERENCES projects(id, user_id) ON DELETE CASCADE,
   CONSTRAINT tasks_user_idempotency_uq UNIQUE (user_id, idempotency_key),
+  CONSTRAINT tasks_scope_uq UNIQUE (id, user_id),
   CONSTRAINT tasks_status_ck CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled'))
 );
 CREATE TABLE task_events (

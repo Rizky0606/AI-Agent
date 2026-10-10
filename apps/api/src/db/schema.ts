@@ -149,6 +149,7 @@ export const tasks = pgTable(
   (table) => [
     index('tasks_scope_status_idx').on(table.userId, table.projectId, table.status),
     uniqueIndex('tasks_user_idempotency_uq').on(table.userId, table.idempotencyKey),
+    uniqueIndex('tasks_scope_uq').on(table.id, table.userId),
   ],
 );
 
