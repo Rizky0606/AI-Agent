@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { ApprovalRequiredError, PermissionDeniedError } from '@personal-ai-os/permissions';
 import {
   codingQualityChecklistHandler,
@@ -33,7 +34,9 @@ export function registerSkillRoutes(
   const executor = options.executor ?? new SkillExecutor();
   const validator = options.validator ?? new ManifestValidator();
   const loader = new SkillLoader(validator);
-  const skillsDir = options.skillsDir ?? 'c:/Coding/Project/ai-agent/skills';
+  const defaultSkillsDir =
+    process.env['SKILLS_DIR'] ?? fileURLToPath(new URL('../../../../skills', import.meta.url));
+  const skillsDir = options.skillsDir ?? defaultSkillsDir;
 
   // In-memory handler registry for builtin skills
   const builtinHandlers = new Map<string, SkillHandler<never, never>>();

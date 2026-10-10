@@ -40,7 +40,7 @@ export class PathValidator {
 
   private normalize(targetPath: string): string {
     // Resolve absolute path and normalize slashes to lowercase drive on Windows
-    const resolved = path.resolve(targetPath);
+    const resolved = path.win32.resolve(targetPath);
     // Standardize drive letter to uppercase C:\
     if (/^[a-zA-Z]:/.test(resolved)) {
       return resolved[0]!.toUpperCase() + resolved.slice(1);
@@ -93,7 +93,7 @@ export class PathValidator {
     const isAllowed = this.allowedRoots.some((root) => {
       // Must equal root OR start with root followed by path separator
       if (resolved === root) return true;
-      const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+      const rootWithSep = root.endsWith(path.win32.sep) ? root : root + path.win32.sep;
       return resolved.startsWith(rootWithSep);
     });
 

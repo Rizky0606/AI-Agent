@@ -66,3 +66,10 @@ export interface TaskEventEnvelope {
   createdAt: string; // ISO date string
   replayed?: boolean | undefined;
 }
+
+export interface TaskEventBroadcaster {
+  publish(event: TaskEventEnvelope): Promise<void> | void;
+  subscribe(listener: (event: TaskEventEnvelope) => void): () => void;
+  subscribeUser(userId: string, listener: (event: TaskEventEnvelope) => void): () => void;
+  close?(): Promise<void>;
+}

@@ -9,14 +9,31 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [backend, edge]
-    expose: ['3000']
+    networks:
+      - internal
+      - egress
+      - edge
+    expose:
+      - '3000'
     stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     deploy:
       resources:
-        limits: { cpus: '0.75', memory: 768M }
+        limits:
+          cpus: '0.50'
+          memory: 768M
     mem_limit: 768m
     restart: unless-stopped
+
   worker:
     build:
       context: .
@@ -27,13 +44,30 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [backend]
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+      - egress
     stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const fs = require('fs'); const diff = Date.now() - Number(fs.readFileSync('/tmp/healthy', 'utf8')); process.exit(diff < 60000 ? 0 : 1);"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     deploy:
       resources:
-        limits: { cpus: '0.75', memory: 1536M }
+        limits:
+          cpus: '0.75'
+          memory: 1536M
     mem_limit: 1536m
     restart: unless-stopped
+
   scheduler:
     build:
       context: .
@@ -44,69 +78,166 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [backend]
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+      - egress
     stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const fs = require('fs'); const diff = Date.now() - Number(fs.readFileSync('/tmp/healthy', 'utf8')); process.exit(diff < 60000 ? 0 : 1);"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     deploy:
       resources:
-        limits: { cpus: '0.25', memory: 512M }
-    mem_limit: 512m
+        limits:
+          cpus: '0.25'
+          memory: 384M
+    mem_limit: 384m
     restart: unless-stopped
+
   postgres:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-personal_ai_os}
       POSTGRES_USER: ${POSTGRES_USER:-personal_ai_os}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-    volumes: ['postgres-data:/var/lib/postgresql/data']
-    networks: [backend]
-    expose: ['5432']
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - internal
+    expose:
+      - '5432'
     healthcheck:
-      {
-        test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB'],
-        interval: 10s,
-        timeout: 5s,
-        retries: 5,
-      }
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     deploy:
       resources:
-        limits: { cpus: '0.75', memory: 2G }
-    mem_limit: 2g
+        limits:
+          cpus: '0.75'
+          memory: 1536M
+    mem_limit: 1536m
     restart: unless-stopped
+
   redis:
     image: redis:7-alpine
-    command: ['redis-server', '--appendonly', 'yes']
-    volumes: ['redis-data:/data']
-    networks: [backend]
-    expose: ['6379']
-    healthcheck: { test: ['CMD', 'redis-cli', 'ping'], interval: 10s, timeout: 5s, retries: 5 }
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+    expose:
+      - '6379'
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     deploy:
       resources:
-        limits: { cpus: '0.25', memory: 512M }
-    mem_limit: 512m
+        limits:
+          cpus: '0.25'
+          memory: 384M
+    mem_limit: 384m
     restart: unless-stopped
+
+  backup:
+    image: pgvector/pgvector:pg17
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-personal_ai_os}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-personal_ai_os}
+      BACKUP_DIR: /backups/postgres
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - ./scripts:/scripts:ro
+      - postgres-backups:/backups/postgres
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /backups/postgres
+        echo "[backup] Initializing automated backup service for PostgreSQL..."
+        /scripts/backup-postgres.sh || echo "[backup] Notice: initial backup run completed"
+        echo "[backup] Service active. Next scheduled backup will run in $${BACKUP_INTERVAL_SECONDS}s."
+        while true; do
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+          echo "[backup] Executing scheduled pg_dump snapshot..."
+          /scripts/backup-postgres.sh || echo "[backup] ERROR: Scheduled backup encountered an error"
+        done
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+    mem_limit: 256m
+    restart: unless-stopped
+
   caddy:
     image: caddy:2-alpine
-    environment: [ACME_EMAIL, PUBLIC_HOSTNAME]
-    ports: ['80:80', '443:443']
+    environment:
+      - ACME_EMAIL
+      - PUBLIC_HOSTNAME
+    ports:
+      - '80:80'
+      - '443:443'
     volumes:
       - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    networks: [edge]
-    depends_on: [api]
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
     deploy:
       resources:
-        limits: { cpus: '0.25', memory: 256M }
-    mem_limit: 256m
+        limits:
+          cpus: '0.25'
+          memory: 192M
+    mem_limit: 192m
     restart: unless-stopped
 
 volumes:
   postgres-data:
+  postgres-backups:
   redis-data:
   caddy-data:
   caddy-config:
 
 networks:
-  backend:
+  # Internal network: isolated with no internet access (internal: true)
+  # Databases and services accessing them communicate securely here.
+  internal:
     internal: true
-  edge: {}
+
+  # Egress network: allows worker, scheduler, and API outbound internet connections
+  # (9Router, web browsing, FCM, external APIs) without opening incoming ports.
+  egress:
+    driver: bridge
+
+  # Edge network: connects reverse proxy Caddy to API.
+  # Only Caddy publishes external ports 80/443 on host.
+  edge:
+    driver: bridge

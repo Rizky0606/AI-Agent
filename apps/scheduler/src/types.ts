@@ -31,6 +31,8 @@ export interface ScheduleJob {
 export interface ScheduledRunExecution {
   idempotencyKey: string;
   jobId: string;
+  userId?: string | undefined;
+  projectId?: string | undefined;
   scheduledTime: string;
   dispatchedAt: string;
   taskPayload: TaskPayload;
@@ -161,4 +163,18 @@ export class EventPermissionDeniedError extends Error {
     super(message);
     this.name = 'EventPermissionDeniedError';
   }
+}
+
+export interface ScheduleStorage {
+  loadJobs(): Promise<ScheduleJob[]>;
+  saveJob(job: ScheduleJob): Promise<void>;
+  updateJob(job: ScheduleJob): Promise<void>;
+  deleteJob?(id: string): Promise<void>;
+}
+
+export interface NotificationStorage {
+  saveNotification(notification: NotificationRecord): Promise<void>;
+  updateNotification(notification: NotificationRecord): Promise<void>;
+  getNotification(id: string): Promise<NotificationRecord | null>;
+  listNotifications(userId: string): Promise<NotificationRecord[]>;
 }

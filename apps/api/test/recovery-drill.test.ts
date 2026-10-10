@@ -300,3 +300,144 @@ test('Recovery Drill 4: Checkpoint integrity verification rejects tampered state
   };
   assert.equal(verifyCheckpointIntegrity(tamperedCheckpoint), false);
 });
+
+test('Recovery Drill 5: Database backup and restore verification', async (t) => {
+  let shellCmd = 'bash';
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync('bash --version', { stdio: 'ignore' });
+  } catch {
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync('sh -c "exit 0"', { stdio: 'ignore' });
+      shellCmd = 'sh';
+    } catch {
+      t.skip('Shell (bash/sh) not available on this platform to test shell scripts');
+      return;
+    }
+  }
+
+  const { promisify } = await import('node:util');
+  const { execFile } = await import('node:child_process');
+  const execFileAsync = promisify(execFile);
+  const { mkdtemp, rm, writeFile, chmod, mkdir } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join, resolve } = await import('node:path');
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'backup-restore-drill-'));
+  const rootDir = resolve(import.meta.dirname, '../../..');
+  const toShellPath = (p: string) => {
+    const normalized = p.replace(/\\/g, '/');
+    if (process.platform === 'win32') {
+      return normalized.replace(/^([A-Za-z]):/, (_, drive) => `/mnt/${drive.toLowerCase()}`);
+    }
+    return normalized;
+  };
+  const fromShellPath = (p: string) => {
+    if (process.platform === 'win32' && p.startsWith('/mnt/')) {
+      return p.replace(/^\/mnt\/([a-z])\//i, (_, drive) => `${drive.toUpperCase()}:/`);
+    }
+    return p;
+  };
+
+  const backupScript = toShellPath(join(rootDir, 'scripts/backup-postgres.sh'));
+  const restoreScript = toShellPath(join(rootDir, 'scripts/restore-postgres.sh'));
+  const wrapperScript = toShellPath(join(rootDir, 'scripts/backup-cron-wrapper.sh'));
+
+  const runShell = (scriptPath: string, env: Record<string, string> = {}) => {
+    const envPrefix = Object.entries(env)
+      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+      .join(' ');
+    const cmd = envPrefix ? `${envPrefix} "${scriptPath}"` : `"${scriptPath}"`;
+    return execFileAsync(shellCmd, ['-c', cmd]);
+  };
+
+  try {
+    // 1. Validation: backup script fails without DATABASE_URL
+    await assert.rejects(
+      async () => runShell(backupScript),
+      (err: Error) => /DATABASE_URL is required/i.test(err.message),
+    );
+
+    // 2. Validation: restore script fails without BACKUP_FILE
+    await assert.rejects(
+      async () =>
+        runShell(restoreScript, {
+          DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+        }),
+      (err: Error) => /BACKUP_FILE is required/i.test(err.message),
+    );
+
+    // 3. Create mock pg_dump and pg_restore in temp bin directory
+    const binDir = join(tempDir, 'bin');
+    await mkdir(binDir, { recursive: true });
+
+    const mockPgDumpPath = join(binDir, 'pg_dump');
+    const mockPgDumpContent = `#!/bin/sh
+for arg in "$@"; do
+  if [ "$prev_file" = "1" ]; then
+    echo "DUMP_CONTENT_MOCK" > "$arg"
+    prev_file=0
+  fi
+  if [ "$arg" = "--file" ]; then
+    prev_file=1
+  fi
+done
+exit 0
+`;
+    await writeFile(mockPgDumpPath, mockPgDumpContent, 'utf8');
+    await chmod(mockPgDumpPath, 0o755);
+
+    const mockPgRestorePath = join(binDir, 'pg_restore');
+    const mockPgRestoreContent = `#!/bin/sh
+target=""
+for last in "$@"; do
+  target="$last"
+done
+if [ -f "$target" ]; then
+  echo "RESTORED_OK"
+  exit 0
+else
+  echo "RESTORE_FILE_NOT_FOUND" >&2
+  exit 1
+fi
+`;
+    await writeFile(mockPgRestorePath, mockPgRestoreContent, 'utf8');
+    await chmod(mockPgRestorePath, 0o755);
+
+    const backupOutDir = toShellPath(join(tempDir, 'backups'));
+    const envForBackup = {
+      PATH: `${toShellPath(binDir)}:/usr/bin:/bin:/usr/local/bin`,
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/personal_ai_os',
+      BACKUP_DIR: backupOutDir,
+    };
+
+    // 4. Run backup script -> produces dump file
+    const backupRes = await runShell(backupScript, envForBackup);
+    const dumpedShellFile = backupRes.stdout.trim();
+    assert.ok(dumpedShellFile.endsWith('.dump'), `Expected .dump file, got: ${dumpedShellFile}`);
+    const { existsSync } = await import('node:fs');
+    assert.equal(existsSync(fromShellPath(dumpedShellFile)), true);
+
+    // 5. Run restore script on the dumped file -> succeeds
+    const restoreRes = await runShell(restoreScript, {
+      ...envForBackup,
+      BACKUP_FILE: dumpedShellFile,
+    });
+    assert.match(restoreRes.stdout, /RESTORED_OK/);
+
+    // 6. Test backup-cron-wrapper with DATABASE_URL_FILE
+    const dbUrlFileNode = join(tempDir, 'db_url.txt');
+    await writeFile(dbUrlFileNode, 'postgresql://user:pass@localhost:5432/personal_ai_os', 'utf8');
+    const wrapperRes = await runShell(wrapperScript, {
+      PATH: `${toShellPath(binDir)}:/usr/bin:/bin:/usr/local/bin`,
+      BACKUP_DIR: backupOutDir,
+      DATABASE_URL_FILE: toShellPath(dbUrlFileNode),
+    });
+    const wrapperDumpedShellFile = wrapperRes.stdout.trim();
+    assert.ok(wrapperDumpedShellFile.endsWith('.dump'));
+    assert.equal(existsSync(fromShellPath(wrapperDumpedShellFile)), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

@@ -9,7 +9,7 @@ import {
   type TaskRepository,
   type TaskStatus,
 } from '@personal-ai-os/shared';
-import { SsrfGuard } from '@personal-ai-os/tools';
+import { SsrfGuard, type DnsResolver } from '@personal-ai-os/tools';
 import { MockFcmProvider, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
 import { MockModelGateway } from '../../../packages/model-gateway/src/mock-gateway.ts';
 import { PathValidator } from '../../windows/src/security/path-validator.ts';
@@ -251,17 +251,14 @@ test('E2E Platform 3: High-risk action triggers approval gate and halts until ap
 });
 
 test('E2E Platform 4: Windows Agent capability path allowlist strictly rejects path traversal', () => {
-  const validator = new PathValidator([
-    'C:\\Coding\\Project\\ai-agent',
-    'C:\\Users\\Public\\Sandbox',
-  ]);
+  const validator = new PathValidator(['C:\\AllowedWorkspace', 'C:\\Users\\Public\\Sandbox']);
 
   // Allowed paths
-  assert.equal(validator.isPathAllowed('C:\\Coding\\Project\\ai-agent\\src\\index.ts'), true);
+  assert.equal(validator.isPathAllowed('C:\\AllowedWorkspace\\src\\index.ts'), true);
 
   // Path traversal attempt: rejected
   assert.equal(
-    validator.isPathAllowed('C:\\Coding\\Project\\ai-agent\\..\\..\\Windows\\System32\\cmd.exe'),
+    validator.isPathAllowed('C:\\AllowedWorkspace\\..\\..\\Windows\\System32\\cmd.exe'),
     false,
   );
 
@@ -270,7 +267,11 @@ test('E2E Platform 4: Windows Agent capability path allowlist strictly rejects p
 });
 
 test('E2E Platform 5: Browser controller SSRF guard blocks private CIDRs and cloud metadata', async () => {
-  const ssrf = new SsrfGuard();
+  const fakeDns: DnsResolver = async (host) => {
+    if (host === 'example.com') return [{ address: '93.184.216.34', family: 4 }];
+    return [{ address: '93.184.216.34', family: 4 }];
+  };
+  const ssrf = new SsrfGuard({ dnsResolver: fakeDns });
 
   // Cloud metadata endpoint: BLOCKED
   const metadataCheck = await ssrf.validateUrl('http://169.254.169.254/latest/meta-data/');

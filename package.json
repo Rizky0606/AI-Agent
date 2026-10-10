@@ -13,6 +13,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:ci": "pnpm -r lint && pnpm -r typecheck && pnpm -r test && pnpm -r build",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

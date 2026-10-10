@@ -35,6 +35,9 @@ importers:
       '@personal-ai-os/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@personal-ai-os/api':
+        specifier: workspace:*
+        version: link:../api
       '@personal-ai-os/evaluator':
         specifier: workspace:*
         version: link:../../packages/evaluator
@@ -44,6 +47,9 @@ importers:
       '@personal-ai-os/memory':
         specifier: workspace:*
         version: link:../../packages/memory
+      '@personal-ai-os/model-gateway':
+        specifier: workspace:*
+        version: link:../../packages/model-gateway
       '@personal-ai-os/permissions':
         specifier: workspace:*
         version: link:../../packages/permissions
@@ -56,10 +62,19 @@ importers:
       bullmq:
         specifier: ^6.3.11
         version: 6.3.11(ioredis@5.11.1)
+      drizzle-orm:
+        specifier: ^0.43.1
+        version: 0.43.1(postgres@3.4.9)
       ioredis:
         specifier: ^5.11.1
         version: 5.11.1
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
     devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.20.5
       tsx:
         specifier: ^4.19.4
         version: 4.23.15
@@ -173,6 +188,9 @@ importers:
         specifier: ^3.4.5
         version: 3.4.9
     devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.20.5
       tsx:
         specifier: ^4.19.4
         version: 4.23.15
@@ -185,6 +203,22 @@ importers:
       '@personal-ai-os/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      bullmq:
+        specifier: ^6.3.11
+        version: 6.3.11(ioredis@5.11.1)
+      ioredis:
+        specifier: ^5.11.1
+        version: 5.11.1
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.20.5
+      tsx:
+        specifier: ^4.19.4
+        version: 4.23.15
 
   apps/windows:
     dependencies:

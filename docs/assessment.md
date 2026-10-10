@@ -31,53 +31,61 @@ Karena sumber aplikasi, manifest, `.env.example`, lockfile, dan test helper tida
 
 Hasil verifikasi aktual dan instruksi rerun tersedia di [verification/9router.md](verification/9router.md). Endpoint dapat dicapai namun membalas `401` tanpa key; tidak ada fitur model yang boleh dianggap tersedia sampai probe terautentikasi dijalankan.
 
-## VPS dan container
+## VPS dan container (Data Aktual Empiris dari `servernic`)
 
-### Yang benar-benar diketahui
+Detail verifikasi dan log eksekusi lengkap tersedia di [verification/vps-and-runtimes.md](verification/vps-and-runtimes.md). Data berikut dikumpulkan langsung dari mesin Oracle Cloud VPS pengguna (`ubuntu@servernic`):
 
-Target arsitektur dalam dokumentasi `HEAD` adalah Oracle Cloud Ubuntu 24.04 ARM64, baseline 2 OCPU/12 GB, Docker Compose. Itu adalah target, **bukan** data aktual server.
+### 1. Spesifikasi Hardware dan OS VPS
 
-Workstation assessment adalah Windows 11 64-bit, AMD Ryzen 7 5700U (8 core/16 thread), sekitar 15.4 GiB RAM terlihat, dan disk C tersisa sekitar 25.9 GB. Docker CLI tidak terpasang. Tidak ada alias `~/.ssh/config` yang dapat dipakai untuk mengakses VPS. Karena itu Ubuntu version, arsitektur, OCPU, RAM, disk, Docker/Compose version, dan open ports VPS = **belum diuji**.
+- **Hostname & Arsitektur**: `servernic`, `aarch64` (ARM64), 2 OCPU (`nproc = 2`).
+- **OS & Kernel**: Ubuntu 24.04.5 LTS (`noble`), Linux kernel `6.17.0-1018-oracle #18~24.04.1-Ubuntu SMP`.
+- **Memori Fisik**: Total `11 GiB` (~12 GB nominal), Used `2.0 GiB`, Free `1.6 GiB`, Buff/Cache `8.5 GiB`, Available `9.7 GiB`. Swap: `0B` (tidak ada swap).
+- **Penyimpanan Disk**: `/dev/sda1` kapasitas 174 GiB, Used 19 GiB (11%), Available 155 GiB.
+- **Docker Engine & Compose**: Docker `29.8.2` (build `7fc2dff`), Docker Compose `v5.6.0`.
 
-Port listener yang terlihat selama assessment adalah milik workstation, bukan VPS, sehingga sengaja tidak dipakai untuk menyimpulkan exposure server.
+### 2. Port Listener dan Proses Host Aktif (`ss -tulpn`)
 
-### Ketersediaan image ARM64 (manifest registry, bukan pull/run di VPS)
+- **TCP 22**: `sshd` (SSH server).
+- **TCP 80 & 443**: Web server / reverse proxy host (LISTEN).
+- **TCP 111**: `rpcbind`.
+- **TCP 631**: `cupsd` (IPP printing).
+- **TCP 9119**: `hermes` (PID 613535, fd=10) — **Hermes daemon aktif berjalan**.
+- **TCP 5432**: `127.0.0.1:5432` — PostgreSQL host lokal (LISTEN pada loopback).
+- **TCP 8000**: `uvicorn`/`python` (PID 940273) (LISTEN).
+- **UDP 53, 68, 111**: `systemd-resolved`, `dhclient`, `rpcbind`.
 
-Pada 2026-10-09, manifest multi-arch registry mencantumkan `linux/arm64` atau `linux/arm64/v8` untuk:
+> [!IMPORTANT]
+> Karena port loopback 5432 dan port 80/443 sudah berstatus LISTEN di host, database container PostgreSQL Personal AI OS **tidak boleh** mempublikasikan port 5432 ke host network (wajib tetap terisolasi di internal Docker network `internal: true`).
 
-| Peran                 | Tag yang dicek                               | ARM64                 |
-| --------------------- | -------------------------------------------- | --------------------- |
-| PostgreSQL            | `postgres:17-bookworm`                       | tersedia (`arm64/v8`) |
-| PostgreSQL + pgvector | `pgvector/pgvector:pg17`                     | tersedia              |
-| Redis                 | `redis:7-alpine`                             | tersedia (`arm64/v8`) |
-| Caddy                 | `caddy:2-alpine`                             | tersedia (`arm64/v8`) |
-| Node                  | `node:22-bookworm-slim`                      | tersedia (`arm64/v8`) |
-| Playwright/Chromium   | `mcr.microsoft.com/playwright:v1.57.0-noble` | tersedia              |
+### 3. Ketersediaan Image ARM64 (`docker manifest inspect` di VPS)
 
-Tag mutable harus dipin ke digest setelah uji pull/run pada VPS. Ketersediaan manifest tidak membuktikan konsumsi RAM/disk, browser sandboxing, atau performa di Oracle ARM.
+Verifikasi manifest langsung di VPS mengonfirmasi dukungan arsitektur native `arm64`:
 
-### Perintah bukti yang harus dijalankan di VPS
+| Peran                 | Tag Image                                    | Status Manifest ARM64                         |
+| --------------------- | -------------------------------------------- | --------------------------------------------- |
+| PostgreSQL + pgvector | `pgvector/pgvector:pg17`                     | **TERVERIFIKASI** (`arm64`)                   |
+| Redis                 | `redis:7-alpine`                             | **TERVERIFIKASI** (`arm64`)                   |
+| Caddy                 | `caddy:2-alpine`                             | **TERVERIFIKASI** (`arm64`)                   |
+| Node.js               | `node:22-bookworm-slim`                      | **TERVERIFIKASI** (`arm64`)                   |
+| Playwright Chromium   | `mcr.microsoft.com/playwright:v1.57.0-noble` | Manifest ada, **live run belum diuji di VPS** |
 
-```bash
-uname -a; lsb_release -a; nproc; free -h; df -h
-docker version; docker compose version
-docker info --format '{{.Architecture}}/{{.OSType}}'
-ss -lntup
-docker buildx imagetools inspect pgvector/pgvector:pg17
-```
+## Runtime Agent (Hasil Verifikasi Aktual di VPS dan Workstation)
 
-Jalankan melalui akses SSH yang Anda berikan/konfigurasikan, lalu tambahkan output yang telah direview (tanpa secret) ke dokumen verifikasi.
+Pemeriksaan aktual `which hermes omp pi openhands` dan inspeksi versi menghasilkan status nyata berikut:
 
-## Runtime agent pada workstation assessment
+| Runtime       | Status VPS            | Status Workstation  | Versi & Path VPS                                                                                                                                  | Interface yang Terbukti                                           | Cara Menjalankan Non-Interaktif                                                       |
+| ------------- | --------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **Hermes**    | **TERPASANG & AKTIF** | tidak terpasang     | `Hermes Agent v0.20.5 (2026.8.19)`<br>Path: `/home/ubuntu/.local/bin/hermes`<br>Python 3.11.15, OpenAI SDK 2.24.0<br>PID: 613535 di port TCP 9119 | 1. CLI (`hermes`)<br>2. API daemon port `9119`                    | **Via API**: HTTP/RPC ke `http://127.0.0.1:9119`<br>**Via CLI**: `hermes -p "prompt"` |
+| **OMP**       | **TERPASANG**         | terpasang (v18.8.4) | `omp/18.6.1`<br>Path: `/home/ubuntu/.local/bin/omp`                                                                                               | CLI (`omp`); opsi `--mode text\|json\|rpc\|rpc-ui`, command `acp` | `omp -p "prompt" --mode json` atau `--mode rpc`                                       |
+| **Pi**        | **TIDAK TERPASANG**   | terpasang (v1.1.0)  | Tidak ada di PATH VPS (`which pi` kosong)                                                                                                         | CLI di workstation saja                                           | `pi -p "prompt" --mode json` (di workstation)                                         |
+| **OpenHands** | **TIDAK TERPASANG**   | tidak terpasang     | Tidak ada di PATH VPS (`which openhands` kosong)                                                                                                  | —                                                                 | —                                                                                     |
 
-| Runtime   | Status          | Versi / lisensi                                | Interface yang terbukti                             | Non-interaktif |
-| --------- | --------------- | ---------------------------------------------- | --------------------------------------------------- | -------------- |
-| Pi        | terpasang       | `@earendil-works/pi-coding-agent` `1.1.0`, MIT | CLI; `--mode text                                   | json           | rpc`, MCP command/options terlihat di `pi --help` | `pi -p "prompt"` (opsional `--mode json`/`rpc`)        |
-| OMP       | terpasang       | `@oh-my-pi/pi-coding-agent` `18.8.4`, MIT      | CLI; `--mode text                                   | json           | rpc                                               | rpc-ui`, command `acp`, auth-gateway pada `omp --help` | `omp -p "prompt"` (opsional `--mode json`/`rpc`; `--max-time`) |
-| Hermes    | tidak terpasang | —                                              | Tidak ada CLI/API/SDK lokal yang dapat diverifikasi | —              |
-| OpenHands | tidak terpasang | —                                              | Tidak ada CLI/API/SDK lokal yang dapat diverifikasi | —              |
+### Hal-hal yang Masih Belum Teruji (Unverified)
 
-Pi dan OMP memiliki interface CLI yang tampak dari binary lokal; API/SDK yang stabil untuk adapter backend belum diverifikasi dan tidak boleh diasumsikan. OMP menemukan plugin `pi-hermes-memory`, tetapi itu bukan bukti bahwa runtime Hermes agent terpasang. `oh` di PowerShell adalah alias `Out-Host`, bukan OpenHands.
+1. **Autentikasi & Kontrak API Hermes Port 9119**: Skema endpoint (REST/WebSocket), payload format, dan autentikasi token untuk daemon port 9119 belum diuji dengan probe HTTP terautentikasi.
+2. **Identitas Proses Port 8000**: Peran proses Uvicorn/Python (PID 940273) apakah terkait dashboard Hermes atau service pihak ketiga independen belum diinspeksi.
+3. **Playwright Chromium ARM64 Live Execution**: Kemampuan menjalankan browser headless Chromium di dalam Docker container di Ubuntu ARM64 belum diuji live.
+4. **Resiko Ketiadaan Swap (Swap = 0B)**: Mitigasi OOM killer bila konsumsi memori melonjak mendekati 11 GiB belum diuji beban nyata.
 
 ## Gap terhadap visi
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { buildApp } from '../src/app.ts';
 import { InMemoryAuthRepository, createAuthService } from '../src/auth/service.ts';
 import { InMemorySkillRepository } from '../src/db/skill-repository.ts';
@@ -13,11 +14,14 @@ test('Skills API: sync from disk, list, detail, enable/disable, execute, and rol
 
   const user = await auth.register('alice-skills@example.com', 'ValidPassword123!');
 
+  const skillsDir =
+    process.env['SKILLS_DIR'] ?? fileURLToPath(new URL('../../../skills', import.meta.url));
+
   const app = await buildApp({
     auth,
     skills: {
       skillRepo,
-      skillsDir: 'c:/Coding/Project/ai-agent/skills',
+      skillsDir,
     },
   });
 

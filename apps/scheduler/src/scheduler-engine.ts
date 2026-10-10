@@ -5,6 +5,7 @@ import {
   type ScheduledRunExecution,
   type ScheduleJob,
   type ScheduleStatus,
+  type ScheduleStorage,
   type ScheduleType,
   SchedulerError,
   type TaskPayload,
@@ -30,9 +31,27 @@ export class SchedulerEngine {
   private readonly dispatchedKeys = new Set<string>(); // Idempotency set
   private readonly inFlightJobs = new Set<string>(); // Concurrency lock per job
   private readonly dispatcher: TaskDispatcher;
+  private readonly storage?: ScheduleStorage | undefined;
 
-  constructor(options?: { dispatcher?: TaskDispatcher | undefined }) {
+  constructor(options?: {
+    dispatcher?: TaskDispatcher | undefined;
+    storage?: ScheduleStorage | undefined;
+  }) {
     this.dispatcher = options?.dispatcher ?? (async () => {});
+    this.storage = options?.storage;
+  }
+
+  async init(): Promise<void> {
+    await this.syncFromStorage();
+  }
+
+  async syncFromStorage(): Promise<void> {
+    if (this.storage) {
+      const persistedJobs = await this.storage.loadJobs();
+      for (const job of persistedJobs) {
+        this.jobs.set(job.id, job);
+      }
+    }
   }
 
   registerSchedule(input: RegisterScheduleInput): ScheduleJob {
@@ -82,6 +101,9 @@ export class SchedulerEngine {
     };
 
     this.jobs.set(id, job);
+    if (this.storage) {
+      void this.storage.saveJob(job).catch(() => {});
+    }
     return job;
   }
 
@@ -110,6 +132,9 @@ export class SchedulerEngine {
     }
     job.status = 'paused';
     job.updatedAt = new Date().toISOString();
+    if (this.storage) {
+      void this.storage.updateJob(job).catch(() => {});
+    }
     return job;
   }
 
@@ -131,6 +156,9 @@ export class SchedulerEngine {
       }
     }
 
+    if (this.storage) {
+      void this.storage.updateJob(job).catch(() => {});
+    }
     return job;
   }
 
@@ -141,6 +169,9 @@ export class SchedulerEngine {
     }
     job.status = 'cancelled';
     job.updatedAt = new Date().toISOString();
+    if (this.storage) {
+      void this.storage.updateJob(job).catch(() => {});
+    }
     return job;
   }
 
@@ -177,6 +208,8 @@ export class SchedulerEngine {
             const execution: ScheduledRunExecution = {
               idempotencyKey,
               jobId: job.id,
+              userId: job.userId,
+              projectId: job.projectId,
               scheduledTime: job.nextRunAt,
               dispatchedAt: now.toISOString(),
               taskPayload: job.taskPayload,
@@ -230,6 +263,8 @@ export class SchedulerEngine {
                 const execution: ScheduledRunExecution = {
                   idempotencyKey,
                   jobId: job.id,
+                  userId: job.userId,
+                  projectId: job.projectId,
                   scheduledTime: latestSlot.toISOString(),
                   dispatchedAt: now.toISOString(),
                   taskPayload: job.taskPayload,
@@ -250,6 +285,8 @@ export class SchedulerEngine {
                   const execution: ScheduledRunExecution = {
                     idempotencyKey,
                     jobId: job.id,
+                    userId: job.userId,
+                    projectId: job.projectId,
                     scheduledTime: slot.toISOString(),
                     dispatchedAt: now.toISOString(),
                     taskPayload: job.taskPayload,
@@ -271,6 +308,8 @@ export class SchedulerEngine {
               const execution: ScheduledRunExecution = {
                 idempotencyKey,
                 jobId: job.id,
+                userId: job.userId,
+                projectId: job.projectId,
                 scheduledTime: scheduledSlot.toISOString(),
                 dispatchedAt: now.toISOString(),
                 taskPayload: job.taskPayload,
@@ -283,6 +322,9 @@ export class SchedulerEngine {
             job.nextRunAt = futureRun.toISOString();
             job.updatedAt = now.toISOString();
           }
+        }
+        if (this.storage) {
+          await this.storage.updateJob(job);
         }
       } finally {
         this.inFlightJobs.delete(job.id);

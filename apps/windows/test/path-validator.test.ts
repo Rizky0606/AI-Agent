@@ -4,7 +4,7 @@ import test from 'node:test';
 import { PathValidator, SecurityError } from '../src/security/path-validator.ts';
 
 test('PathValidator: Path outside allowlist is rejected', () => {
-  const validator = new PathValidator(['C:\\Coding\\Project\\ai-agent']);
+  const validator = new PathValidator(['C:\\AllowedWorkspace']);
 
   assert.throws(
     () => {
@@ -19,11 +19,11 @@ test('PathValidator: Path outside allowlist is rejected', () => {
 });
 
 test('PathValidator: Path traversal attempts (..) are strictly rejected', () => {
-  const allowedRoot = 'C:\\Coding\\Project\\ai-agent';
+  const allowedRoot = 'C:\\AllowedWorkspace';
   const validator = new PathValidator([allowedRoot]);
 
   // Attempting to step out of the allowed root using parent directory traversal
-  const traversalPath = path.join(allowedRoot, '..', '..', 'Windows', 'System32');
+  const traversalPath = path.win32.join(allowedRoot, '..', '..', 'Windows', 'System32');
 
   assert.throws(
     () => {
@@ -38,11 +38,11 @@ test('PathValidator: Path traversal attempts (..) are strictly rejected', () => 
 });
 
 test('PathValidator: Alternate Data Streams (ADS) are rejected', () => {
-  const validator = new PathValidator(['C:\\Coding\\Project']);
+  const validator = new PathValidator(['C:\\AllowedWorkspace']);
 
   assert.throws(
     () => {
-      validator.assertPathAllowed('C:\\Coding\\Project\\file.txt:hidden_stream');
+      validator.assertPathAllowed('C:\\AllowedWorkspace\\file.txt:hidden_stream');
     },
     (err: unknown) => {
       assert.ok(err instanceof SecurityError);
@@ -53,7 +53,7 @@ test('PathValidator: Alternate Data Streams (ADS) are rejected', () => {
 });
 
 test('PathValidator: Device namespaces (\\\\.\\ and \\\\?\\) are rejected', () => {
-  const validator = new PathValidator(['C:\\Coding\\Project']);
+  const validator = new PathValidator(['C:\\AllowedWorkspace']);
 
   assert.throws(
     () => {
@@ -79,14 +79,14 @@ test('PathValidator: Device namespaces (\\\\.\\ and \\\\?\\) are rejected', () =
 });
 
 test('PathValidator: Valid subpaths and exact roots in allowlist are accepted', () => {
-  const allowedRoot = 'C:\\Coding\\Project';
+  const allowedRoot = 'C:\\AllowedWorkspace';
   const validator = new PathValidator([allowedRoot]);
 
-  const exact = validator.assertPathAllowed('C:\\Coding\\Project');
+  const exact = validator.assertPathAllowed('C:\\AllowedWorkspace');
   assert.equal(exact, allowedRoot);
 
-  const subpath = validator.assertPathAllowed('C:\\Coding\\Project\\src\\index.ts');
+  const subpath = validator.assertPathAllowed('C:\\AllowedWorkspace\\src\\index.ts');
   assert.ok(subpath.startsWith(allowedRoot));
-  assert.equal(validator.isPathAllowed('C:\\Coding\\Project\\package.json'), true);
+  assert.equal(validator.isPathAllowed('C:\\AllowedWorkspace\\package.json'), true);
   assert.equal(validator.isPathAllowed('D:\\OtherDrive\\file.txt'), false);
 });

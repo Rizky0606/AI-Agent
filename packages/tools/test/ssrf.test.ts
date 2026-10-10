@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SsrfGuard, SsrfViolationError } from '../src/index.ts';
+import { SsrfGuard, SsrfViolationError, type DnsResolver } from '../src/index.ts';
 
 test('SSRF Guard strictly blocks loopback and private IPv4 addresses', async () => {
   const guard = new SsrfGuard({ resolveDns: false });
@@ -133,4 +133,62 @@ test('SSRF Guard rejects non-HTTP protocols', async () => {
     assert.equal(res.safe, false);
     assert.match(res.reason ?? '', /protokol/i);
   }
+});
+
+test('SSRF Guard detects DNS rebinding using injected fake DNS resolver (zero-network deterministic)', async () => {
+  const dnsTable: Record<string, string[]> = {
+    'safe.example.com': ['93.184.216.34'],
+    'rebinding-loopback.example.com': ['127.0.0.1'],
+    'rebinding-private.example.com': ['10.0.0.1'],
+    'rebinding-cloud.example.com': ['169.254.169.254'],
+    'rebinding-ipv6.example.com': ['::1'],
+    'rebinding-ipv6-unique.example.com': ['fc00::1'],
+  };
+
+  const fakeResolver: DnsResolver = async (hostname) => {
+    const addresses = dnsTable[hostname];
+    if (!addresses) {
+      throw new Error(`ENOTFOUND: ${hostname}`);
+    }
+    return addresses.map((address) => ({ address }));
+  };
+
+  const guard = new SsrfGuard({
+    resolveDns: true,
+    dnsResolver: fakeResolver,
+  });
+
+  // 1. Safe domain resolving to public IP is allowed
+  const safeRes = await guard.validateUrl('https://safe.example.com/api/v1');
+  assert.equal(safeRes.safe, true);
+
+  // 2. Domain resolving to loopback (127.0.0.1) is blocked
+  const loopbackRes = await guard.validateUrl('https://rebinding-loopback.example.com/status');
+  assert.equal(loopbackRes.safe, false);
+  assert.match(loopbackRes.reason ?? '', /DNS rebinding|SSRF/i);
+
+  // 3. Domain resolving to private subnet (10.0.0.1) is blocked
+  const privateRes = await guard.validateUrl('https://rebinding-private.example.com/secret');
+  assert.equal(privateRes.safe, false);
+  assert.match(privateRes.reason ?? '', /DNS rebinding|SSRF/i);
+
+  // 4. Domain resolving to cloud metadata (169.254.169.254) is blocked
+  const cloudRes = await guard.validateUrl('https://rebinding-cloud.example.com/meta');
+  assert.equal(cloudRes.safe, false);
+  assert.match(cloudRes.reason ?? '', /DNS rebinding|SSRF/i);
+
+  // 5. Domain resolving to IPv6 loopback (::1) is blocked
+  const ipv6Res = await guard.validateUrl('https://rebinding-ipv6.example.com/admin');
+  assert.equal(ipv6Res.safe, false);
+  assert.match(ipv6Res.reason ?? '', /IPv6 internal|SSRF/i);
+
+  // 6. Domain resolving to IPv6 unique local (fc00::1) is blocked
+  const ipv6UniqueRes = await guard.validateUrl('https://rebinding-ipv6-unique.example.com/admin');
+  assert.equal(ipv6UniqueRes.safe, false);
+  assert.match(ipv6UniqueRes.reason ?? '', /IPv6 internal|SSRF/i);
+
+  // 7. NXDOMAIN / unresolvable domain fails safe
+  const unresolvableRes = await guard.validateUrl('https://unknown-nonexistent-domain.xyz/test');
+  assert.equal(unresolvableRes.safe, false);
+  assert.match(unresolvableRes.reason ?? '', /Gagal menyelesaikan DNS/i);
 });

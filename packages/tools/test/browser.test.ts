@@ -6,14 +6,26 @@ import {
   BrowserController,
   BrowserSensitiveActionRequiresApprovalError,
   BrowserStepLimitExceededError,
+  type DnsResolver,
   InMemoryArtifactStorage,
   MockPlaywrightRunner,
   SsrfViolationError,
 } from '../src/index.ts';
 
+const fakeDnsResolver: DnsResolver = async (hostname: string) => {
+  if (hostname === 'blocked-malware.com') {
+    return [{ address: '93.184.216.34', family: 4 }];
+  }
+  return [{ address: '93.184.216.34', family: 4 }];
+};
+
 test('BrowserController enforces isolated session, SSRF protection, and domain deny', async () => {
   const runner = new MockPlaywrightRunner();
-  const controller = new BrowserController({ runner, maxConcurrency: 2 });
+  const controller = new BrowserController({
+    runner,
+    maxConcurrency: 2,
+    dnsResolver: fakeDnsResolver,
+  });
 
   const sessionId = await controller.createSession({
     sessionId: 'session-1',
@@ -43,7 +55,11 @@ test('BrowserController enforces isolated session, SSRF protection, and domain d
 
 test('BrowserController strictly enforces step limits per session', async () => {
   const runner = new MockPlaywrightRunner();
-  const controller = new BrowserController({ runner, maxConcurrency: 2 });
+  const controller = new BrowserController({
+    runner,
+    maxConcurrency: 2,
+    dnsResolver: fakeDnsResolver,
+  });
 
   const maxSteps = 3;
   const sessionId = await controller.createSession({
@@ -70,7 +86,7 @@ test('BrowserController strictly enforces step limits per session', async () => 
 
 test('BrowserController requires user approval for sensitive form submission', async () => {
   const runner = new MockPlaywrightRunner();
-  const controller = new BrowserController({ runner });
+  const controller = new BrowserController({ runner, dnsResolver: fakeDnsResolver });
 
   const sessionId = await controller.createSession({
     sessionId: 'session-submit',
@@ -98,7 +114,11 @@ test('BrowserController captures screenshot and persists as an artifact', async 
   const runner = new MockPlaywrightRunner();
   const storage = new InMemoryArtifactStorage();
   const artifactManager = new ArtifactManager({ storage });
-  const controller = new BrowserController({ runner, artifactManager });
+  const controller = new BrowserController({
+    runner,
+    artifactManager,
+    dnsResolver: fakeDnsResolver,
+  });
 
   const sessionId = await controller.createSession({
     sessionId: 'session-shot',
@@ -121,7 +141,11 @@ test('BrowserController captures screenshot and persists as an artifact', async 
 
 test('BrowserController enforces concurrency limit (ARM64 friendly)', async () => {
   const runner = new MockPlaywrightRunner();
-  const controller = new BrowserController({ runner, maxConcurrency: 2 });
+  const controller = new BrowserController({
+    runner,
+    maxConcurrency: 2,
+    dnsResolver: fakeDnsResolver,
+  });
 
   await controller.createSession({ sessionId: 'session-c1', actorId: 'alice' });
   await controller.createSession({ sessionId: 'session-c2', actorId: 'bob' });
