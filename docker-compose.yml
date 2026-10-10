@@ -1,10 +1,26 @@
 services:
+  migrate:
+    image: pgvector/pgvector:pg17
+    env_file: .env
+    entrypoint: ['sh', '/scripts/migrate-db.sh']
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./apps/api/src/db/migrations:/migrations:ro
+    environment:
+      MIGRATIONS_DIR: /migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    restart: 'no'
   api:
     build:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.api
     env_file: .env
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -40,6 +56,8 @@ services:
       dockerfile: infrastructure/docker/Dockerfile.worker
     env_file: .env
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -74,6 +92,8 @@ services:
       dockerfile: infrastructure/docker/Dockerfile.scheduler
     env_file: .env
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -179,12 +199,12 @@ services:
       - |
         mkdir -p /backups/postgres
         echo "[backup] Initializing automated backup service for PostgreSQL..."
-        /scripts/backup-postgres.sh || echo "[backup] Notice: initial backup run completed"
+        /scripts/backup-postgres.sh
         echo "[backup] Service active. Next scheduled backup will run in $${BACKUP_INTERVAL_SECONDS}s."
         while true; do
           sleep "$${BACKUP_INTERVAL_SECONDS}"
           echo "[backup] Executing scheduled pg_dump snapshot..."
-          /scripts/backup-postgres.sh || echo "[backup] ERROR: Scheduled backup encountered an error"
+          /scripts/backup-postgres.sh
         done
     deploy:
       resources:
@@ -200,8 +220,7 @@ services:
       - ACME_EMAIL
       - PUBLIC_HOSTNAME
     ports:
-      - '80:80'
-      - '443:443'
+      - '127.0.0.1:8080:80'
     volumes:
       - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
