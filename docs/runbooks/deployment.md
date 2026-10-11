@@ -169,12 +169,15 @@ curl -f http://localhost:3000/ready
    ```
 3. **Pull Perubahan dan Build Image**:
    ```sh
-   git fetch origin master && git checkout master && git pull origin master
+   git -C ~/apps/personal-ai-os fetch origin
+   git -C ~/apps/personal-ai-os merge origin/main   # atau origin/deploy/vps-setup
    docker compose build api worker scheduler
+   docker image inspect personal-ai-os-api:latest --format '{{.Os}}/{{.Architecture}}'  # harapkan linux/arm64
    ```
-4. **Jalankan Migrasi Database Drizzle**:
+4. **Jalankan Migrasi Database** (service one-shot `migrate`, idempoten via tabel `schema_migrations`):
    ```sh
-   docker compose run --rm api node --loader tsx packages/memory/src/db/migrate.ts
+   docker compose run --rm migrate
+   # ulangi aman: file yang sudah diterapkan di-skip
    ```
 5. **Restart Layanan Secara Bertahap**:
    ```sh
@@ -187,9 +190,13 @@ curl -f http://localhost:3000/ready
    ```sh
    docker compose ps
    # Pastikan semua layanan berstatus "Up (healthy)"
-   curl -f http://localhost/ready
+   curl -f http://127.0.0.1:8080/ready   # caddy di-bind ke 127.0.0.1:8080 (Opsi B)
    docker compose logs --tail=50 worker scheduler
    ```
+
+## 6b. Topologi Edge Aktual (Opsi B)
+
+Port 80/443 host dimiliki **nginx** (vhosts: `api.tradingrai.org` → 127.0.0.1:8000, `hermes.ojixx.my.id` → 127.0.0.1:9119). Caddy **tidak** mem-publish 80/443; Caddy di-bind ke `127.0.0.1:8080`. Untuk ekspos publik: tambahkan vhost nginx baru yang `proxy_pass http://127.0.0.1:8080` dengan header `Upgrade`/`Connection "upgrade"` (wajib untuk WebSocket `/v1/chat/ws` dan `/v1/events/ws`), lalu TLS diterminasi nginx. Sampai vhost itu dibuat, akses hanya via SSH tunnel: `ssh -L 8080:127.0.0.1:8080 vps`.
 
 ---
 
@@ -207,10 +214,26 @@ Jika rilis mengalami error fatal (500 internal errors, crash loop, atau OOM):
    ```
 3. **Rollback Database (Jika Perlu)**:
    ```sh
-   docker compose exec -T -e BACKUP_FILE="/var/backups/personal-ai-os/<PRE_DEPLOYMENT_SNAPSHOT>.dump" backup /bin/sh /scripts/restore-postgres.sh
+   docker compose exec -T -e BACKUP_FILE="/b/<PRE_DEPLOYMENT_SNAPSHOT>.dump" backup /bin/sh /scripts/restore-postgres.sh
+   ```
+   Alternatif restore manual teruji (2026-10-11):
+   ```sh
+   PW=$(grep POSTGRES_PASSWORD .env | cut -d= -f2)
+   docker run --rm --network personal-ai-os_internal -v personal-ai-os_postgres-backups:/b \
+     -e PGPASSWORD="$PW" pgvector/pgvector:pg17 sh -c '
+     psql -h postgres -U personal_ai_os -d personal_ai_os -c "CREATE DATABASE restore_tmp OWNER personal_ai_os;"
+     pg_restore -h postgres -U personal_ai_os -d restore_tmp --no-owner /b/<DUMP>.dump
+     psql -h postgres -U personal_ai_os -d restore_tmp -tc "SELECT count(*) FROM information_schema.tables WHERE table_schema='"'"'public'"'"';"
+     psql -h postgres -U personal_ai_os -d personal_ai_os -c "DROP DATABASE restore_tmp;"'
    ```
 4. **Verifikasi Pemulihan Sistem**:
    ```sh
-   curl -f http://localhost/ready
+   curl -f http://127.0.0.1:8080/ready
    docker compose ps
    ```
+
+## 8. Hardening yang Sudah Diterapkan (2026-10-11)
+
+- Worker production memakai `SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo })` (commit `7fe8246`): aksi HIGH (`git:push`, `deploy:*`, `external:send`) wajib `waiting_approval` + approve/deny via `/v1/approvals`.
+- Migrasi one-shot `migrate` idempoten (`schema_migrations`), `api/worker/scheduler` `depends_on: migrate service_completed_successfully`.
+- Backup: `sh /scripts/backup-postgres.sh`, retensi `RETENTION_DAYS` (default 14), tanpa `|| echo` penutup kegagalan.
