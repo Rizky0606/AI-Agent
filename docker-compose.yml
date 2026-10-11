@@ -199,12 +199,12 @@ services:
       - |
         mkdir -p /backups/postgres
         echo "[backup] Initializing automated backup service for PostgreSQL..."
-        /scripts/backup-postgres.sh
+        sh /scripts/backup-postgres.sh
         echo "[backup] Service active. Next scheduled backup will run in $${BACKUP_INTERVAL_SECONDS}s."
         while true; do
           sleep "$${BACKUP_INTERVAL_SECONDS}"
           echo "[backup] Executing scheduled pg_dump snapshot..."
-          /scripts/backup-postgres.sh
+          sh /scripts/backup-postgres.sh
         done
     deploy:
       resources:
