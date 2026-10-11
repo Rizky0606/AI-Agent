@@ -1,32 +1,25 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { CapabilityRegistry, type CapabilityName } from './capability-registry.ts';
+import { CapabilityRegistry } from './capability-registry.ts';
 import { PathValidator, SecurityError } from './path-validator.ts';
+import {
+  DEFAULT_TIMEOUT_MS,
+  MAX_TIMEOUT_MS,
+  MAX_OUTPUT_BYTES,
+  type CommandExecutionOptions,
+  type CommandExecutionResult,
+  type ICommandExecutor,
+} from './types.ts';
 
-export const DEFAULT_TIMEOUT_MS = 30_000;
-export const MAX_TIMEOUT_MS = 120_000;
-export const MAX_OUTPUT_BYTES = 1_048_576; // 1 MB buffer limit
+export {
+  DEFAULT_TIMEOUT_MS,
+  MAX_TIMEOUT_MS,
+  MAX_OUTPUT_BYTES,
+  type CommandExecutionOptions,
+  type CommandExecutionResult,
+  type ICommandExecutor,
+};
 
-export interface CommandExecutionOptions {
-  capability?: CapabilityName | undefined;
-  action?: string | undefined;
-  cwd: string;
-  timeoutMs?: number | undefined;
-  maxOutputBytes?: number | undefined;
-  signal?: AbortSignal | undefined;
-  env?: Record<string, string> | undefined;
-}
-
-export interface CommandExecutionResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-  truncated: boolean;
-  durationMs: number;
-  killedByTimeout: boolean;
-  killedByAbort: boolean;
-}
-
-export class CommandExecutor {
+export class CommandExecutor implements ICommandExecutor {
   private readonly capabilityRegistry: CapabilityRegistry;
   private readonly pathValidator: PathValidator;
   private activeProcesses: Map<string, ChildProcess> = new Map();

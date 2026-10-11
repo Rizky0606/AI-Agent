@@ -13,7 +13,8 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "test:ci": "pnpm -r lint && pnpm -r typecheck && pnpm -r test && pnpm -r build",
+    "test:ci": "pnpm -r lint && pnpm -r typecheck && pnpm -r test && pnpm -r build && pnpm verify:audit",
+    "verify:audit": "node --experimental-strip-types scripts/verify-audit-refs.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

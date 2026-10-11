@@ -1,4 +1,4 @@
-import { CommandExecutor } from '../security/command-executor.ts';
+import type { ICommandExecutor } from '../security/types.ts';
 import type { CapabilityName } from '../security/capability-registry.ts';
 import type { DeviceIdentity } from './device-identity.ts';
 
@@ -8,7 +8,7 @@ export interface AgentConnectionOptions {
   serverUrl: string;
   token: string;
   identity: DeviceIdentity;
-  executor: CommandExecutor;
+  executor: ICommandExecutor;
   heartbeatIntervalMs?: number | undefined;
   maxReconnectAttempts?: number | undefined;
   onStatusChange?: ((status: ConnectionStatus) => void) | undefined;
@@ -146,7 +146,9 @@ export class AgentConnection {
   private async handleExecuteCommand(msg: InboundServerMessage): Promise<void> {
     const cmdId = msg.commandId ?? msg.id ?? `cmd-${Date.now()}`;
     const commandText = msg.command;
-    const cwd = msg.cwd ?? process.cwd();
+    const cwd =
+      msg.cwd ??
+      (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '.');
     const capability = (msg.capability as CapabilityName | undefined) ?? 'powershell';
     const action = msg.action ?? 'exec';
 

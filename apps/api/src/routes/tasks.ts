@@ -133,6 +133,33 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
     },
   );
 
+  // 3b. List Tasks for authenticated user (optionally filtered by projectId or status)
+  app.get<{ Querystring: { projectId?: string; status?: string } }>(
+    '/v1/tasks',
+    async (request, reply) => {
+      const user = await extractUser(request, deps.auth);
+      const { projectId, status } = request.query;
+      if (projectId) {
+        const project = await deps.projectRepo.getProject(user.id, projectId);
+        if (!project) {
+          return reply.code(404).send({
+            error: {
+              code: 'NOT_FOUND',
+              message: 'Project not found',
+              requestId: request.id,
+            },
+          });
+        }
+      }
+
+      let tasks = await deps.taskRepo.listTasks(user.id, projectId);
+      if (status) {
+        tasks = tasks.filter((t) => t.status === status);
+      }
+      return reply.send({ tasks });
+    },
+  );
+
   // 4. Pause Task
   app.post<{ Params: { taskId: string } }>('/v1/tasks/:taskId/pause', async (request, reply) => {
     const user = await extractUser(request, deps.auth);
