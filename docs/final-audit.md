@@ -1,76 +1,78 @@
 # Laporan Audit Akhir — Personal AI OS
 
-**Tanggal Audit**: 2026-10-10  
+**Tanggal Audit**: 2026-10-11  
 **Auditor**: Principal Software Architect & Security Engineer  
-**Status Keseluruhan**: **LULUS (PRODUCTION READY)**  
-**Metodologi**: Verifikasi bukti nyata (source code inspection, automated test suite execution, strict typecheck, linting, network boundary verification, secret scanning). Tidak ada status LULUS yang diberikan tanpa bukti verifikasi eksplisit.
+**Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
+**Catatan Status**: Sesuai aturan audit ketat (Perbaikan 7, Perbaikan 0, dan Perbaikan 5), sistem **TIDAK** dilabeli "PRODUCTION READY" sebelum seluruh komponen diverifikasi langsung pada host fisik Oracle Cloud VPS ARM64 (Ubuntu 24.04, 2 OCPU, 12 GB RAM) dan kredensial produksi eksternal (FCM) disuntikkan. Seluruh stack lokal, monorepo quality gates, dan automated test suite berstatus **LULUS**, dengan 2 aspek lingkungan eksternal berstatus **SEBAGIAN**.
 
 ---
 
-## 1. Ringkasan Eksekutif
+## 1. Ringkasan Eksekutif & Ringkasan Quality Gates Monorepo
 
-Audit akhir ini dilakukan untuk mengevaluasi kesiapan arsitektur, implementasi, keamanan, daya pulih (_durable recovery_), dan keandalan sistem **Personal AI OS** sebelum deployment production di Oracle Cloud VPS (ARM64, 12 GB RAM / 2 OCPU).
+Audit akhir ini mengevaluasi arsitektur, kepatuhan keamanan, daya tahan tugas (_durable tasks & recovery_), isolasi data per-user, dan keandalan sistem **Personal AI OS** sebelum deployment ke server target.
 
-Sistem telah menyelesaikan seluruh fase implementasi inti:
+Semua 13 paket workspace di dalam monorepo telah melalui quality gates hari ini (2026-10-11):
 
-- **Zero-trust Security**: Autentikasi ketat Bearer JWT di setiap endpoint, peniadaan fallback insecure, redaksi credential pada log, isolasi PostgreSQL dan Redis di internal Docker network tanpa exposure port publik, serta proteksi SSRF dan Windows path traversal.
-- **Durable Task & Recovery**: Task queue berbasis BullMQ & PostgreSQL dengan versioned state checkpointing, idempotency keys, dan uji simulasi worker crash yang terbukti mampu pulih tanpa duplikasi side-effect.
-- **Single Model Gateway**: Seluruh panggilan LLM dipusatkan di backend melalui 9Router gateway tanpa adanya secret di client Android, Windows, maupun repository.
-- **Autonomous & Gated Workflows**: Coding Agent dan Research Agent berjalan di atas permission engine, bounded repair loops, dan evaluasi berbasis bukti oleh Evaluator engine.
-- **Klien Lengkap**: Android (React Native/Expo) sebagai klien penuh mobile, dan Windows Agent (Tauri/Rust) sebagai worker lokal dengan capability terbatas.
-
-Seluruh 13 packages dan apps di dalam monorepo telah melewati quality gates:
-
-- **Lint**: 13/13 packages lulus (0 errors, 0 warnings).
-- **Typecheck**: 13/13 packages lulus (TypeScript strict mode).
-- **Automated Tests**: 13/13 test suites lulus (100% pass rate).
-- **Build**: 13/13 build artifacts terkompilasi bersih.
+- **Linter (`pnpm lint`)**: 13/13 paket **LULUS** (0 error, 0 warning).
+- **Typecheck (`pnpm typecheck`)**: 13/13 paket **LULUS** (TypeScript strict mode, 0 error).
+- **Production Build (`pnpm build`)**: 13/13 paket **LULUS** (termasuk kompilasi bundle web Vite Windows di `apps/windows/dist` dan paket TypeScript core).
+- **Test Suite Monorepo (`pnpm test`)**: 13/13 task **LULUS** (100% lulus untuk unit dan integrasi aktif).
+- **Test E2E 7 Skenario Nyata (`apps/api/test/e2e-scenarios.test.ts`)**: 7/7 skenario **LULUS** (0 fail, 0 skipped, durasi 7.14s).
+- **Test Suite API (`apps/api/test/*.test.ts`)**: 47 pass, 0 fail, 1 skipped (database container offline pada host Windows lokal; seluruh test live BullMQ/Redis dan in-memory fallback lulus).
+- **Test Suite Agent Worker (`apps/agent-worker/test/*.test.ts`)**: 18 pass, 0 fail, 0 skipped.
 
 ---
 
 ## 2. Audit Kriteria Sukses (12 Butir)
 
+Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** beserta bukti file relatif yang dapat diverifikasi:
+
 ### Butir 1: Android Chat Streaming lewat Backend dan 9Router tanpa Secret di Client
 
 - **Status**: **LULUS**
 - **Persyaratan**: Client Android melakukan streaming chat melalui backend API yang meneruskan ke 9Router. Tidak ada API key model gateway di client.
-- **Bukti Lokasi Kode**:
-  - [apps/android/src/services/chat-websocket.ts](file:///c:/Coding/Project/ai-agent/apps/android/src/services/chat-websocket.ts#L42-L55): Client menghubungkan WebSocket ke backend `/v1/chat/ws` menggunakan JWT access token pengguna, bukan token 9Router.
-  - [apps/android/src/api/client.ts](file:///c:/Coding/Project/ai-agent/apps/android/src/api/client.ts#L63-L70): Header permintaan hanya memuat `Authorization: Bearer <accessToken>`.
-  - [apps/api/src/routes/chat.ts](file:///c:/Coding/Project/ai-agent/apps/api/src/routes/chat.ts): Backend memverifikasi JWT via `AuthService` dan memanggil `ModelGateway` dengan `NINEROUTER_API_KEY` dari server env.
-  - [packages/model-gateway/src/nine-router.ts](file:///c:/Coding/Project/ai-agent/packages/model-gateway/src/nine-router.ts): Gateway tunggal backend ke `https://9router.ojixx.my.id/v1`.
-- **Bukti Pengujian & Log**:
-  - `apps/api/test/chat.test.ts`: Chat completion streaming endpoint mengembalikan chunk NDJSON/SSE.
-  - `apps/api/test/e2e-platform.test.ts` (Test 1): `Chat streaming via ModelGateway yields chunks and accumulates full response` (Pass, 50.77ms).
-  - Secret scanning pada [apps/android](file:///c:/Coding/Project/ai-agent/apps/android): 0 secret model gateway atau private key ditemukan.
+- **Bukti File Relatif**:
+  - `apps/android/src/services/chat-websocket.ts`: Mengalirkan chunk chat via WebSocket ke endpoint backend `/v1/chat/ws` menggunakan JWT access token, tanpa API key model gateway.
+  - `apps/android/src/api/client.ts`: Header permintaan hanya memuat `Authorization: Bearer <accessToken>`.
+  - `apps/android/src/api/config.ts`: Konfigurasi base URL diambil dari environment runtime `EXPO_PUBLIC_API_URL` dan `EXPO_PUBLIC_WS_URL`.
+  - `apps/api/src/routes/chat.ts`: Backend memverifikasi JWT via `AuthService` dan memanggil `ModelRouter` yang meneruskan panggilan ke `NineRouterGateway`.
+  - `packages/model-gateway/src/nine-router.ts`: Gateway tunggal backend ke endpoint model gateway `https://9router.ojixx.my.id/v1`.
+- **Bukti Test & Output**:
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 1: Register/login, chat streaming via WebSocket (real Fastify & fake 9Router)`
+  - Output Aktual: `✔ Skenario 1: Register/login, chat streaming via WebSocket (real Fastify & fake 9Router) (760.8611ms)`
+  - Secret Scanning: 0 model gateway API key ditemukan pada bundle `apps/android`.
 
 ---
 
 ### Butir 2: Project, Conversation, Task Punya State dan Realtime Progress
 
 - **Status**: **LULUS**
-- **Persyaratan**: Entitas project, conversation, dan task memiliki model status formal dan progress dapat dipantau realtime melalui WebSocket.
-- **Bukti Lokasi Kode**:
-  - [packages/shared/src/tasks/state-machine.ts](file:///c:/Coding/Project/ai-agent/packages/shared/src/tasks/state-machine.ts): Definisi state eksplisit (`pending` → `running` → `waiting_approval` → `completed` / `failed` / `cancelled`).
-  - [apps/api/src/routes/tasks.ts](file:///c:/Coding/Project/ai-agent/apps/api/src/routes/tasks.ts): Endpoint CRUD task dan transisi state ber-idempotency.
-  - [apps/api/src/routes/events-ws.ts](file:///c:/Coding/Project/ai-agent/apps/api/src/routes/events-ws.ts): Endpoint `/v1/events/ws` untuk streaming realtime event envelope dan replay via `last_event_id`.
-  - [apps/android/src/screens/TasksScreen.tsx](file:///c:/Coding/Project/ai-agent/apps/android/src/screens/TasksScreen.tsx): Tampilan UI Android dengan realtime progress bar dan event timeline.
-- **Bukti Pengujian & Log**:
-  - `apps/api/test/websocket.test.ts`: `Realtime WebSocket event streaming and replay on reconnect` (Pass, 203.28ms).
-  - `apps/api/test/tasks.test.ts`: `Task lifecycle: pause, resume, cancel, and approval transitions` (Pass, 138.66ms).
+- **Persyaratan**: Entitas project, conversation, dan task memiliki model status formal, idempotency key, dan progress dapat dipantau realtime melalui WebSocket.
+- **Bukti File Relatif**:
+  - `packages/shared/src/tasks/state-machine.ts`: Definisi state formal task (`queued`, `planning`, `running`, `waiting_approval`, `completed`, `failed`, `cancelled`, `paused`).
+  - `apps/api/src/routes/tasks.ts`: Endpoint CRUD task, filter `projectId` dan `status`, serta mutasi state berbasis idempotency.
+  - `apps/api/src/routes/events-ws.ts`: Endpoint `/v1/events/ws` untuk streaming realtime event envelope dan replay riwayat via `last_event_id`.
+  - `apps/android/src/screens/TaskListScreen.tsx`: Tampilan daftar tugas dengan status badge dan indikator progress.
+  - `apps/android/src/screens/TaskDetailScreen.tsx`: Tampilan detail task dengan timeline event realtime.
+- **Bukti Test & Output**:
+  - Test: `apps/api/test/tasks.test.ts` — `Task lifecycle: pause, resume, cancel, and approval transitions`
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed`
+  - Output Aktual: `✔ Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed (309.6985ms)`
 
 ---
 
 ### Butir 3: Background Task Pulih setelah Worker Restart
 
 - **Status**: **LULUS**
-- **Persyaratan**: Ketika worker mati di tengah eksekusi, task dapat dipulihkan dari checkpoint terakhir tanpa mengeksekusi ulang aksi yang sudah selesai.
-- **Bukti Lokasi Kode**:
-  - [packages/shared/src/tasks/checkpoint-verifier.ts](file:///c:/Coding/Project/ai-agent/packages/shared/src/tasks/checkpoint-verifier.ts): Checkpoint hash integrity verification dan tracking `stepIndex`.
-  - [apps/agent-worker/src/task-executor.ts](file:///c:/Coding/Project/ai-agent/apps/agent-worker/src/task-executor.ts#L100-L150): Sebelum eksekusi langkah, worker membaca checkpoint terakhir; langkah dengan `step <= lastCheckpoint.stepIndex` dilewati dengan aman.
-- **Bukti Pengujian & Log**:
-  - `apps/api/test/recovery-drill.test.ts` (Test 1): `Worker crash mid-task resumes from last checkpoint without duplicating completed steps` (Pass, 7.71ms).
-  - `apps/api/test/recovery-drill.test.ts` (Test 4): `Checkpoint integrity verification rejects tampered state` (Pass, 0.45ms).
+- **Persyaratan**: Ketika worker mati di tengah eksekusi, task dapat dipulihkan dari checkpoint terakhir tanpa menduplikasi side-effect yang telah selesai.
+- **Bukti File Relatif**:
+  - `packages/shared/src/tasks/checkpoint-verifier.ts`: Verifikasi integritas hash checkpoint dan tracking `stepIndex`.
+  - `apps/agent-worker/src/task-executor.ts`: Memeriksa checkpoint terakhir pada awal eksekusi langkah; langkah dengan `stepIndex <= lastCheckpoint.stepIndex` dilewati dengan aman.
+  - `apps/api/src/services/task-queue.ts`: Pembersihan job lama sebelum enqueue memastikan task yang dipulihkan dapat di-antrikan kembali tanpa konflik ID BullMQ.
+- **Bukti Test & Output**:
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 4: Matikan worker di tengah task, hidupkan lagi, task pulih dari checkpoint tanpa menggandakan side effect`
+  - Test: `apps/api/test/recovery-drill.test.ts` — `Worker crash mid-task resumes from last checkpoint without duplicating completed steps`
+  - Output Aktual: `✔ Skenario 4: Matikan worker di tengah task, hidupkan lagi, task pulih dari checkpoint tanpa menggandakan side effect (3.0313ms)`
 
 ---
 
@@ -78,202 +80,308 @@ Seluruh 13 packages dan apps di dalam monorepo telah melewati quality gates:
 
 - **Status**: **LULUS**
 - **Persyaratan**: Pemilihan model, runtime adapter, dan tool dipandu oleh analisis niat, matriks kapabilitas, dan health check runtime dengan graceful fallback.
-- **Bukti Lokasi Kode**:
-  - [packages/agent-core/src/router/agent-router.ts](file:///c:/Coding/Project/ai-agent/packages/agent-core/src/router/agent-router.ts): Menganalisis kebutuhan task (coding/research/general) dan memilih runtime yang sehat.
-  - [packages/agent-core/src/runtimes/runtime-manager.ts](file:///c:/Coding/Project/ai-agent/packages/agent-core/src/runtimes/runtime-manager.ts): Memonitor runtime resmi terpasang (OMP dan Pi) dan menandai status `healthy`/`unhealthy`.
-  - [packages/agent-core/src/runtimes/unverified-adapter.ts](file:///c:/Coding/Project/ai-agent/packages/agent-core/src/runtimes/unverified-adapter.ts): Hermes dan OpenHands ditolak/diisolasi karena belum terpasang resmi di workstation assessment.
-- **Bukti Pengujian & Log**:
-  - `packages/agent-core/test/agent-router.test.ts`: Routing berbasis niat dan capability (Pass).
-  - `packages/agent-core/test/runtimes.test.ts`: Runtime health check dan fallback saat runtime primer gagal (Pass).
+- **Bukti File Relatif**:
+  - `packages/agent-core/src/router/agent-router.ts`: Menganalisis niat task (coding/research/general) dan memilih model/runtime yang sehat.
+  - `packages/agent-core/src/runtimes/runtime-manager.ts`: Memonitor runtime adapter terpasang (OMP dan Pi) serta status kesehatannya.
+  - `packages/agent-core/src/runtimes/unverified-adapter.ts`: Isolasi runtime yang belum terverifikasi agar tidak dieksekusi di luar policy.
+- **Bukti Test & Output**:
+  - Test: `packages/agent-core/test/agent-router.test.ts`: Routing berbasis niat dan kapabilitas.
+  - Test: `packages/agent-core/test/runtimes.test.ts`: Runtime health check dan fallback saat runtime primer gagal.
+  - Output Aktual: Seluruh subtest `packages/agent-core` lulus 100%.
 
 ---
 
 ### Butir 5: Memory/Context Relevan dan Punya Scope/Retensi
 
 - **Status**: **LULUS**
-- **Persyaratan**: Memori memiliki tipe terstruktur (session, long-term, project, preference, decision) dengan write policy selektif (bukan auto-dump chat), filter data sensitif, dan token budget.
-- **Bukti Lokasi Kode**:
-  - [packages/memory/src/types.ts](file:///c:/Coding/Project/ai-agent/packages/memory/src/types.ts): Definisi 7 tipe scope memori dan retensi TTL.
-  - [packages/memory/src/policy/memory-write-policy.ts](file:///c:/Coding/Project/ai-agent/packages/memory/src/policy/memory-write-policy.ts): Penilaian kandidat memori berdasarkan relevance, novelty, dan utility score.
-  - [packages/memory/src/policy/sensitive-data-filter.ts](file:///c:/Coding/Project/ai-agent/packages/memory/src/policy/sensitive-data-filter.ts): Redaksi otomatis API keys, JWT, dan credential sebelum disimpan.
-  - [packages/memory/src/context/context-manager.ts](file:///c:/Coding/Project/ai-agent/packages/memory/src/context/context-manager.ts): Dynamic token budgeting, deduplikasi, truncation deterministik, dan penjagaan invariant security boundaries.
-- **Bukti Pengujian & Log**:
-  - `packages/memory/test/memory.test.ts`: Uji isolasi tenant, filter data sensitif, token budget context (Pass).
-  - `apps/api/test/memory.test.ts`: API memory CRUD dan proteksi autentikasi (Pass).
+- **Persyaratan**: Memori memiliki tipe terstruktur (session, long-term, project, preference, decision) dengan write policy selektif, filter data sensitif, dan token budget context.
+- **Bukti File Relatif**:
+  - `packages/memory/src/types.ts`: Definisi 7 scope memori dan retensi TTL.
+  - `packages/memory/src/policy/memory-write-policy.ts`: Penilaian kandidat memori berdasarkan relevance, novelty, dan utility score.
+  - `packages/memory/src/policy/sensitive-data-filter.ts`: Redaksi otomatis API key, JWT, dan credential sebelum disimpan.
+  - `packages/memory/src/context/context-manager.ts`: Dynamic token budgeting, deduplikasi, dan pemotongan deterministik.
+- **Bukti Test & Output**:
+  - Test: `packages/memory/test/memory.test.ts`: Uji isolasi tenant, filter data sensitif, token budget context.
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 7: Isolasi: user A tidak bisa membaca project/task/memori user B`
+  - Output Aktual: `✔ Skenario 7: Isolasi: user A tidak bisa membaca project/task/memori user B (161.3365ms)`
 
 ---
 
 ### Butir 6: MCP, Browser, Files Mengikuti Permission dan Audit
 
 - **Status**: **LULUS**
-- **Persyaratan**: Pemanggilan MCP, browser automation, dan akses file lokal divalidasi permission engine, dilindungi dari SSRF/path traversal, dan diaudit.
-- **Bukti Lokasi Kode**:
-  - [packages/mcp/src/security/untrusted-sanitizer.ts](file:///c:/Coding/Project/ai-agent/packages/mcp/src/security/untrusted-sanitizer.ts): Sanitasi output MCP eksternal yang dianggap untrusted agar tidak menjadi prompt injection.
-  - [packages/tools/src/ssrf/ssrf-guard.ts](file:///c:/Coding/Project/ai-agent/packages/tools/src/ssrf/ssrf-guard.ts): Blokade akses ke loopback (127.0.0.1), private network (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), dan cloud metadata (169.254.169.254).
-  - [apps/windows/src/security/path-validator.ts](file:///c:/Coding/Project/ai-agent/apps/windows/src/security/path-validator.ts): Canonicalization path dan penolakan traversal `..` di luar direktori allowlist.
-- **Bukti Pengujian & Log**:
-  - `packages/mcp/test/mcp.test.ts`: Sanitasi MCP dan audit schema (Pass).
-  - `apps/api/test/e2e-platform.test.ts` (Test 4 & 5): SSRF guard memblokir metadata AWS/GCP/Oracle dan Windows path validator menolak traversal System32 (Pass, 27.64ms).
+- **Persyaratan**: Pemanggilan MCP, browser automation, dan akses file lokal divalidasi permission engine, dilindungi dari SSRF/path traversal, dan dicatat dalam audit log.
+- **Bukti File Relatif**:
+  - `packages/mcp/src/security/untrusted-sanitizer.ts`: Sanitasi output MCP eksternal untuk mencegah prompt injection.
+  - `packages/tools/src/ssrf/ssrf-guard.ts`: Blokade akses loopback (127.0.0.1), private network (10.0.0.0/8, 192.168.0.0/16), dan cloud metadata (169.254.169.254).
+  - `apps/windows/src/security/path-validator.ts`: Kanonikalisasi path dan penolakan path traversal `..` di luar direktori allowlist.
+- **Bukti Test & Output**:
+  - Test: `packages/mcp/test/mcp.test.ts`: Sanitasi MCP dan audit schema.
+  - Test: `apps/windows/test/path-validator.test.ts`: Blokade traversal Windows System32.
+  - Test: `apps/api/test/e2e-platform.test.ts`: SSRF guard memblokir IP metadata cloud.
+  - Output Aktual: Seluruh unit test security lulus 100%.
 
 ---
 
 ### Butir 7: Coding dan Research Menghasilkan Bukti, Laporan, Artefak
 
 - **Status**: **LULUS**
-- **Persyaratan**: Coding Agent dan Research Agent mengikuti workflow ketat dan menghasilkan bukti terverifikasi (diff, test output, sitasi, report artifact).
-- **Bukti Lokasi Kode**:
-  - [packages/agent-core/src/coding/coding-agent.ts](file:///c:/Coding/Project/ai-agent/packages/agent-core/src/coding/coding-agent.ts): Workflow: understand → inspect → plan → implement → test → debug → diff review → report. Menghasilkan ringkasan diff dan artefak kode.
-  - [packages/agent-core/src/research/research-agent.ts](file:///c:/Coding/Project/ai-agent/packages/agent-core/src/research/research-agent.ts): Workflow: decompose → search → browse → extract → cross-check → score → synthesize → cite → report. Menautkan klaim ke sumber valid.
-- **Bukti Pengujian & Log**:
-  - `packages/agent-core/test/coding-agent.test.ts`: Verifikasi eksekusi test dan batas repair loop (Pass).
-  - `packages/agent-core/test/research-agent.test.ts`: Verifikasi sitasi dan penanda kontradiksi informasi (Pass).
+- **Persyaratan**: Coding Agent dan Research Agent mengikuti workflow terstruktur dan menghasilkan bukti terverifikasi (diff, test output, sitasi, report artifact).
+- **Bukti File Relatif**:
+  - `packages/agent-core/src/coding/coding-agent.ts`: Workflow tahap: understand → inspect → plan → implement → test → debug → review_diff → document → report.
+  - `packages/agent-core/src/research/research-agent.ts`: Workflow: decompose → search → browse → extract → cross-check → score → synthesize → cite → report.
+  - `packages/tools/src/artifacts/`: Penyimpanan artefak hasil eksekusi task.
+- **Bukti Test & Output**:
+  - Test: `packages/agent-core/test/coding-agent.test.ts`: Verifikasi eksekusi test dan batas repair loop.
+  - Test: `packages/agent-core/test/research-agent.test.ts`: Verifikasi sitasi dan penandaan kontradiksi sumber.
+  - Output Aktual: Lulus (100% assertions pass).
 
 ---
 
 ### Butir 8: Evaluator Menentukan Completion
 
 - **Status**: **LULUS**
-- **Persyaratan**: Agent tidak dapat mengklaim selesai secara sepihak; penyelesaian ditentukan secara objektif oleh Evaluator engine.
-- **Bukti Lokasi Kode**:
-  - [packages/evaluator/src/coding-evaluator.ts](file:///c:/Coding/Project/ai-agent/packages/evaluator/src/coding-evaluator.ts): Evaluasi objektif berbasis lint, typecheck, test exit code, diff compliance, dan security checks.
-  - [packages/evaluator/src/research-evaluator.ts](file:///c:/Coding/Project/ai-agent/packages/evaluator/src/research-evaluator.ts): Evaluasi kelengkapan sitasi, kredibilitas sumber, dan netralitas.
-  - [packages/agent-core/src/coding/coding-agent.ts](file:///c:/Coding/Project/ai-agent/packages/agent-core/src/coding/coding-agent.ts#L180-L210): Task hanya berstatus 'completed' jika evaluasi memenuhi skor ambang batas.
-- **Bukti Pengujian & Log**:
-  - `packages/evaluator/test/evaluator.test.ts`: Uji evaluator coding dan research dengan mock kriteria (Pass).
-  - `packages/agent-core/test/evaluator-gating.test.ts`: Penolakan klaim sukses saat evaluasi menghasilkan kegagalan (Pass).
+- **Persyaratan**: Agen dilarang menyatakan tugas selesai berdasarkan klaim verbal mandiri; penyelesaian ditentukan secara independen oleh Evaluator engine berbasis bukti eksekusi tooling.
+- **Bukti File Relatif**:
+  - `packages/evaluator/src/coding-evaluator.ts`: Evaluasi objektif berbasis 7 kriteria nyata (lint, typecheck, tests, build, security, requirement coverage, diff).
+  - `packages/evaluator/src/research-evaluator.ts`: Evaluasi kelengkapan sitasi, kredibilitas sumber, dan konsistensi klaim.
+  - `packages/agent-core/src/coding/coding-agent.ts`: Task hanya berstatus 'completed' jika evaluasi memenuhi skor 100%.
+- **Bukti Test & Output**:
+  - Test: `packages/agent-core/test/evaluator-gating.test.ts`: Penolakan klaim selesai saat bukti tooling tidak ada.
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed`
+  - Output Aktual: `✔ Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed (309.6985ms)`
 
 ---
 
 ### Butir 9: Approval Menghentikan Aksi Berisiko
 
 - **Status**: **LULUS**
-- **Persyaratan**: Aksi berisiko tinggi (HIGH/CRITICAL) langsung berhenti di status `waiting_approval` dan tidak dieksekusi tanpa persetujuan eksplisit pengguna.
-- **Bukti Lokasi Kode**:
-  - [packages/permissions/src/engine.ts](file:///c:/Coding/Project/ai-agent/packages/permissions/src/engine.ts): Klasifikasi aksi ke dalam tingkat risiko.
-  - [packages/permissions/src/guard.ts](file:///c:/Coding/Project/ai-agent/packages/permissions/src/guard.ts): Melempar `ApprovalRequiredError` jika aksi berisiko belum memiliki approval id yang valid.
-  - [apps/agent-worker/src/task-executor.ts](file:///c:/Coding/Project/ai-agent/apps/agent-worker/src/task-executor.ts#L70-L95): Menangkap kebutuhan approval, menghentikan loop, mengubah status task ke `waiting_approval`, dan memancarkan event notifikasi.
-- **Bukti Pengujian & Log**:
-  - `apps/api/test/e2e-platform.test.ts` (Test 3): `High-risk action triggers approval gate and halts until approval is granted` (Pass, 2.93ms).
-  - `packages/permissions/test/permissions.test.ts`: Policy permission evaluation & risk enforcement (Pass).
+- **Persyaratan**: Aksi berisiko tinggi (HIGH/CRITICAL) wajib berhenti di status `waiting_approval`, dilanjutkan saat di-approve, dan dihentikan saat di-deny.
+- **Bukti File Relatif**:
+  - `packages/permissions/src/engine.ts`: Klasifikasi aksi dan penentuan tingkat risiko (LOW, MEDIUM, HIGH, CRITICAL).
+  - `packages/permissions/src/guard.ts`: Melempar `ApprovalRequiredError` jika aksi berisiko belum disetujui.
+  - `apps/api/src/routes/approvals.ts`: Endpoint `/v1/approvals/:id/approve` dan `/v1/approvals/:id/deny` dengan audit logging.
+  - `apps/agent-worker/src/task-executor.ts`: Menghentikan eksekusi pada status `waiting_approval` dan melanjutkan hanya setelah approval tervalidasi.
+- **Bukti Test & Output**:
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; deny menghentikan task`
+  - Output Aktual: `✔ Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; deny menghentikan task (325.5554ms)`
 
 ---
 
 ### Butir 10: Scheduler, Events, Notifications Tidak Melewati Policy
 
-- **Status**: **LULUS**
-- **Persyaratan**: Eksekusi otomatis dari jadwal (cron/one-off) dan event trigger wajib tetap melalui Permission Engine, memiliki deduplikasi, serta idempotency.
-- **Bukti Lokasi Kode**:
-  - [apps/scheduler/src/scheduler-engine.ts](file:///c:/Coding/Project/ai-agent/apps/scheduler/src/scheduler-engine.ts): Tracking idempotency key per slot eksekusi dan penanganan missed-run policy (`skip`, `run_once`, `catch_up`).
-  - [apps/scheduler/src/event-engine.ts](file:///c:/Coding/Project/ai-agent/apps/scheduler/src/event-engine.ts#L90-L125): Setiap trigger event diperiksa terhadap `PermissionEngine`; bila berisiko tinggi, task dibuat dalam status `waiting_approval`.
-  - [apps/scheduler/src/notification-engine.ts](file:///c:/Coding/Project/ai-agent/apps/scheduler/src/notification-engine.ts): Deduplication window (60s) mencegah badai notifikasi, serta pembentukan deep link valid (`personal-ai://approvals/:id`).
-- **Bukti Pengujian & Log**:
-  - `apps/scheduler/test/scheduler.test.ts` & `apps/scheduler/test/event-engine.test.ts` (Pass).
-  - `apps/api/test/e2e-platform.test.ts` (Test 6 & 7): Missed-run policy idempotency dan FCM notification deduplication (Pass, 526ms & 1.28ms).
+- **Status**: **SEBAGIAN**
+- **Persyaratan**: Eksekusi otomatis dari jadwal dan event wajib melalui Permission Engine, memiliki deduplikasi, dan notifikasi ber-retry terbatas. Pengiriman FCM nyata hanya aktif jika kredensial tersedia.
+- **Bukti File Relatif**:
+  - `apps/scheduler/src/scheduler-engine.ts`: Tracking idempotency key per slot eksekusi dan penanganan missed-run policy (`skip`, `run_once`, `catch_up`).
+  - `apps/scheduler/src/event-engine.ts`: Event-triggered task divalidasi lewat `PermissionEngine`; aksi berisiko masuk `waiting_approval`.
+  - `apps/scheduler/src/notification-engine.ts`: Jendela deduplikasi (60 detik) mencegah spam notifikasi.
+  - `apps/scheduler/src/fcm-provider.ts`: Membaca path file `FCM_SERVICE_ACCOUNT_JSON`. Jika variabel tidak disetel, pengiriman FCM dinonaktifkan secara eksplisit dengan pesan log transparan (tanpa mock diam-diam).
+- **Bukti Test & Output**:
+  - Test: `apps/scheduler/test/scheduler.test.ts` & `apps/scheduler/test/event-engine.test.ts` (Lulus).
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 6: Jadwal berulang berjalan tepat sekali`
+  - Output Aktual: `✔ Skenario 6: Jadwal berulang berjalan tepat sekali (957.1265ms)`
+- **Keterbatasan / Mengapa SEBAGIAN**:
+  - Pengiriman push notification ke server Google FCM v1 di production memerlukan file JSON kredensial resmi dari Google Cloud Console yang baru akan disuntikkan saat deployment VPS.
 
 ---
 
 ### Butir 11: Windows Agent Terautentikasi dan Capability-Limited
 
 - **Status**: **LULUS**
-- **Persyaratan**: Windows Agent beroperasi sebagai remote worker dengan identitas perangkat terdaftar, koneksi aman berautentikasi, dan kapabilitas yang dibatasi ketat oleh allowlist.
-- **Bukti Lokasi Kode**:
-  - [apps/windows/src/connection/device-identity.ts](file:///c:/Coding/Project/ai-agent/apps/windows/src/connection/device-identity.ts): Pembuatan keypair kriptografis dan device ID unik.
-  - [apps/windows/src/connection/client.ts](file:///c:/Coding/Project/ai-agent/apps/windows/src/connection/client.ts): Autentikasi koneksi WebSocket ke control plane dengan handshake terverifikasi.
-  - [apps/windows/src/security/capability-registry.ts](file:///c:/Coding/Project/ai-agent/apps/windows/src/security/capability-registry.ts): Pembatasan eksekusi hanya pada command yang terdaftar (misal: visual inspection, safe workspace scripts).
-- **Bukti Pengujian & Log**:
-  - `apps/windows/test/capability-registry.test.ts`: Penolakan perintah tidak terdaftar (Pass).
-  - `apps/windows/test/connection-and-offline.test.ts`: Uji koneksi, autentikasi, dan offline handling (Pass).
-  - `apps/api/test/recovery-drill.test.ts` (Test 2): Fail-fast saat Windows worker terputus dan resume saat online kembali (Pass, 1.50ms).
+- **Persyaratan**: Windows Agent beroperasi sebagai remote worker dengan identitas perangkat kriptografis, koneksi outbound WSS terautentikasi, allowlist command, dan penanganan status offline.
+- **Bukti File Relatif**:
+  - `apps/windows/src/connection/device-identity.ts`: Pembuatan identitas perangkat dan integrasi invoke command Tauri.
+  - `apps/windows/src/connection/agent-connection.ts`: Koneksi WSS outbound ke `/v1/agent/ws` dengan handshake dan reconnect otomatis.
+  - `apps/windows/src/security/capability-registry.ts`: Pendaftaran kapabilitas yang diizinkan (default powershell non-aktif kecuali diaktifkan eksplisit).
+  - `apps/windows/src/security/command-executor.ts`: Eksekusi command dalam batas direktori kerja yang divalidasi.
+  - `apps/windows/src-tauri/src/main.rs`: Backend Tauri Rust yang membatasi akses native OS.
+- **Bukti Test & Output**:
+  - Test: `apps/windows/test/command-executor.test.ts`: Eksekusi perintah allowlist dan penolakan di luar allowlist.
+  - Test: `apps/windows/test/connection-and-offline.test.ts`: Uji handshake koneksi dan transisi offline.
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di luar allowlist ditolak, offline ditangani`
+  - Output Aktual: `✔ Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di luar allowlist ditolak, offline ditangani (1061.4363ms)`
 
 ---
 
 ### Butir 12: Logging, Health Check, Backup, Resource Limit, Security Test, dan Deployment Docs Tersedia
 
-- **Status**: **LULUS**
-- **Persyaratan**: Tersedia observability (/health, /metrics, redaksi log), resource profiling VPS ARM64 (12 GB RAM), script backup/restore teruji, runbook insiden, dan dokumen deployment.
-- **Bukti Lokasi Kode**:
-  - [apps/api/src/app.ts](file:///c:/Coding/Project/ai-agent/apps/api/src/app.ts): Endpoint `/health` (DB & Redis health) dan `/metrics` (Prometheus text format) serta redaksi ketat field credential.
-  - [docker-compose.yml](file:///c:/Coding/Project/ai-agent/docker-compose.yml): Batas memori dan CPU eksplisit per container (total ~5.6 GB RAM) dan `stop_grace_period: 30s`.
-  - [scripts/backup-postgres.sh](file:///c:/Coding/Project/ai-agent/scripts/backup-postgres.sh) & [scripts/restore-postgres.sh](file:///c:/Coding/Project/ai-agent/scripts/restore-postgres.sh): Skrip backup berkala dan restore database.
-  - [docs/runbooks/incident-response.md](file:///c:/Coding/Project/ai-agent/docs/runbooks/incident-response.md): Prosedur tanggap darurat (gateway outage, worker crash, disconnect, OOM).
-  - [docs/runbooks/deployment.md](file:///c:/Coding/Project/ai-agent/docs/runbooks/deployment.md): Checklist deployment zero-downtime dan rollback.
-  - [docs/runbooks/resource-profiling-and-capacity.md](file:///c:/Coding/Project/ai-agent/docs/runbooks/resource-profiling-and-capacity.md): Perhitungan kapasitas Oracle Cloud VPS ARM64.
-- **Bukti Pengujian & Log**:
-  - `apps/api/test/recovery-drill.test.ts`: 4 skenario simulasi insiden dan recovery (Pass).
-  - `apps/api/test/auth.test.ts`: Uji endpoint `/health`, `/metrics`, dan auth security (Pass).
+- **Status**: **SEBAGIAN**
+- **Persyaratan**: Tersedia observability (`/health`, `/metrics`, redaksi log), resource limit VPS ARM64 (12 GB RAM), script backup/restore teruji, runbook insiden, dan dokumen deployment.
+- **Bukti File Relatif**:
+  - `apps/api/src/app.ts`: Endpoint `/health` dan `/metrics` (Prometheus) serta filter redaksi token pada logger.
+  - `docker-compose.yml`: Batas memori dan CPU eksplisit per container (total ~5.6 GB RAM) dan jaringan terisolasi `internal: true`.
+  - `scripts/backup-postgres.sh`: Skrip dump database PostgreSQL terisolasi.
+  - `scripts/restore-postgres.sh`: Skrip pemulihan database dari berkas dump.
+  - `scripts/backup-cron-wrapper.sh`: Wrapper cron otomatis untuk backup harian.
+  - `docs/runbooks/incident-response.md`: Runbook penanganan insiden outage, OOM, dan worker disconnect.
+  - `docs/runbooks/deployment.md`: Langkah deployment zero-downtime dan rollback.
+  - `docs/runbooks/resource-profiling-and-capacity.md`: Profil kapasitas memori dan alokasi resource VPS ARM64.
+- **Bukti Test & Output**:
+  - Test: `apps/api/test/auth.test.ts`: Health check endpoint merespons status OK.
+  - Test: `apps/api/test/recovery-drill.test.ts`: 4 skenario simulasi insiden dan recovery.
+- **Keterbatasan / Mengapa SEBAGIAN**:
+  - Verifikasi langsung deployment pada mesin fisik Oracle Cloud VPS ARM64 (Perbaikan 0 dan 5) masih menunggu sesi koneksi SSH langsung dari pengguna.
 
 ---
 
 ## 3. Checklist Kesiapan Platform
 
-| Butir Checklist                                         | Status    | Bukti Nyata                                                                                                                                                                                   |
-| ------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Android klien penuh**                                 | **LULUS** | 8 modul screen lengkap (Chat, Tasks, Projects, Approvals, Timeline, Devices, Profile, Settings) di [apps/android/src/screens/](file:///c:/Coding/Project/ai-agent/apps/android/src/screens/). |
-| **Chat via backend + 9Router**                          | **LULUS** | Route `/v1/chat/*` di [apps/api/src/routes/chat.ts](file:///c:/Coding/Project/ai-agent/apps/api/src/routes/chat.ts) memanggil `NineRouterGateway`.                                            |
-| **Project / Task / Timeline / Artifact**                | **LULUS** | Terintegrasi penuh dengan event timeline streaming dan artifact storage di [packages/tools/src/artifacts/](file:///c:/Coding/Project/ai-agent/packages/tools/src/artifacts/).                 |
-| **Routing berbasis capability**                         | **LULUS** | `AgentRouter` memetakan intent ke `RuntimeManager` (OMP, Pi) dan `NineRouterGateway`.                                                                                                         |
-| **Memory & context ber-budget**                         | **LULUS** | `ContextManager` menerapkan token budgeting (e.g. 4096-8192 token) dan deterministic ordering.                                                                                                |
-| **Queue / cancel / retry / checkpoint / recovery**      | **LULUS** | `TaskExecutor` dengan BullMQ, max attempts (3), versioned checkpoints, dan recovery test.                                                                                                     |
-| **Windows device identity + allowlist**                 | **LULUS** | `DeviceIdentity` cryptographic challenge dan `PathValidator` directory allowlist di [apps/windows](file:///c:/Coding/Project/ai-agent/apps/windows).                                          |
-| **MCP / tools / browser / file ber-permission & audit** | **LULUS** | Semua eksekusi melewati `SecuredCapabilityGuard` dengan log audit terperinci.                                                                                                                 |
-| **Evaluator menentukan completion**                     | **LULUS** | `CodingEvaluator` & `ResearchEvaluator` memvalidasi hasil sebelum status task diset ke `completed`.                                                                                           |
-| **Approval terikat aksi spesifik**                      | **LULUS** | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence`, dan `requestedBy`.                                                                                                  |
-| **Scheduler / events / notifications dengan dedupe**    | **LULUS** | Deduplikasi idempotency key di scheduler dan dedupe window 60s di Notification Engine.                                                                                                        |
-| **Tidak ada secret di client / log / repo**             | **LULUS** | Pemindaian repo bersih dari API key, Fastify logger meredaksi header Authorization dan tokens.                                                                                                |
-| **PostgreSQL & Redis tidak publik**                     | **LULUS** | [docker-compose.yml](file:///c:/Coding/Project/ai-agent/docker-compose.yml) melampirkan DB dan Redis ke `internal: true` network tanpa port mapping eksternal.                                |
-| **Backup/restore, observability, ARM64 limits**         | **LULUS** | Script backup tersedia di [scripts/](file:///c:/Coding/Project/ai-agent/scripts/), Prometheus metrics di API, resource limits terkonfigurasi.                                                 |
+| Butir Checklist                                  | Status       | Bukti Nyata & Path File Relatif                                                                                                                                                                |
+| :----------------------------------------------- | :----------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Android klien penuh**                          | **LULUS**    | 9 screen lengkap di `apps/android/src/screens/` (`ChatScreen.tsx`, `TaskListScreen.tsx`, `TaskDetailScreen.tsx`, `ApprovalInboxScreen.tsx`, `ProjectsScreen.tsx`, `SettingsScreen.tsx`, dll.). |
+| **Chat streaming via backend + 9Router**         | **LULUS**    | Route `/v1/chat/*` di `apps/api/src/routes/chat.ts` memanggil `NineRouterGateway` tanpa secret di client.                                                                                      |
+| **Project / Task / Timeline / Artifact**         | **LULUS**    | Terintegrasi penuh dengan event timeline streaming dan artifact storage di `packages/tools/src/artifacts/`.                                                                                    |
+| **Routing berbasis capability**                  | **LULUS**    | `AgentRouter` di `packages/agent-core/src/router/agent-router.ts` memetakan intent ke `RuntimeManager` (OMP, Pi) dan `NineRouterGateway`.                                                      |
+| **Memory & context ber-budget**                  | **LULUS**    | `ContextManager` di `packages/memory/src/context/context-manager.ts` menerapkan token budgeting dinamis dan deduplikasi.                                                                       |
+| **Queue / cancel / checkpoint / recovery**       | **LULUS**    | `TaskExecutor` di `apps/agent-worker/src/task-executor.ts` dan `BullMqTaskQueue` di `apps/api/src/services/task-queue.ts` dengan versioned checkpoint recovery.                                |
+| **Windows device identity + allowlist**          | **LULUS**    | `apps/windows/src/connection/device-identity.ts` dan `apps/windows/src/security/path-validator.ts` directory allowlist.                                                                        |
+| **MCP / tools / browser ber-permission & audit** | **LULUS**    | Semua eksekusi melewati `SecuredCapabilityGuard` di `packages/permissions/src/guard.ts` dengan log audit terperinci.                                                                           |
+| **Evaluator menentukan completion**              | **LULUS**    | `CodingEvaluator` di `packages/evaluator/src/coding-evaluator.ts` memvalidasi hasil sebelum status diset ke `completed`.                                                                       |
+| **Approval terikat aksi spesifik**               | **LULUS**    | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence` di `apps/api/src/routes/approvals.ts`.                                                                                |
+| **Scheduler & Event Deduplication**              | **LULUS**    | Deduplikasi idempotency key di `apps/scheduler/src/scheduler-engine.ts` dan dedupe window 60s di `apps/scheduler/src/notification-engine.ts`.                                                  |
+| **FCM Push Notification Live Kredensial**        | **SEBAGIAN** | Logika provider siap di `apps/scheduler/src/fcm-provider.ts`; menunggu suntikan berkas `FCM_SERVICE_ACCOUNT_JSON` di server VPS.                                                               |
+| **Tidak ada secret di client / log / repo**      | **LULUS**    | Bebas credential hardcoded, Fastify logger di `apps/api/src/app.ts` meredaksi header authorization dan token.                                                                                  |
+| **PostgreSQL & Redis terisolasi internal**       | **LULUS**    | `docker-compose.yml` melampirkan DB dan Redis ke `internal: true` network tanpa port mapping publik.                                                                                           |
+| **Backup / Restore / Observability**             | **LULUS**    | Script backup di `scripts/backup-postgres.sh`, restore di `scripts/restore-postgres.sh`, dan metrik Prometheus di `apps/api/src/app.ts`.                                                       |
+| **Live VPS Physical Verification (ARM64)**       | **SEBAGIAN** | Konfigurasi Docker compose dan profiling siap; menunggu eksekusi live via SSH di Oracle Cloud VPS target.                                                                                      |
 
 ---
 
-## 4. Daftar Gap yang Tersisa
+## 4. Hasil Test End-to-End 7 Skenario (`apps/api/test/e2e-scenarios.test.ts`)
 
-Meskipun seluruh kode, pengujian, dan arsitektur telah diverifikasi 100% lulus secara lokal, terdapat 3 gap operasional eksternal yang memerlukan tindakan di lingkungan target:
+Seluruh 7 skenario wajib telah diuji dengan komponen nyata (Fastify nyata, Redis BullMQ nyata, WebSocket nyata, Evaluator nyata, dan gateway 9Router tiruan berlabel jelas):
 
-1. **Gap 1: Provisioning Mesin Fisik Oracle Cloud VPS (ARM64)**
-   - _Kondisi_: Uji resource limit dan container compose saat ini diverifikasi secara terstruktur pada workstation. Instance Oracle Cloud VPS ARM64 (Ubuntu 24.04, 2 OCPU, 12 GB RAM) belum dapat diakses melalui SSH dari workstation ini tanpa penyediaan SSH key / credentials oleh pengguna.
-2. **Gap 2: Penyediaan Kredensial Produksi FCM (Google Service Account JSON)**
-   - _Kondisi_: Implementasi pengiriman notifikasi FCM di [fcm-provider.ts](file:///c:/Coding/Project/ai-agent/apps/scheduler/src/fcm-provider.ts) telah selesai dan lulus uji simulasi (`MockFcmProvider`). Namun untuk pengiriman push notification riil ke Google FCM v1 di production, file service account JSON harus disuntikkan ke environment server VPS.
-3. **Gap 3: Live Verification Library Playwright Chromium di Image Linux ARM64**
-   - _Kondisi_: Container Playwright Chromium telah didefinisikan dengan SSRF guard dan limit memori, namun runtime browser headless di Linux ARM64 membutuhkan verifikasi langsung library dependensi native sistem (`libgbm`, `libnss3`) saat image dibuild di VPS.
-
----
-
-## 5. Analisis Risiko
-
-| Risiko                                                     | Dampak | Probabilitas | Mitigasi yang Telah Diterapkan                                                                                                                                                                                    |
-| ---------------------------------------------------------- | ------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Lonjakan Memori Chromium Headless**                      | Tinggi | Sedang       | Concurrency browser dibatasi maksimal 1-2 sesi bersamaan dengan timeout 60s per sesi dan isolasi context. Container worker dibatasi max 1536 MB RAM.                                                              |
-| **Gangguan Model Gateway 9Router (503 / Network Timeout)** | Sedang | Rendah       | Retry loop dengan batas maksimal 3 kali dan exponential backoff. Error ditangani secara terstruktur tanpa menyebabkan korupsi state task.                                                                         |
-| **Koneksi Windows Worker Terputus Saat Eksekusi**          | Sedang | Sedang       | Fail-fast timeout pada backend dengan event `task.waiting_device`. Task ditahan dengan aman dan dapat dilanjutkan saat worker terhubung kembali.                                                                  |
-| **Exhaustion Disk Akibat Log atau Database**               | Rendah | Rendah       | Fastify logger dikonfigurasi pino log-level, rotasi backup PostgreSQL otomatis menghapus dump yang lebih lama dari 7 hari di [backup-postgres.sh](file:///c:/Coding/Project/ai-agent/scripts/backup-postgres.sh). |
+| No  | Skenario                                                                               | Status    | Durasi Aktual | Bukti Verifikasi                                                                                                                                                                                 |
+| :-- | :------------------------------------------------------------------------------------- | :-------- | :------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Register/login, chat streaming via WebSocket                                           | **LULUS** | 760.86ms      | WebSocket `/v1/chat/ws` menerima seluruh token delta streaming dari `LocalFake9RouterServer` secara real-time.                                                                                   |
+| 2   | Buat task → worker eksekusi → event realtime diterima → Evaluator completed            | **LULUS** | 309.70ms      | Task coding dikerjakan oleh worker via Redis BullMQ, WebSocket menerima event `task.completed`, dan `CodingEvaluator` memvalidasi 7 kriteria nyata.                                              |
+| 3   | Aksi HIGH memicu waiting_approval, approve dilanjutkan, deny dihentikan                | **LULUS** | 325.56ms      | Aksi berisiko tinggi memicu status `waiting_approval`. Endpoint `/v1/approvals/:id/approve` melanjutkan eksekusi hingga selesai; `/v1/approvals/:id/deny` menghentikan tugas ke status `failed`. |
+| 4   | Matikan worker di tengah task, hidupkan lagi, pulih dari checkpoint tanpa duplikasi    | **LULUS** | 3.03ms        | Worker baru membaca versioned checkpoint terakhir; langkah yang telah selesai dilewati tanpa pengulangan side-effect.                                                                            |
+| 5   | Windows Agent terhubung, allowlist berjalan, luar allowlist ditolak, offline ditangani | **LULUS** | 1061.44ms     | Agent terhubung ke `/v1/agent/ws`, perintah allowlist PowerShell dieksekusi sukses, traversal `C:\Windows\System32` ditolak, dan disconnect bertransisi ke status offline.                       |
+| 6   | Jadwal berulang berjalan tepat sekali                                                  | **LULUS** | 957.13ms      | `SchedulerEngine` mengeksekusi slot waktu tepat satu kali; pemanggilan berulang pada timestamp yang sama diabaikan oleh deduplikasi idempotency key.                                             |
+| 7   | Isolasi: user A tidak bisa membaca project/task/memori user B                          | **LULUS** | 161.34ms      | User B yang mencoba mengakses project, task, atau memori User A mendapatkan respon `HTTP 404 Not Found` dan list kosong.                                                                         |
 
 ---
 
-## 6. Rencana Perbaikan Berurutan Prioritas
+## 5. Daftar Gap yang Tersisa
+
+Terdapat 3 gap operasional eksternal yang memerlukan tindakan di lingkungan target:
+
+1. **Gap 1: Provisioning & Akses SSH Mesin Fisik Oracle Cloud VPS (ARM64)**
+   - _Status_: Menunggu akses SSH dari pengguna ke instance Oracle Cloud (Ubuntu 24.04, 2 OCPU, 12 GB RAM).
+   - _Rencana_: Menghubungkan sesi deployment, memeriksa `docker compose version`, dan memvalidasi alokasi RAM per-container.
+2. **Gap 2: Penyediaan Kredensial Produksi Google FCM (Service Account JSON)**
+   - _Status_: `apps/scheduler/src/fcm-provider.ts` menonaktifkan pengiriman secara transparan jika path `FCM_SERVICE_ACCOUNT_JSON` belum tersedia.
+   - _Rencana_: Menyuntikkan berkas JSON kredensial Google Cloud FCM ke server VPS saat konfigurasi environment live.
+3. **Gap 3: Live Build Image Playwright Chromium pada Arsitektur Linux ARM64**
+   - _Status_: Container worker telah dikonfigurasi dengan Chromium dan batas RAM 1.5 GB; verifikasi library native ARM64 (`libgbm`, `libnss3`) perlu dipastikan saat image ditarik di VPS.
+
+---
+
+## 6. Analisis Risiko
+
+| Risiko                                             | Dampak | Probabilitas | Mitigasi yang Telah Diterapkan                                                                                                                            |
+| :------------------------------------------------- | :----- | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Lonjakan Memori Chromium Headless**              | Tinggi | Sedang       | Concurrency browser dibatasi maksimal 1-2 sesi bersamaan dengan timeout 60 detik. Batas RAM container worker diatur ke 1536 MB di `docker-compose.yml`.   |
+| **Gangguan Model Gateway 9Router (Timeout / 503)** | Sedang | Rendah       | Retry loop dengan batas maksimal 3 kali dan exponential backoff di `packages/model-gateway/src/nine-router.ts`. Error ditangani tanpa korupsi state task. |
+| **Koneksi Windows Worker Terputus Saat Eksekusi**  | Sedang | Sedang       | Fail-fast timeout pada backend dengan event `task.waiting_device`. Task ditahan dengan aman dan dilanjutkan saat worker terhubung kembali.                |
+| **Exhaustion Disk Akibat Log atau Database**       | Rendah | Rendah       | Fastify logger menggunakan log-level pino, rotasi backup PostgreSQL otomatis menghapus dump yang lebih lama dari 7 hari di `scripts/backup-postgres.sh`.  |
+
+---
+
+## 7. Rencana Perbaikan Berurutan Prioritas
 
 ### Prioritas P0 (Sebelum Deployment Live Pertama)
 
 1. **Pemberian Akses SSH ke VPS Oracle Cloud**:
-   - Menghubungkan sesi deployment ke Oracle Cloud Ubuntu 24.04 ARM64.
-   - Menjalankan perintah verifikasi spesifikasi mesin (`uname -a`, `free -h`, `nproc`, `docker compose version`).
+   - Menghubungkan sesi terminal ke Oracle Cloud Ubuntu 24.04 ARM64.
+   - Memeriksa kapasitas sistem (`uname -m`, `free -h`, `docker compose version`).
 2. **Setup Server Environment (.env) di VPS**:
    - Mengisi `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, dan `NINEROUTER_API_KEY` pada file `.env` di VPS.
    - Memastikan hak akses file `.env` dibatasi hanya untuk user deployer (`chmod 600 .env`).
 3. **Eksekusi Migrasi Database Drizzle**:
    - Menjalankan `bash scripts/migrate-db.sh` di server VPS untuk membuat skema PostgreSQL dan ekstensi pgvector.
+4. **Verifikasi Referensi Audit Dokumen**:
+   - Memastikan `node --experimental-strip-types scripts/verify-audit-refs.ts` lulus tanpa kegagalan path.
 
 ### Prioritas P1 (Hari Pertama Pasca-Deployment)
 
 1. **Konfigurasi FCM Push Notification Live**:
    - Menempatkan service account key Google Cloud pada direktori terisolasi server dan menetapkan path ke `FCM_SERVICE_ACCOUNT_JSON`.
 2. **Pemasangan Scheduled Backup Cron**:
-   - Mengonfigurasi cron job harian pada jam 02:00 UTC menggunakan [backup-cron-wrapper.sh](file:///c:/Coding/Project/ai-agent/scripts/backup-cron-wrapper.sh).
+   - Mengonfigurasi cron job harian pada jam 02:00 UTC menggunakan `scripts/backup-cron-wrapper.sh`.
 3. **Smoke Test Probe Live 9Router**:
    - Menjalankan `scripts/smoke-live-9router.ts` dari server VPS untuk memvalidasi latensi dan ketersediaan model gateway.
 
 ### Prioritas P2 (Peningkatan Berkelanjutan)
 
 1. **Pengujian Adapter Runtime Tambahan (Pi / Hermes)**:
-   - Jika runtime Pi atau Hermes di masa depan telah stabil dipasang di VPS, aktifkan adapter terkait melalui `RuntimeManager`.
+   - Jika runtime Pi atau Hermes di masa depan telah stabil dipasang di VPS, aktifkan adapter terkait melalui `packages/agent-core/src/runtimes/runtime-manager.ts`.
 2. **Integrasi OpenTelemetry Collector Eksternal**:
-   - Menghubungkan endpoint `/metrics` ke Prometheus/Grafana cloud eksternal jika beban monitoring lokal memerlukan visualisasi terpusat.
+   - Menghubungkan endpoint `/metrics` di `apps/api/src/app.ts` ke Prometheus/Grafana cloud eksternal untuk pemantauan jangka panjang.
+
+---
+
+## 8. Log Eksekusi Quality Gates (Hasil Aktual Hari Ini)
+
+### A. Linter (`pnpm lint`)
+
+```text
+> personal-ai-os@0.2.0 lint C:\Coding\Project\ai-agent
+> turbo run lint
+
+ Tasks:    13 successful, 13 total
+Cached:    12 cached, 13 total
+  Time:    6.715s
+(0 error, 0 warning across all 13 packages)
+```
+
+### B. Typecheck (`pnpm typecheck`)
+
+```text
+> personal-ai-os@0.2.0 typecheck C:\Coding\Project\ai-agent
+> turbo run typecheck
+
+ Tasks:    13 successful, 13 total
+Cached:    11 cached, 13 total
+  Time:    22.599s
+(0 error across all 13 packages)
+```
+
+### C. Build (`pnpm build`)
+
+```text
+> personal-ai-os@0.2.0 build C:\Coding\Project\ai-agent
+> turbo run build
+
+ Tasks:    13 successful, 13 total
+Cached:    2 cached, 13 total
+  Time:    20.324s
+(Semua artifact build TypeScript dan Vite bundle apps/windows terkompilasi bersih)
+```
+
+### D. Test E2E 7 Skenario (`node --test --experimental-strip-types apps/api/test/e2e-scenarios.test.ts`)
+
+```text
+✔ Skenario 1: Register/login, chat streaming via WebSocket (real Fastify & fake 9Router) (760.8611ms)
+✔ Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed (309.6985ms)
+✔ Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; deny menghentikan task (325.5554ms)
+✔ Skenario 4: Matikan worker di tengah task, hidupkan lagi, task pulih dari checkpoint tanpa menggandakan side effect (3.0313ms)
+✔ Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di luar allowlist ditolak, offline ditangani (1061.4363ms)
+✔ Skenario 6: Jadwal berulang berjalan tepat sekali (957.1265ms)
+✔ Skenario 7: Isolasi: user A tidak bisa membaca project/task/memori user B (161.3365ms)
+
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7144.4096
+```
+
+### E. Verifikasi Referensi Path Dokumen (`node --experimental-strip-types scripts/verify-audit-refs.ts`)
+
+Skrip otomatis memastikan tidak ada path file fiktif atau broken reference di dalam dokumen audit ini.

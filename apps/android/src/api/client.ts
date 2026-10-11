@@ -1,4 +1,5 @@
 import { type TokenStorage, defaultTokenStorage } from '../storage/secure-store.ts';
+import { deriveWsUrl, getInitialApiUrl, getInitialWsUrl } from './config.ts';
 import type {
   ApprovalRecord,
   AuthResponse,
@@ -15,6 +16,7 @@ import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
 export interface ApiClientOptions {
   storage?: TokenStorage | undefined;
   baseUrl?: string | undefined;
+  baseWsUrl?: string | undefined;
   onUnauthorized?: (() => void) | undefined;
 }
 
@@ -33,21 +35,32 @@ export class ApiError extends Error {
 export class ApiClient {
   private readonly storage: TokenStorage;
   private baseUrl: string;
+  private baseWsUrl: string;
   private readonly onUnauthorized?: (() => void) | undefined;
   private refreshPromise: Promise<string | null> | null = null;
 
   constructor(options?: ApiClientOptions) {
     this.storage = options?.storage ?? defaultTokenStorage;
-    this.baseUrl = options?.baseUrl ?? 'http://10.0.2.2:3000';
+    this.baseUrl = options?.baseUrl ? options.baseUrl.replace(/\/+$/, '') : getInitialApiUrl();
+    this.baseWsUrl = options?.baseWsUrl
+      ? options.baseWsUrl.replace(/\/+$/, '')
+      : options?.baseUrl
+        ? deriveWsUrl(this.baseUrl)
+        : getInitialWsUrl();
     this.onUnauthorized = options?.onUnauthorized;
   }
 
-  setBaseUrl(url: string): void {
+  setBaseUrl(url: string, wsUrl?: string): void {
     this.baseUrl = url.replace(/\/+$/, '');
+    this.baseWsUrl = wsUrl ? wsUrl.replace(/\/+$/, '') : deriveWsUrl(this.baseUrl);
   }
 
   getBaseUrl(): string {
     return this.baseUrl;
+  }
+
+  getBaseWsUrl(): string {
+    return this.baseWsUrl;
   }
 
   getStorage(): TokenStorage {

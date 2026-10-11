@@ -7,10 +7,47 @@ mod security;
 use capabilities::{Capability, CapabilityConfig, CapabilityRegistry};
 use executor::CommandOutput;
 use security::PathAllowlistManager;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceIdentity {
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+    pub hostname: String,
+    pub arch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
+}
+
+#[tauri::command]
+fn get_device_identity() -> DeviceIdentity {
+    let hostname = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "localhost".to_string());
+    let username = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_string());
+    let arch = std::env::consts::ARCH.to_string();
+
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    format!("{}-windows-{}-{}", hostname, arch, username).hash(&mut hasher);
+    let hash_val = hasher.finish();
+    let machine_hash = format!("{:016x}", hash_val);
+
+    DeviceIdentity {
+        id: format!("win-dev-{}", machine_hash),
+        name: format!("Windows Agent ({})", hostname),
+        platform: "windows".to_string(),
+        hostname,
+        arch,
+        public_key: None,
+    }
+}
 
 struct AppState {
     capabilities: Arc<CapabilityRegistry>,
@@ -92,6 +129,7 @@ fn main() {
             allowlist,
         })
         .invoke_handler(tauri::generate_handler![
+            get_device_identity,
             get_capabilities,
             set_capability,
             get_allowed_paths,

@@ -12,6 +12,7 @@ import { StatusPill } from '../components/StatusPill.tsx';
 import { theme } from '../components/Theme.ts';
 import { useHealth } from '../hooks/use-queries.ts';
 import { DeepLinkService } from '../services/deep-link.ts';
+import { defaultFcmService } from '../services/fcm-service.ts';
 import { useAuthStore } from '../state/auth-store.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
@@ -28,6 +29,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const { fcmToken, pushNotificationsEnabled, setPushNotificationsEnabled, showToast } =
     useUiStore();
   const { data: health, isLoading: healthLoading } = useHealth();
+  const fcmStatus = defaultFcmService.getStatus();
 
   const handleTestDeepLink = (path: string) => {
     const target = DeepLinkService.parseUrl(`personal-ai://${path}`);
@@ -139,8 +141,20 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           />
         </View>
 
+        <View style={styles.row}>
+          <Text style={styles.infoLabel}>Status Kredensial:</Text>
+          <Text
+            style={[
+              styles.infoValue,
+              { color: fcmStatus.isConfigured ? theme.colors.success : theme.colors.warning },
+            ]}
+          >
+            {fcmStatus.isConfigured ? 'Aktif' : 'Belum Aktif (Non-aktif)'}
+          </Text>
+        </View>
+        <Text style={styles.infoTextMuted}>{fcmStatus.reason}</Text>
         <Text style={styles.infoTextMuted}>
-          FCM Token: {fcmToken ? `${fcmToken.slice(0, 16)}...` : 'Siap Terhubung ke Firebase FCM'}
+          FCM Token: {fcmToken ? `${fcmToken.slice(0, 16)}...` : 'Belum ada token'}
         </Text>
       </View>
 
