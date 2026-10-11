@@ -13,6 +13,7 @@ import {
   type TaskRepository,
   verifyCheckpointIntegrity,
   verifyStepBeforeExternalAction,
+  type TelemetrySpan,
 } from '@personal-ai-os/shared';
 import {
   CodingEvaluator,
@@ -36,6 +37,7 @@ import {
   type ResearchEnvironment,
   type ResearchTaskInput,
   type RuntimeManager,
+  type RuntimeExecuteResult,
 } from '@personal-ai-os/agent-core';
 import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import type { ToolRegistry } from '@personal-ai-os/tools';
@@ -195,7 +197,7 @@ export class TaskExecutor {
       (task.payload?.prompt as string) ??
       (task.payload?.query as string) ??
       task.kind;
-
+    let selectedRuntimeId: string | undefined;
     try {
       // 1. Move to planning if in queued
       if (task.status === 'queued') {
@@ -209,6 +211,7 @@ export class TaskExecutor {
             this.deviceManager?.hasOnlineDeviceForUser(task.userId, 'windows') ?? false,
           preferredRuntimeId: (task.payload?.runtime as string) ?? this.preferredRuntimeId,
         });
+        selectedRuntimeId = routeResult.route.selectedRuntimeId;
 
         const startPayload: Record<string, unknown> = {
           attempt: currentAttempt,
@@ -256,7 +259,11 @@ export class TaskExecutor {
         task.payload?.type === 'research' ||
         (task.payload?.intent === 'research' && !isSimulation);
 
-      // ========================================================
+      if (task.payload?.useRuntime === true) {
+        await this.executeRuntimeTrack(task, prompt, selectedRuntimeId ?? (task.payload?.runtime as string) ?? this.preferredRuntimeId, span);
+        return;
+      }
+
       // PATH A: REAL CODING AGENT TRACK
       // ========================================================
       if (
@@ -315,6 +322,32 @@ export class TaskExecutor {
       this.broadcaster.publish(failEvent);
       throw err;
     }
+  }
+
+  private async executeRuntimeTrack(task: TaskRecord, prompt: string, runtimeId: string, span: TelemetrySpan): Promise<void> {
+    if (!this.runtimeManager) throw new Error('Runtime execution requested but no RuntimeManager configured.');
+    const runtime = this.runtimeManager.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Selected runtime "${runtimeId}" is not registered.`);
+    const result: RuntimeExecuteResult = await runtime.execute({ taskId: task.id, prompt, timeoutMs: typeof task.payload?.timeoutMs === 'number' ? task.payload.timeoutMs : undefined, metadata: { workspaceId: task.payload?.workspaceId ?? task.id }, untrusted: true });
+    const output = result.output ?? '';
+    const outputEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', { tool: `runtime:${runtimeId}`, output, proposedActions: result.proposedActions ?? [], untrustedOutputWarning: result.untrustedOutputWarning === true });
+    this.broadcaster.publish(outputEvent);
+    if (result.status !== 'completed') {
+      const status = result.status === 'cancelled' ? 'cancelled' : 'failed';
+      const error = result.error ?? `Runtime ${runtimeId} returned ${result.status}.`;
+      await this.taskRepo.updateTaskStatus(task.userId, task.id, status, { error });
+      const failed = await this.taskRepo.createTaskEvent(task.userId, task.id, status === 'cancelled' ? 'task.cancelled' : 'task.failed', { runtimeId, error, retryable: false });
+      this.broadcaster.publish(failed);
+      return;
+    }
+    const artifact = { id: `runtime-output-${task.id}`, type: 'runtime_output', title: `${runtimeId} output`, content: output };
+    const evaluation = new GenericEvaluator().evaluate((task.payload?.acceptanceCriteria as AcceptanceCriterion[]) ?? [{ id: 'runtime_output', description: 'Runtime menghasilkan output', category: 'runtime', required: true, expectedEvidenceType: 'artifact' }], { artifacts: [artifact], outputs: { runtimeOutput: output }, logs: [`runtime:${runtimeId}`] });
+    if (!evaluation.passed) throw new Error(evaluation.completionBlockedReason ?? 'Runtime output rejected by evaluator.');
+    await this.taskRepo.updateTaskProgress(task.userId, task.id, 100, createVersionedCheckpoint({ version: (task.checkpoint?.version ?? 0) + 1, stepIndex: 1, totalSteps: 1, lastExecutedAction: `runtime:${runtimeId}`, actionType: 'external_tool', verified: true }));
+    await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed', { artifacts: [artifact] });
+    const completed = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { runtimeId, result: 'Runtime output received and recorded.', artifacts: [artifact] });
+    this.broadcaster.publish(completed);
+    defaultTracer.endSpan(span, { status: 'ok' });
   }
 
   // =========================================================================

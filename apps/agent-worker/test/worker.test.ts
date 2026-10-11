@@ -14,6 +14,7 @@ import {
   SecuredCapabilityGuard,
   type ApprovalValidator,
 } from '@personal-ai-os/permissions';
+import { RuntimeManager, type AgentRuntime } from '@personal-ai-os/agent-core';
 import { PLACEHOLDER_WORKER_LABEL, TaskExecutor } from '../src/task-executor.ts';
 
 // In-memory test repository for agent-worker tests
@@ -173,6 +174,27 @@ test('Agent Worker executes generic task with explicit placeholder labels, check
   assert.ok(updatedTask.checkpoint);
   assert.equal(updatedTask.checkpoint.stepIndex, 4);
 });
+test('Agent Worker executes explicit runtime task through RuntimeManager and evaluator', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new TestBroadcaster();
+  const manager = new RuntimeManager();
+  const runtime: AgentRuntime = {
+    id: 'omp', name: 'fake omp', version: '18.6.1', capabilities: [{ name: 'coding', level: 'execute' }],
+    getStatus: () => 'idle', initialize: async () => undefined,
+    healthCheck: async () => ({ healthy: true, lastChecked: new Date().toISOString() }),
+    execute: async (input) => ({ taskId: input.taskId, status: 'completed', output: 'OK', durationMs: 1, untrustedOutputWarning: true }),
+    pause: async () => undefined, resume: async () => undefined, cancel: async () => undefined,
+  };
+  manager.register(runtime);
+  const executor = new TaskExecutor(repo, broadcaster, { runtimeManager: manager, preferredRuntimeId: 'omp' });
+  const { task } = await repo.createTask({ userId: 'user-1', projectId: 'proj-1', kind: 'coding_runtime', payload: { useRuntime: true, prompt: 'respond OK' } });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+  const updated = await repo.getTask(task.userId, task.id);
+  assert.equal(updated?.status, 'completed');
+  assert.equal((updated?.artifacts?.[0] as Record<string, unknown>)?.content, 'OK');
+  assert.ok(broadcaster.published.some((event) => event.eventType === 'task.tool_call' && event.payload.untrustedOutputWarning === true));
+});
+
 
 test('Agent Worker respects task cancellation mid-run without continuing steps', async () => {
   const repo = new TestTaskRepo();

@@ -242,6 +242,13 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 - Runtime state paths explicitly writable under systemd hardening.
 - No claim of API → queue → worker → bridge → runtime → evaluator completion.
 
+### Worker runtime execution
+
+- Explicit `payload.useRuntime=true` now routes through selected `RuntimeManager` adapter.
+- Worker emits runtime tool output, evaluates the resulting artifact, and persists completed/failed state.
+- Focused worker test passes with fake runtime; live `RemoteRuntimeAdapter` → bridge → Hermes proof completed with `OK`.
+- Full API → Redis/BullMQ → worker process → bridge → evaluator proof remains pending because no authenticated API task session was run.
+
 ---
 
 ## 3. Checklist Kesiapan Platform

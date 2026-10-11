@@ -35,6 +35,26 @@ sudo iptables -I INPUT 1 -p tcp -s 172.20.0.0/16 --dport 9120 -j ACCEPT
 - Unit `ReadWritePaths` includes runtime state paths `/home/ubuntu/.omp/run`, `/home/ubuntu/.hermes/logs`; required because `ProtectHome=read-only` otherwise caused `EROFS`.
 - VPS proof covers bridge-to-host-runtime only. Worker/API queue/evaluator end-to-end remains unverified.
 
+## Worker runtime task
+
+API task payload may opt into real host-runtime execution:
+
+```json
+{
+  "kind": "coding_runtime",
+  "payload": {
+    "useRuntime": true,
+    "runtime": "omp",
+    "prompt": "balas hanya: OK",
+    "workspaceId": "project/task"
+  }
+}
+```
+
+The worker resolves health/fallback through `RuntimeManager`, executes the selected adapter, emits `task.tool_call`, evaluates the returned artifact, then emits `task.completed` or `task.failed`. Runtime output remains untrusted; proposed actions are filtered by Permission Engine.
+
+Live `RemoteRuntimeAdapter` proof on VPS: Hermes bridge execution completed with exit `0`, output `OK`; token was not printed.
+
 No public bind. Compose egress inspection verified `172.20.0.0/16`, gateway `172.20.0.1`.
 
 ## Verification after approval
