@@ -29,6 +29,15 @@ export class BullMqTaskQueue implements TaskQueue {
   }
 
   async enqueue(task: TaskRecord): Promise<void> {
+    const existingJob = await this.queue.getJob(task.id);
+    if (existingJob) {
+      try {
+        await existingJob.remove();
+      } catch {
+        // ignore
+      }
+    }
+
     await this.queue.add(
       task.kind,
       {
@@ -47,7 +56,7 @@ export class BullMqTaskQueue implements TaskQueue {
           delay: 1000,
         },
         priority: task.priority,
-        removeOnComplete: 100,
+        removeOnComplete: true,
         removeOnFail: 200,
       },
     );

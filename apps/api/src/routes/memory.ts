@@ -226,6 +226,11 @@ export function registerMemoryRoutes(
       const user = await getUser(req);
       const { query, projectId, type, limit = 5, threshold = 0.0 } = req.body;
 
+      const isActive =
+        typeof memoryRepo.isSemanticSearchActive === 'function'
+          ? memoryRepo.isSemanticSearchActive()
+          : false;
+
       const results = await memoryRepo.searchSemantic(user.id, {
         query,
         projectId,
@@ -234,7 +239,14 @@ export function registerMemoryRoutes(
         threshold,
       });
 
-      return reply.send({ data: results });
+      return reply.send({
+        data: results,
+        semanticSearchActive: isActive,
+        status: isActive ? 'active' : 'inactive',
+        notice: isActive
+          ? undefined
+          : 'Semantic search is currently inactive: No live embedding provider has been verified or configured per assessment decisions.',
+      });
     },
   );
 

@@ -146,3 +146,65 @@ test('NotificationEngine: caps retry loop and transitions to failed state on per
   assert.equal(notif.attempts, 3);
   assert.match(notif.lastError ?? '', /503 Service Unavailable/i);
 });
+
+test('NotificationEngine: persists delivery state in storage across lifecycle', async () => {
+  const savedNotifs = new Map<string, import('../src/types.ts').NotificationRecord>();
+  const testStorage = {
+    saveNotification: async (notif: import('../src/types.ts').NotificationRecord) => {
+      savedNotifs.set(notif.id, { ...notif });
+    },
+    updateNotification: async (notif: import('../src/types.ts').NotificationRecord) => {
+      savedNotifs.set(notif.id, { ...notif });
+    },
+    getNotification: async (id: string) => savedNotifs.get(id) ?? null,
+    listNotifications: async (userId: string) =>
+      Array.from(savedNotifs.values()).filter((n) => n.userId === userId),
+  };
+
+  const fcm = new MockFcmProvider();
+  const engine = new NotificationEngine({
+    fcmProvider: fcm,
+    storage: testStorage,
+  });
+
+  const notif = await engine.dispatchNotification({
+    userId: 'u-persist',
+    type: 'task_completed',
+    title: 'Deployment Success',
+    body: 'Service deployed',
+    data: { taskId: 'task-100' },
+  });
+
+  assert.equal(notif.deliveryState, 'delivered');
+  const stored = savedNotifs.get(notif.id);
+  assert.ok(stored);
+  assert.equal(stored.deliveryState, 'delivered');
+  assert.equal(stored.deepLink, 'personal-ai://tasks/task-100');
+
+  // Mark as read
+  await engine.markAsReadAsync(notif.id);
+  const updatedStored = savedNotifs.get(notif.id);
+  assert.equal(updatedStored?.deliveryState, 'read');
+  assert.ok(updatedStored?.readAt);
+});
+
+test('NotificationEngine: disables FCM sending with clear log and failed state when FCM_SERVICE_ACCOUNT_JSON is missing', async () => {
+  const { DisabledFcmProvider } = await import('../src/fcm-provider.ts');
+  const disabledProvider = new DisabledFcmProvider('FCM_SERVICE_ACCOUNT_JSON is unset');
+  const engine = new NotificationEngine({
+    fcmProvider: disabledProvider,
+    maxRetryAttempts: 3,
+  });
+
+  const notif = await engine.dispatchNotification({
+    userId: 'u-disabled-fcm',
+    type: 'blocker',
+    title: 'Blocker Warning',
+    body: 'Agent offline',
+    data: { taskId: 'task-999' },
+    deviceToken: 'device-xyz',
+  });
+
+  assert.equal(notif.deliveryState, 'failed');
+  assert.match(notif.lastError ?? '', /FCM_SERVICE_ACCOUNT_JSON is unset/);
+});

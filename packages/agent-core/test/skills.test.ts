@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   ApprovalRequiredError,
   PermissionEngine,
@@ -340,7 +341,9 @@ test('Builtin Skill: research-quality-checklist verifies sources, claims, and ci
 
 test('SkillLoader: successfully loads skills from disk skills/ folder', async () => {
   const loader = new SkillLoader();
-  const loaded = await loader.loadFromDirectory('c:/Coding/Project/ai-agent/skills');
+  const skillsDir =
+    process.env['SKILLS_DIR'] ?? fileURLToPath(new URL('../../../skills', import.meta.url));
+  const loaded = await loader.loadFromDirectory(skillsDir);
 
   assert.ok(loaded.length >= 3);
   const names = loaded.map((s) => s.name);

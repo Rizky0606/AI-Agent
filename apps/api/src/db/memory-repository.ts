@@ -8,6 +8,7 @@ import {
   type MemoryWriteEvaluation,
   type SemanticSearchOptions,
   type SemanticSearchResult,
+  type EmbeddingProvider,
 } from '@personal-ai-os/memory';
 import type { Database } from './client.ts';
 import { memories, type MemoryRow } from './schema.ts';
@@ -36,15 +37,29 @@ export interface MemoryRepository {
     userId: string,
     options: SemanticSearchOptions,
   ): Promise<readonly SemanticSearchResult[]>;
+  isSemanticSearchActive?(): boolean;
 }
 
 export class DrizzleMemoryRepository implements MemoryRepository {
   private readonly db: Database;
   private readonly policy = new MemoryWritePolicy();
   private readonly fallbackStore = new InMemoryMemoryStore();
+  private readonly embeddingProvider?: EmbeddingProvider | undefined;
 
-  constructor(db: Database) {
+  constructor(db: Database, embeddingProvider?: EmbeddingProvider) {
     this.db = db;
+    this.embeddingProvider = embeddingProvider;
+  }
+
+  isSemanticSearchActive(): boolean {
+    if (!this.embeddingProvider) return false;
+    if (
+      'isAvailable' in this.embeddingProvider &&
+      !(this.embeddingProvider as { isAvailable: boolean }).isAvailable
+    ) {
+      return false;
+    }
+    return true;
   }
 
   evaluateCandidate(candidate: MemoryCandidate): MemoryWriteEvaluation {
@@ -189,7 +204,10 @@ export class DrizzleMemoryRepository implements MemoryRepository {
     userId: string,
     options: SemanticSearchOptions,
   ): Promise<readonly SemanticSearchResult[]> {
-    // Uses fallback store for semantic cosine similarity retrieval
+    if (!this.isSemanticSearchActive()) {
+      return [];
+    }
+    // Uses fallback store for semantic cosine similarity retrieval when active
     return this.fallbackStore.searchSemantic(userId, options);
   }
 }

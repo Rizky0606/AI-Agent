@@ -8,12 +8,20 @@
   },
   "scripts": {
     "build": "tsc --build",
+    "dev": "tsx watch src/index.ts",
     "lint": "eslint src test --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.4"
+  },
   "dependencies": {
     "@personal-ai-os/permissions": "workspace:*",
-    "@personal-ai-os/shared": "workspace:*"
+    "@personal-ai-os/shared": "workspace:*",
+    "bullmq": "^6.3.11",
+    "ioredis": "^5.11.1",
+    "postgres": "^3.4.5"
   }
 }

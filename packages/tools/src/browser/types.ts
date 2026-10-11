@@ -8,6 +8,8 @@ export type BrowserActionType =
   | 'login'
   | 'download';
 
+import type { DnsResolver } from '../ssrf/ssrf-guard.ts';
+
 export interface BrowserSessionOptions {
   sessionId: string;
   actorId: string;
@@ -17,6 +19,7 @@ export interface BrowserSessionOptions {
   deniedDomains?: string[] | undefined;
   maxSteps?: number | undefined;
   timeoutMs?: number | undefined;
+  dnsResolver?: DnsResolver | undefined;
 }
 
 export interface BrowserStepRecord {

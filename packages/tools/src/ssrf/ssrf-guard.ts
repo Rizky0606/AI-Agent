@@ -13,11 +13,19 @@ export class SsrfViolationError extends Error {
   }
 }
 
+export interface DnsLookupRecord {
+  address: string;
+  family?: number | undefined;
+}
+
+export type DnsResolver = (hostname: string) => Promise<Array<DnsLookupRecord | string>>;
+
 export interface SsrfGuardOptions {
   allowedDomains?: string[] | undefined;
   deniedDomains?: string[] | undefined;
   allowPrivateForTesting?: boolean | undefined;
   resolveDns?: boolean | undefined;
+  dnsResolver?: DnsResolver | undefined;
 }
 
 const METADATA_HOSTNAMES = new Set([
@@ -137,6 +145,7 @@ export class SsrfGuard {
   private readonly deniedDomains: Set<string>;
   private readonly allowPrivateForTesting: boolean;
   private readonly resolveDns: boolean;
+  private readonly dnsResolver?: DnsResolver | undefined;
 
   constructor(options?: SsrfGuardOptions) {
     this.allowedDomains = new Set(
@@ -145,6 +154,7 @@ export class SsrfGuard {
     this.deniedDomains = new Set((options?.deniedDomains ?? []).map((d) => d.toLowerCase().trim()));
     this.allowPrivateForTesting = options?.allowPrivateForTesting ?? false;
     this.resolveDns = options?.resolveDns ?? true;
+    this.dnsResolver = options?.dnsResolver;
   }
 
   /**
@@ -250,8 +260,23 @@ export class SsrfGuard {
     // 8. DNS Resolution Check to prevent DNS rebinding attacks
     if (this.resolveDns && ipType === 0) {
       try {
-        const lookupResult = await lookup(hostname, { all: true });
-        for (const record of lookupResult) {
+        let records: Array<{ address: string; family: number }> = [];
+        if (this.dnsResolver) {
+          const raw = await this.dnsResolver(hostname);
+          records = raw.map((r) => {
+            if (typeof r === 'string') {
+              const detected = isIP(r);
+              return { address: r, family: detected === 6 ? 6 : 4 };
+            }
+            const detected = r.family ?? (isIP(r.address) === 6 ? 6 : 4);
+            return { address: r.address, family: detected };
+          });
+        } else {
+          const lookupResult = await lookup(hostname, { all: true });
+          records = lookupResult.map((r) => ({ address: r.address, family: r.family }));
+        }
+
+        for (const record of records) {
           if (record.family === 4) {
             const num = parseIPv4ToNumber(record.address);
             if (num !== null && isPrivateIPv4(num)) {

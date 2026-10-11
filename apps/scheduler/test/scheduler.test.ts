@@ -209,3 +209,62 @@ test('SchedulerEngine: double execution and race condition prevention via idempo
 
   assert.equal(executionCount, 1);
 });
+
+test('SchedulerEngine: restarting scheduler does NOT duplicate executions for already executed slots', async () => {
+  const persistedJobs = new Map<string, ScheduleJob>();
+  const testStorage = {
+    loadJobs: async () => Array.from(persistedJobs.values()),
+    saveJob: async (job: ScheduleJob) => {
+      persistedJobs.set(job.id, { ...job });
+    },
+    updateJob: async (job: ScheduleJob) => {
+      persistedJobs.set(job.id, { ...job });
+    },
+  };
+
+  const dispatchedSlotKeys: string[] = [];
+  const engine1 = new SchedulerEngine({
+    storage: testStorage,
+    dispatcher: async (exec) => {
+      dispatchedSlotKeys.push(exec.idempotencyKey);
+    },
+  });
+
+  const slotTime = new Date('2026-10-10T12:00:00.000Z');
+  const job = engine1.registerSchedule({
+    userId: 'user-1',
+    name: 'Recurring Sync',
+    type: 'recurring',
+    cronExpression: '0 12 * * *',
+    timezone: 'UTC',
+    taskPayload: { kind: 'sync', input: {} },
+  });
+  job.nextRunAt = slotTime.toISOString();
+  await testStorage.saveJob(job);
+
+  // 1. Initial run at slot time
+  const runs1 = await engine1.tick(slotTime);
+  assert.equal(runs1.length, 1);
+  assert.equal(dispatchedSlotKeys.length, 1);
+
+  // 2. Restart scheduler: instantiate new engine2 loading from storage
+  const engine2 = new SchedulerEngine({
+    storage: testStorage,
+    dispatcher: async (exec) => {
+      dispatchedSlotKeys.push(exec.idempotencyKey);
+    },
+  });
+  await engine2.init();
+
+  // Tick immediately after restart at slotTime + 5s
+  const nowAfterRestart = new Date('2026-10-10T12:00:05.000Z');
+  const runs2 = await engine2.tick(nowAfterRestart);
+  assert.equal(runs2.length, 0);
+  assert.equal(dispatchedSlotKeys.length, 1); // Still exactly 1 run! No duplication!
+
+  // 3. Advance to the NEXT day's slot
+  const nextSlotTime = new Date('2026-10-11T12:00:00.000Z');
+  const runs3 = await engine2.tick(nextSlotTime);
+  assert.equal(runs3.length, 1);
+  assert.equal(dispatchedSlotKeys.length, 2); // Exactly 1 new run for the new slot!
+});

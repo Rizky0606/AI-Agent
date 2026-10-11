@@ -39,10 +39,8 @@ export class ChatWebSocketClient {
         return;
       }
 
-      const httpUrl = this.client.getBaseUrl();
-      const wsUrl =
-        httpUrl.replace(/^http(s?):/i, 'ws$1:') +
-        `/v1/chat/ws?token=${encodeURIComponent(token)}&conversationId=${encodeURIComponent(this.conversationId)}`;
+      const wsBase = this.client.getBaseWsUrl();
+      const wsUrl = `${wsBase}/v1/chat/ws?token=${encodeURIComponent(token)}&conversationId=${encodeURIComponent(this.conversationId)}`;
 
       this.ws = new WebSocket(wsUrl);
 

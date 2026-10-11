@@ -38,89 +38,108 @@ test('CommandExecutor: Directory outside allowlist is rejected', async () => {
   );
 });
 
-test('CommandExecutor: Runs permitted command and captures output', async () => {
-  const registry = new CapabilityRegistry();
-  registry.setCapability('powershell', true);
-  const validator = new PathValidator([process.cwd()]);
-  const executor = new CommandExecutor(registry, validator);
+const isWindows = process.platform === 'win32';
+const skipReason = !isWindows ? 'PowerShell execution test requires Windows environment' : false;
 
-  const result = await executor.executePowershell('Write-Output "Hello from Windows Agent"', {
-    cwd: process.cwd(),
-    timeoutMs: 10_000,
-  });
+test(
+  'CommandExecutor: Runs permitted command and captures output',
+  { skip: skipReason },
+  async () => {
+    const registry = new CapabilityRegistry();
+    registry.setCapability('powershell', true);
+    const validator = new PathValidator([process.cwd()]);
+    const executor = new CommandExecutor(registry, validator);
 
-  assert.equal(result.exitCode, 0);
-  assert.ok(result.stdout.includes('Hello from Windows Agent'));
-  assert.equal(result.truncated, false);
-  assert.ok(result.durationMs >= 0);
-  assert.equal(result.killedByTimeout, false);
-  assert.equal(result.killedByAbort, false);
-});
-
-test('CommandExecutor: AbortSignal cancels running command immediately', async () => {
-  const registry = new CapabilityRegistry();
-  registry.setCapability('powershell', true);
-  const validator = new PathValidator([process.cwd()]);
-  const executor = new CommandExecutor(registry, validator);
-
-  const abortController = new AbortController();
-
-  const promise = executor.executePowershell('Start-Sleep -Seconds 10; Write-Output "done"', {
-    cwd: process.cwd(),
-    timeoutMs: 30_000,
-    signal: abortController.signal,
-  });
-
-  // Cancel after 150ms
-  setTimeout(() => {
-    abortController.abort();
-  }, 150);
-
-  await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof SecurityError);
-    assert.equal(err.code, 'EXECUTION_ABORTED');
-    return true;
-  });
-});
-
-test('CommandExecutor: Enforces timeout and terminates process exceeding limit', async () => {
-  const registry = new CapabilityRegistry();
-  registry.setCapability('powershell', true);
-  const validator = new PathValidator([process.cwd()]);
-  const executor = new CommandExecutor(registry, validator);
-
-  // Set tight timeout of 1000ms, while script attempts to sleep 5s
-  await assert.rejects(
-    async () => {
-      await executor.executePowershell('Start-Sleep -Seconds 5; Write-Output "finished"', {
-        cwd: process.cwd(),
-        timeoutMs: 1_000,
-      });
-    },
-    (err: unknown) => {
-      assert.ok(err instanceof SecurityError);
-      assert.equal(err.code, 'EXECUTION_TIMEOUT');
-      return true;
-    },
-  );
-});
-
-test('CommandExecutor: Output buffer cap truncates output safely', async () => {
-  const registry = new CapabilityRegistry();
-  registry.setCapability('powershell', true);
-  const validator = new PathValidator([process.cwd()]);
-  const executor = new CommandExecutor(registry, validator);
-
-  // Generate 500 lines of output with a small maxOutputBytes limit of 256 bytes
-  const result = await executor.executePowershell(
-    '1..50 | ForEach-Object { "Line number $_ output text" }',
-    {
+    const result = await executor.executePowershell('Write-Output "Hello from Windows Agent"', {
       cwd: process.cwd(),
-      maxOutputBytes: 256,
-    },
-  );
+      timeoutMs: 10_000,
+    });
 
-  assert.equal(result.exitCode, 0);
-  assert.equal(result.truncated, true);
-  assert.ok(result.stdout.length <= 256);
-});
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.stdout.includes('Hello from Windows Agent'));
+    assert.equal(result.truncated, false);
+    assert.ok(result.durationMs >= 0);
+    assert.equal(result.killedByTimeout, false);
+    assert.equal(result.killedByAbort, false);
+  },
+);
+
+test(
+  'CommandExecutor: AbortSignal cancels running command immediately',
+  { skip: skipReason },
+  async () => {
+    const registry = new CapabilityRegistry();
+    registry.setCapability('powershell', true);
+    const validator = new PathValidator([process.cwd()]);
+    const executor = new CommandExecutor(registry, validator);
+
+    const abortController = new AbortController();
+
+    const promise = executor.executePowershell('Start-Sleep -Seconds 10; Write-Output "done"', {
+      cwd: process.cwd(),
+      timeoutMs: 30_000,
+      signal: abortController.signal,
+    });
+
+    // Cancel after 150ms
+    setTimeout(() => {
+      abortController.abort();
+    }, 150);
+
+    await assert.rejects(promise, (err: unknown) => {
+      assert.ok(err instanceof SecurityError);
+      assert.equal(err.code, 'EXECUTION_ABORTED');
+      return true;
+    });
+  },
+);
+
+test(
+  'CommandExecutor: Enforces timeout and terminates process exceeding limit',
+  { skip: skipReason },
+  async () => {
+    const registry = new CapabilityRegistry();
+    registry.setCapability('powershell', true);
+    const validator = new PathValidator([process.cwd()]);
+    const executor = new CommandExecutor(registry, validator);
+
+    // Set tight timeout of 1000ms, while script attempts to sleep 5s
+    await assert.rejects(
+      async () => {
+        await executor.executePowershell('Start-Sleep -Seconds 5; Write-Output "finished"', {
+          cwd: process.cwd(),
+          timeoutMs: 1_000,
+        });
+      },
+      (err: unknown) => {
+        assert.ok(err instanceof SecurityError);
+        assert.equal(err.code, 'EXECUTION_TIMEOUT');
+        return true;
+      },
+    );
+  },
+);
+
+test(
+  'CommandExecutor: Output buffer cap truncates output safely',
+  { skip: skipReason },
+  async () => {
+    const registry = new CapabilityRegistry();
+    registry.setCapability('powershell', true);
+    const validator = new PathValidator([process.cwd()]);
+    const executor = new CommandExecutor(registry, validator);
+
+    // Generate 500 lines of output with a small maxOutputBytes limit of 256 bytes
+    const result = await executor.executePowershell(
+      '1..50 | ForEach-Object { "Line number $_ output text" }',
+      {
+        cwd: process.cwd(),
+        maxOutputBytes: 256,
+      },
+    );
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.truncated, true);
+    assert.ok(result.stdout.length <= 256);
+  },
+);

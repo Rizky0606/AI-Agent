@@ -9,16 +9,19 @@
     "lint": "eslint src test --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/*.test.ts",
-    "dev": "vite"
+    "dev": "vite",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@personal-ai-os/permissions": "workspace:*",
     "@personal-ai-os/shared": "workspace:*",
+    "@tauri-apps/api": "^2.12.3",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.2",
     "@types/node": "^22.15.3",
     "@types/react": "~18.3.18",
     "@types/react-dom": "~18.3.5",

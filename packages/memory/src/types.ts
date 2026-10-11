@@ -65,3 +65,8 @@ export interface SemanticSearchResult {
   memory: MemoryRecord;
   score: number;
 }
+
+export interface EmbeddingProvider {
+  embed(text: string): Promise<readonly number[]>;
+  embedBatch(texts: readonly string[]): Promise<readonly (readonly number[])[]>;
+}

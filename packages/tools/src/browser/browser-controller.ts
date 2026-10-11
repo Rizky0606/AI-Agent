@@ -1,5 +1,5 @@
 import type { ArtifactManager } from '../artifacts/artifact-manager.ts';
-import { SsrfGuard } from '../ssrf/ssrf-guard.ts';
+import { SsrfGuard, type DnsResolver } from '../ssrf/ssrf-guard.ts';
 import type { BrowserRunner, BrowserRunnerContext } from './browser-runner.ts';
 import {
   type BrowserActionResult,
@@ -26,16 +26,19 @@ export class BrowserController {
   private readonly runner: BrowserRunner;
   private readonly artifactManager?: ArtifactManager | undefined;
   private readonly maxConcurrency: number;
+  private readonly dnsResolver?: DnsResolver | undefined;
   private readonly sessions = new Map<string, ActiveBrowserSession>();
 
   constructor(options: {
     runner: BrowserRunner;
     artifactManager?: ArtifactManager | undefined;
     maxConcurrency?: number | undefined; // Default 2 for ARM64 VPS memory efficiency
+    dnsResolver?: DnsResolver | undefined;
   }) {
     this.runner = options.runner;
     this.artifactManager = options.artifactManager;
     this.maxConcurrency = options.maxConcurrency ?? 2;
+    this.dnsResolver = options.dnsResolver;
   }
 
   /**
@@ -49,6 +52,7 @@ export class BrowserController {
     const ssrfGuard = new SsrfGuard({
       allowedDomains: options.allowedDomains,
       deniedDomains: options.deniedDomains,
+      dnsResolver: options.dnsResolver ?? this.dnsResolver,
     });
 
     const context = await this.runner.createContext();

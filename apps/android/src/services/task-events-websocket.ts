@@ -40,12 +40,12 @@ export class TaskEventsWebSocketClient {
         return;
       }
 
-      const httpUrl = this.client.getBaseUrl();
+      const wsBase = this.client.getBaseWsUrl();
       const params = new URLSearchParams({ token });
       if (this.taskId) params.set('taskId', this.taskId);
       if (this.lastEventId) params.set('last_event_id', this.lastEventId);
 
-      const wsUrl = httpUrl.replace(/^http(s?):/i, 'ws$1:') + `/v1/events/ws?${params.toString()}`;
+      const wsUrl = `${wsBase}/v1/events/ws?${params.toString()}`;
 
       this.ws = new WebSocket(wsUrl);
 

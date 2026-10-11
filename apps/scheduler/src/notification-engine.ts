@@ -4,6 +4,7 @@ import {
   type NotificationData,
   type NotificationPreferences,
   type NotificationRecord,
+  type NotificationStorage,
   type NotificationType,
 } from './types.ts';
 
@@ -21,17 +22,20 @@ export class NotificationEngine {
   private readonly userPreferences = new Map<string, NotificationPreferences>();
   private readonly recentDedupeKeys = new Map<string, number>(); // dedupKey -> expireTime
   private readonly fcmProvider: FcmProvider;
+  private readonly storage?: NotificationStorage | undefined;
   private readonly dedupeWindowMs: number;
   private readonly maxRetryAttempts: number;
 
   constructor(options?: {
     fcmProvider?: FcmProvider | undefined;
+    storage?: NotificationStorage | undefined;
     dedupeWindowMs?: number | undefined;
     maxRetryAttempts?: number | undefined;
   }) {
     this.fcmProvider = options?.fcmProvider ?? {
       sendPushNotification: async () => ({ success: true }),
     };
+    this.storage = options?.storage;
     this.dedupeWindowMs = options?.dedupeWindowMs ?? 60 * 1000; // 60 seconds
     this.maxRetryAttempts = options?.maxRetryAttempts ?? 3; // Max 3 attempts
   }
@@ -167,6 +171,7 @@ export class NotificationEngine {
     // 2. Check user preferences & categories
     if (!this.isCategoryEnabled(prefs, input.type)) {
       record.deliveryState = 'skipped';
+      if (this.storage) await this.storage.saveNotification(record);
       return record;
     }
 
@@ -174,12 +179,14 @@ export class NotificationEngine {
     const isUrgent = input.type === 'approval_required' || input.type === 'blocker';
     if (!isUrgent && this.isQuietHoursActive(prefs, new Date(now))) {
       record.deliveryState = 'skipped';
+      if (this.storage) await this.storage.saveNotification(record);
       return record;
     }
 
     // 4. Send via FCM if deviceToken provided and push channel enabled
     if (input.deviceToken && prefs.channels.push) {
       record.deliveryState = 'sending';
+      if (this.storage) await this.storage.saveNotification(record);
 
       let lastError: string | undefined;
       let success = false;
@@ -201,10 +208,14 @@ export class NotificationEngine {
           success = true;
           record.deliveryState = 'delivered';
           record.deliveredAt = new Date().toISOString();
+          if (this.storage) await this.storage.updateNotification(record);
           break;
         } else {
           lastError = res.error ?? 'Unknown push dispatch error';
           record.lastError = lastError;
+          if (res.error?.includes('dinonaktifkan') || res.error?.includes('disabled')) {
+            break;
+          }
           // Apply minimal backoff delay for simulation and tests
           if (attempt < this.maxRetryAttempts) {
             await new Promise((resolve) => setTimeout(resolve, 50 * Math.pow(2, attempt - 1)));
@@ -215,11 +226,13 @@ export class NotificationEngine {
       if (!success) {
         record.deliveryState = 'failed';
         record.lastError = lastError;
+        if (this.storage) await this.storage.updateNotification(record);
       }
     } else {
       // Delivered via internal/websocket channels
       record.deliveryState = 'delivered';
       record.deliveredAt = new Date(now).toISOString();
+      if (this.storage) await this.storage.saveNotification(record);
     }
 
     return record;
@@ -240,6 +253,21 @@ export class NotificationEngine {
     if (notif) {
       notif.deliveryState = 'read';
       notif.readAt = new Date().toISOString();
+      if (this.storage) {
+        void this.storage.updateNotification(notif).catch(() => {});
+      }
+    }
+    return notif;
+  }
+
+  async markAsReadAsync(id: string): Promise<NotificationRecord | undefined> {
+    const notif = this.notifications.get(id);
+    if (notif) {
+      notif.deliveryState = 'read';
+      notif.readAt = new Date().toISOString();
+      if (this.storage) {
+        await this.storage.updateNotification(notif);
+      }
     }
     return notif;
   }

@@ -10,17 +10,22 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "devDependencies": {
+    "@types/node": "^22.15.3",
     "tsx": "^4.19.4"
   },
   "dependencies": {
     "@personal-ai-os/agent-core": "workspace:*",
+    "@personal-ai-os/api": "workspace:*",
     "@personal-ai-os/evaluator": "workspace:*",
     "@personal-ai-os/mcp": "workspace:*",
     "@personal-ai-os/memory": "workspace:*",
+    "@personal-ai-os/model-gateway": "workspace:*",
     "@personal-ai-os/permissions": "workspace:*",
     "@personal-ai-os/shared": "workspace:*",
     "@personal-ai-os/tools": "workspace:*",
     "bullmq": "^6.3.11",
-    "ioredis": "^5.11.1"
+    "drizzle-orm": "^0.43.1",
+    "ioredis": "^5.11.1",
+    "postgres": "^3.4.5"
   }
 }

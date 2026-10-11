@@ -1,5 +1,4 @@
-import crypto from 'node:crypto';
-import os from 'node:os';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface DeviceIdentity {
   id: string;
@@ -10,24 +9,39 @@ export interface DeviceIdentity {
   publicKey?: string | undefined;
 }
 
+/**
+ * Fetches the device identity from the Rust/Tauri backend command 'get_device_identity'.
+ * If running outside Tauri (e.g. test environment or browser mock), falls back safely.
+ */
+export async function fetchDeviceIdentity(): Promise<DeviceIdentity> {
+  try {
+    const identity = await invoke<DeviceIdentity>('get_device_identity');
+    if (identity && identity.id) {
+      return identity;
+    }
+  } catch {
+    // Fallback when invoked outside of Tauri runtime
+  }
+
+  return {
+    id: 'win-dev-local',
+    name: 'Windows Agent (Local)',
+    platform: 'windows',
+    hostname: 'localhost',
+    arch: 'x64',
+  };
+}
+
 export class DeviceIdentityManager {
   private identity: DeviceIdentity;
 
   constructor(customIdentity?: Partial<DeviceIdentity>) {
-    const hostname = os.hostname();
-    const defaultName = `Windows Agent (${hostname})`;
-    const machineHash = crypto
-      .createHash('sha256')
-      .update(`${hostname}-${os.platform()}-${os.arch()}-${process.env['USERNAME'] ?? 'user'}`)
-      .digest('hex')
-      .slice(0, 16);
-
     this.identity = {
-      id: customIdentity?.id ?? `win-dev-${machineHash}`,
-      name: customIdentity?.name ?? defaultName,
+      id: customIdentity?.id ?? 'win-dev-local',
+      name: customIdentity?.name ?? 'Windows Agent (Local)',
       platform: 'windows',
-      hostname,
-      arch: os.arch(),
+      hostname: customIdentity?.hostname ?? 'localhost',
+      arch: customIdentity?.arch ?? 'x64',
       publicKey: customIdentity?.publicKey ?? undefined,
     };
   }
@@ -36,7 +50,17 @@ export class DeviceIdentityManager {
     return { ...this.identity };
   }
 
+  setIdentity(identity: DeviceIdentity): void {
+    this.identity = { ...identity };
+  }
+
   setDeviceName(name: string): void {
     this.identity.name = name;
+  }
+
+  async syncWithTauri(): Promise<DeviceIdentity> {
+    const fetched = await fetchDeviceIdentity();
+    this.identity = fetched;
+    return this.getIdentity();
   }
 }

@@ -1,48 +1,33 @@
-# Verifikasi 9Router
+# Verifikasi 9Router — 2026-10-10
 
-Tanggal assessment: 2026-10-09 (Asia/Jakarta)  
-Endpoint: `https://9router.ojixx.my.id/v1`
+Sumber: `scripts/verify-9router.ts` + probe manual curl di VPS (servernic), key dari `.env` (tidak pernah dicetak). Endpoint: `https://9router.ojixx.my.id/v1`.
 
-## Hasil nyata
+## Hasil probe otomatis (scripts/verify-9router.ts)
+| Probe | Status | Bukti |
+| --- | --- | --- |
+| Connectivity | available | `GET /models` tanpa auth → HTTP 401 (server hidup) |
+| Authentication + model list | available | `GET /models` dengan key → HTTP 200, 257 model |
+| Streaming/tool/vision (billable) | skipped oleh skrip | butuh `NINEROUTER_ALLOW_BILLABLE_PROBES=true` |
 
-| Kemampuan                           | Status      | Bukti / batasan                                                                                                             |
-| ----------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Konektivitas HTTPS ke `GET /models` | tersedia    | Probe menerima respons HTTP `401`; DNS, TLS, dan HTTP endpoint dapat dijangkau. Respons ini bukan bukti key valid.          |
-| Autentikasi bearer                  | belum diuji | Tidak ada `NINEROUTER_API_KEY` atau `NINE_ROUTER_API_KEY` di environment proses assessment.                                 |
-| Daftar model                        | belum diuji | Membutuhkan bearer key; model tidak boleh diasumsikan dari dokumen rencana.                                                 |
-| Streaming                           | belum diuji | Probe billable tidak dijalankan tanpa key, model eksplisit, dan opt-in biaya.                                               |
-| Tool calling                        | belum diuji | Sama; tidak boleh dipromosikan sebagai capability sebelum respons tool-call nyata diterima.                                 |
-| Vision                              | belum diuji | Sama; perlu model vision yang dipilih eksplisit.                                                                            |
-| Context window                      | belum diuji | Tidak ada metadata model terautentikasi. Probe tidak mengirim konteks besar karena berbiaya dan tidak aman sebagai default. |
-| Rate limit                          | belum diuji | Respons `401` tidak membawa header rate-limit. Tidak dilakukan load test terhadap gateway bersama.                          |
-| Usage / biaya                       | belum diuji | Tidak ada completion terautentikasi yang dapat diperiksa untuk `usage` atau metadata harga.                                 |
+## Probe manual per model (2026-10-10)
+Kategori provider `zrouter/` (pilihan pemilik): chat/streaming/tool/vision → **HTTP 402 `insufficient_balance`** pada `zrouter/gpt-5.6-terra`, `zrouter/gemini-3.8-flash`, `zrouter/deepseek-v4.1-flash`, `zrouter/glm-5.3-flash`. Akun perlu top-up PAYG/Token Plan untuk semua model berbayar.
 
-## Skrip reproducible
+Model gratis lain:
+| Model | Chat | Streaming | Tool calling | Vision |
+| --- | --- | --- | --- | --- |
+| `agentic/space-bunny-free` | OK (jawab "OK") | OK (9 chunks, SSE, [DONE]) | OK (`tool_calls` get_weather{"city":"Jakarta"}, finish_reason=tool_calls) | TIDAK (model menyatakan no vision support) |
+| `agentic/deepseek-v4.1-flash-free` | 429 `free_shared_pool_exhausted` (kuota harian global habis, reset 00:00 WIB) | — | — | — |
+| `agentic/qwen3.8-flash-free` | 403 `model_not_available` di plan free | — | — | — |
+| `hubmix/gemini-3.8-flash-free` | 404 `model_retired` | — | — | — |
+| `hubmix/minimax-m3-free` | 400 `no_available_channel` | — | — | — |
+| `or/google/gemini-3.5-flash` | 402 out of credits | — | — | — |
 
-Skrip [verify-9router.ts](../../scripts/verify-9router.ts) tidak menyimpan atau mencetak API key. Mode default hanya menguji konektivitas dan **tidak** mengirim completion yang dapat ditagih.
+## Context window
+- `/models` tidak menyediakan metadata context_length/context_window.
+- Uji input panjang `agentic/space-bunny-free`: payload ~12.000 kata diterima, `usage.prompt_tokens=12975` tanpa error → setidaknya ~13k token berfungsi praktis. Batas atas tidak diuji (biaya/limit).
 
-```powershell
-$env:NINEROUTER_API_KEY = 'key-dari-secret-manager-atau-session-env'
-node --experimental-strip-types scripts/verify-9router.ts
-```
-
-Untuk menguji endpoint inference, tetapkan model yang memang disetujui dan opt-in eksplisit terhadap biaya:
-
-```powershell
-$env:NINEROUTER_TEST_MODEL = 'model-id-dari-GET-models'
-$env:NINEROUTER_ALLOW_BILLABLE_PROBES = 'true'
-node --experimental-strip-types scripts/verify-9router.ts
-```
-
-Keluaran JSON merekam status HTTP, header rate-limit yang ada, field metadata model, `usage`, dan `cost`/`costs`/`pricing` bila provider mengirimkannya. Simpan keluaran itu sebagai artefak internal yang telah direview; jangan memasukkan key maupun isi percakapan sensitif ke dokumen ini.
-
-## Kriteria penerimaan ulang
-
-- `GET /models` dengan key valid menghasilkan daftar model dan field capability/context yang nyata.
-- Streaming menerima sedikitnya satu chunk non-kosong dan `content-type` direkam.
-- Tool calling menghasilkan `tool_calls` atau kegagalan kompatibilitas yang terdokumentasi.
-- Vision menjawab request gambar 1×1 yang dikirim script.
-- Completion sederhana mengungkap apakah token usage dan biaya tersedia.
-- Header rate-limit, atau ketiadaannya, dicatat dari respons sukses.
-
-Hasil saat ini tidak membuktikan kompatibilitas OpenAI penuh; hanya keterjangkauan endpoint tanpa kredensial.
+## Keputusan & rekomendasi
+- **DEFAULT_CHAT_MODEL diset ke `agentic/space-bunny-free`** — satu-satunya model yang LULUS chat+streaming+tool calling saat ini (gratis, tanpa top-up). Catatan: melayani via `zen-space-bunny-free`, reasoning-heavy (output di `reasoning_content`).
+- Vision: TIDAK tersedia pada model gratis yang hidup. Perlu top-up (mis. `zrouter/gemini-3.8-flash` atau `or/...`) bila fitur vision dibutuhkan.
+- Rate limit: error 402/429 menyertakan "(reset after Xm)" — backoff per request, tanpa header rate-limit standar.
+- Jalankan ulang probe: `sh scripts/.probe-zrouter.sh <model-id>` (helper lokal, tidak di-commit; hasil tetap terdokumentasi di sini).

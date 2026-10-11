@@ -1,5 +1,3 @@
-import path from 'node:path';
-
 export class SecurityError extends Error {
   readonly code: string;
 
@@ -8,6 +6,27 @@ export class SecurityError extends Error {
     this.name = 'SecurityError';
     this.code = code;
   }
+}
+
+export function normalizeWindowsPath(targetPath: string): string {
+  const normalized = targetPath.replace(/\//g, '\\');
+  const driveMatch = normalized.match(/^([a-zA-Z]):(.*)$/);
+  const drive = driveMatch ? driveMatch[1]!.toUpperCase() + ':' : '';
+  const rest = driveMatch ? driveMatch[2]! : normalized;
+  const parts = rest.split('\\').filter(Boolean);
+  const stack: string[] = [];
+  for (const part of parts) {
+    if (part === '.') continue;
+    if (part === '..') {
+      stack.pop();
+    } else {
+      stack.push(part);
+    }
+  }
+  if (drive) {
+    return `${drive}\\${stack.join('\\')}`;
+  }
+  return stack.join('\\');
 }
 
 export class PathValidator {
@@ -39,13 +58,7 @@ export class PathValidator {
   }
 
   private normalize(targetPath: string): string {
-    // Resolve absolute path and normalize slashes to lowercase drive on Windows
-    const resolved = path.resolve(targetPath);
-    // Standardize drive letter to uppercase C:\
-    if (/^[a-zA-Z]:/.test(resolved)) {
-      return resolved[0]!.toUpperCase() + resolved.slice(1);
-    }
-    return resolved;
+    return normalizeWindowsPath(targetPath);
   }
 
   assertSafePathFormat(candidatePath: string): void {
@@ -93,7 +106,7 @@ export class PathValidator {
     const isAllowed = this.allowedRoots.some((root) => {
       // Must equal root OR start with root followed by path separator
       if (resolved === root) return true;
-      const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+      const rootWithSep = root.endsWith('\\') ? root : root + '\\';
       return resolved.startsWith(rootWithSep);
     });
 

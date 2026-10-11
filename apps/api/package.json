@@ -2,6 +2,11 @@
   "name": "@personal-ai-os/api",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./db": "./src/db/index.ts",
+    "./services": "./src/services/index.ts"
+  },
   "scripts": {
     "build": "tsc --build",
     "dev": "tsx watch src/index.ts",
@@ -30,6 +35,7 @@
     "postgres": "^3.4.5"
   },
   "devDependencies": {
+    "@types/node": "^22.15.3",
     "tsx": "^4.19.4"
   }
 }

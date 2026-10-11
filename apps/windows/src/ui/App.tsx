@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAgentStore } from './context.ts';
 import './Theme.css';
 
@@ -24,7 +24,14 @@ export const App: React.FC = () => {
     setServerUrl,
     authToken,
     setAuthToken,
+    syncDeviceIdentity,
+    connectToServer,
+    disconnectFromServer,
   } = useAgentStore();
+
+  useEffect(() => {
+    void syncDeviceIdentity();
+  }, [syncDeviceIdentity]);
 
   const [newPathInput, setNewPathInput] = useState('');
   const [testPathInput, setTestPathInput] = useState('');
@@ -156,6 +163,32 @@ export const App: React.FC = () => {
                       ? new Date(lastConnectedAt).toLocaleTimeString()
                       : 'Belum pernah'}
                   </span>
+                </div>
+                <div
+                  style={{
+                    marginTop: 10,
+                    paddingTop: 10,
+                    borderTop: '1px solid var(--border-color)',
+                    display: 'flex',
+                    gap: 8,
+                  }}
+                >
+                  {connectionStatus === 'connected' ? (
+                    <button className="btn btn-danger btn-sm" onClick={disconnectFromServer}>
+                      Putuskan Koneksi WSS
+                    </button>
+                  ) : connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? (
+                    <button className="btn btn-secondary btn-sm" onClick={disconnectFromServer}>
+                      Batalkan ({connectionStatus})
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => void connectToServer()}
+                    >
+                      Hubungkan WSS Outbound
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -544,11 +577,27 @@ export const App: React.FC = () => {
                 />
               </div>
 
-              <div style={{ paddingTop: 12, borderTop: '1px solid var(--border-color)' }}>
+              <div
+                style={{
+                  paddingTop: 12,
+                  borderTop: '1px solid var(--border-color)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
                 <span style={{ fontSize: 11, color: 'var(--text-sub)' }}>
-                  Perangkat ini akan otomatis terhubung via WSS Outbound tanpa perlu melakukan port
-                  forwarding.
+                  Perangkat ini akan terhubung via WSS Outbound ke endpoint /v1/agent/ws.
                 </span>
+                {connectionStatus === 'connected' ? (
+                  <button className="btn btn-danger btn-sm" onClick={disconnectFromServer}>
+                    Putuskan WSS
+                  </button>
+                ) : (
+                  <button className="btn btn-primary btn-sm" onClick={() => void connectToServer()}>
+                    Hubungkan Sekarang
+                  </button>
+                )}
               </div>
             </div>
           </div>
