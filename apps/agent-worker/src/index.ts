@@ -18,6 +18,7 @@ import {
   type ModelGateway,
   NineRouterGateway,
 } from '@personal-ai-os/model-gateway';
+import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
 
 export * from './task-executor.ts';
 
@@ -146,6 +147,9 @@ export const startWorkerProcess = async (): Promise<{
     executorOptions: {
       approvalCreator,
       modelGateway,
+      guard: new SecuredCapabilityGuard(new PermissionEngine(), {
+        approvalValidator: approvalRepo,
+      }),
     },
   });
 
