@@ -1,0 +1,16 @@
+{
+  "name": "@personal-ai-os/runtime-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test --max-warnings=0",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "eslint": "^9.25.0",
+    "typescript": "^5.8.3"
+  }
+}

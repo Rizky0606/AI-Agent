@@ -85,6 +85,7 @@ export interface TaskExecutorOptions {
   planner?: Planner | undefined;
   router?: AgentRouter | undefined;
   runtimeManager?: RuntimeManager | undefined;
+  preferredRuntimeId?: string | undefined;
   codingAgent?: CodingAgent | undefined;
   researchAgent?: ResearchAgent | undefined;
   modelGateway?: ModelGateway | undefined;
@@ -103,6 +104,7 @@ export class TaskExecutor {
   private readonly planner: Planner;
   private readonly router: AgentRouter;
   private readonly runtimeManager?: RuntimeManager | undefined;
+  private readonly preferredRuntimeId: string;
   private readonly codingAgent: CodingAgent;
   private readonly researchAgent: ResearchAgent;
   private readonly modelGateway?: ModelGateway | undefined;
@@ -122,8 +124,8 @@ export class TaskExecutor {
     this.analyzer = options?.analyzer ?? new IntentAnalyzer();
     this.planner = options?.planner ?? new Planner();
     this.runtimeManager = options?.runtimeManager;
-    this.router =
-      options?.router ?? new AgentRouter(this.analyzer, this.planner, this.runtimeManager);
+    this.preferredRuntimeId = options?.preferredRuntimeId ?? 'omp';
+    this.router = options?.router ?? new AgentRouter(this.analyzer, this.planner, this.runtimeManager);
     this.codingAgent = options?.codingAgent ?? new CodingAgent(undefined, undefined, this.guard);
     this.researchAgent = options?.researchAgent ?? new ResearchAgent();
     this.modelGateway = options?.modelGateway;
@@ -205,7 +207,7 @@ export class TaskExecutor {
           userId: task.userId,
           isWindowsOnline:
             this.deviceManager?.hasOnlineDeviceForUser(task.userId, 'windows') ?? false,
-          preferredRuntimeId: (task.payload?.runtime as string) ?? undefined,
+          preferredRuntimeId: (task.payload?.runtime as string) ?? this.preferredRuntimeId,
         });
 
         const startPayload: Record<string, unknown> = {
@@ -215,8 +217,10 @@ export class TaskExecutor {
           intent: routeResult.analysis.intent,
           planId: routeResult.plan.planId,
           totalSteps: routeResult.plan.steps.length,
-          modelId: routeResult.route.modelId,
           runtime: routeResult.route.runtime,
+          selectedRuntimeId: routeResult.route.selectedRuntimeId,
+          runtimeFallback: routeResult.route.fallbackUsed === true,
+          runtimeFallbackReason: routeResult.route.fallbackReason,
         };
 
         if (isSimulation) {

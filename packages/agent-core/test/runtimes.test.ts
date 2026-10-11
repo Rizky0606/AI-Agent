@@ -32,7 +32,7 @@ test('RuntimeManager: registers, manages lifecycle and health of runtimes', asyn
   // Health check
   const health = await manager.healthCheck('omp');
   assert.equal(health.healthy, true);
-  assert.ok(health.details?.includes('18.8.4'));
+  assert.ok(health.details?.includes('18.6.1'));
 
   // Task lifecycle
   await manager.pauseTask('omp', 'task-1');

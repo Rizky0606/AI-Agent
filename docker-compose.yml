@@ -54,7 +54,8 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.worker
-    env_file: .env
+    extra_hosts:
+      - host.docker.internal:host-gateway
     depends_on:
       migrate:
         condition: service_completed_successfully

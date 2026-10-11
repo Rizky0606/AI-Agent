@@ -195,6 +195,18 @@ importers:
         specifier: ^4.19.4
         version: 4.23.15
 
+  apps/runtime-bridge:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.20.5
+      eslint:
+        specifier: ^9.25.0
+        version: 9.39.5
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   apps/scheduler:
     dependencies:
       '@personal-ai-os/permissions':
