@@ -57,7 +57,7 @@ Live `RemoteRuntimeAdapter` proof on VPS: Hermes bridge execution completed with
 
 ## Android runtime task submission status
 
-Android `TaskListScreen` now offers `+ Tugas Runtime`; requires selecting a project, prompt, then `omp` or `hermes`. It creates a `coding_runtime` task with `useRuntime: true`, switches to task detail, and relies on existing realtime task events. Android lint/typecheck/build passed; tests passed 17/17. Physical device/API task flow has not yet been exercised.
+Android `TaskListScreen` offers `+ Tugas Runtime`; requires project, prompt, and `omp` or `hermes`. It creates `coding_runtime` with `useRuntime: true`, then opens task detail. Task detail now shows persisted `runtime_output` artifacts as untrusted text, capped at 20,000 characters per preview. Android lint/typecheck/build pass; tests 19/19. No authenticated API task smoke or physical-device flow was run; no authorized test account was available. VPS bridge→Hermes proof remains separate evidence, not full API/queue proof.
 
 No public bind. Compose egress inspection verified `172.20.0.0/16`, gateway `172.20.0.1`.
 

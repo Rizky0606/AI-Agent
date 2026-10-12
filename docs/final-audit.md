@@ -252,8 +252,9 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 ### Android runtime task entry
 
 - Mobile task screen now submits opted-in OMP/Hermes runtime tasks via authenticated API client; requires selected project.
-- Android lint/typecheck/build pass; tests 17/17.
-- Device login→task→worker→bridge→evaluator flow remains unverified on a physical device.
+- Task detail displays persisted runtime output as untrusted text, with a 20,000-character preview bound; full artifact remains server-persisted.
+- Android lint/typecheck/build pass; tests 19/19. Runtime preview selector tests cover malformed records and truncation.
+- Device login→task→worker→bridge→evaluator flow remains unverified on a physical device; no authorized test account was available for authenticated task smoke.
 
 ---
 
