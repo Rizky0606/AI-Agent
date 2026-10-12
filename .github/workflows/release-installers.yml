@@ -24,6 +24,8 @@ jobs:
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
+      - run: eas init --account rizkyf06 --non-interactive
+        working-directory: apps/android
       - run: eas build --platform android --profile preview --non-interactive --wait
         working-directory: apps/android
       - run: eas build:download --platform android --latest --path personal-ai-os.apk
