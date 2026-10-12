@@ -247,7 +247,8 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 - Explicit `payload.useRuntime=true` now routes through selected `RuntimeManager` adapter.
 - Worker emits runtime tool output, evaluates the resulting artifact, and persists completed/failed state.
 - Isolated authenticated API→in-memory queue→TaskExecutor→RemoteRuntimeAdapter→temporary bridge/fake OMP test completes and persists output artifact (`apps/api/test/runtime-task-e2e.test.ts`). This proves orchestration contract without production credentials or real Redis.
-- Production API→Redis/BullMQ→worker→VPS bridge→real runtime, plus physical-device flow, remain unverified; no authorized production/test account was available for live smoke.
+- Production smoke on `https://ai.ojixx.my.id` reached API, Redis/BullMQ, worker, and task events. Task `cdc44873-c90f-4da6-8817-0289882fb799` reached `failed` with progress 50 and evaluator error `Self-claim completion strictly prohibited without concrete proof of lint, typecheck, test, build, diff.` Events: `task.created`, `task.started`, `task.progress`, `task.tool_call`, `task.progress`, `task.failed`.
+- Production task did not complete; artifact absent. Physical-device flow remains unverified.
 
 ### Android runtime task entry
 
