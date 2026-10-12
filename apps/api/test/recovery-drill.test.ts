@@ -355,7 +355,7 @@ test('Recovery Drill 5: Database backup and restore verification', async (t) => 
   try {
     // 1. Validation: backup script fails without DATABASE_URL
     await assert.rejects(
-      async () => runShell(backupScript),
+      async () => runShell(backupScript, { DATABASE_URL: '' }),
       (err: Error) => /DATABASE_URL is required/i.test(err.message),
     );
 

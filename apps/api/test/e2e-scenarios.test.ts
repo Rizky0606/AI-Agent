@@ -960,12 +960,14 @@ test('Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di lu
     registry.setCapability('filesystem', true);
     const executor = new CommandExecutor(registry, validator);
 
-    // Allowed command inside allowlist
-    const runResult = await executor.executePowershell('Write-Output "agent-ok"', {
-      cwd: allowedDir,
-    });
-    assert.equal(runResult.exitCode, 0);
-    assert.match(runResult.stdout, /agent-ok/);
+    // PowerShell execution is covered by Windows-specific tests; CI runs this integration on Linux.
+    if (process.platform === 'win32') {
+      const runResult = await executor.executePowershell('Write-Output "agent-ok"', {
+        cwd: allowedDir,
+      });
+      assert.equal(runResult.exitCode, 0);
+      assert.match(runResult.stdout, /agent-ok/);
+    }
 
     // Disallowed path traversal / outside allowlist strictly rejected
     assert.throws(() => {

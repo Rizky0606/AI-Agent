@@ -51,13 +51,13 @@ before(async () => {
   if (isPostgresAvailable && testSql) {
     // Seed test user and project for foreign keys
     await testSql`
-      INSERT INTO users (id, email, password_hash, role)
-      VALUES (${testUserId}, ${`user-${testUserId}@scheduler-test.local`}, 'hash', 'user')
+      INSERT INTO users (id, email, password_hash)
+      VALUES (${testUserId}, ${`user-${testUserId}@scheduler-test.local`}, 'hash')
       ON CONFLICT DO NOTHING
     `;
     await testSql`
-      INSERT INTO projects (id, owner_id, name, slug)
-      VALUES (${testProjectId}, ${testUserId}, 'Scheduler Live Test Project', ${`proj-${testProjectId}`})
+      INSERT INTO projects (id, user_id, name)
+      VALUES (${testProjectId}, ${testUserId}, 'Scheduler Live Test Project')
       ON CONFLICT DO NOTHING
     `;
   }
