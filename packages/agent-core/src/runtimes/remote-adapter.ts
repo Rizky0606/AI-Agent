@@ -4,7 +4,6 @@ import type { RuntimeCapability, RuntimeExecuteInput, RuntimeExecuteResult, Runt
 type BridgeRun = { runId: string };
 type BridgeRecord = { status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; output?: string | undefined; exitCode?: number | undefined; durationMs?: number | undefined; error?: string | undefined };
 
-function delay(ms: number): Promise<void> { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise; }
 
 export class RemoteRuntimeAdapter extends BaseAgentRuntime {
   readonly id: string;
@@ -41,7 +40,7 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
         return await response.json() as T;
       } catch (error) {
         lastError = error;
-        if (attempt < retries) await delay(100 * (attempt + 1));
+        if (attempt < retries) await new Promise<void>((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
       }
     }
     throw lastError instanceof Error ? lastError : new Error('runtime bridge request failed');
@@ -86,7 +85,7 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
       for (;;) {
         if (this.cancelledTasks.has(input.taskId)) await this.cancel(input.taskId);
         const record = await this.request<BridgeRecord>(`/v1/runs/${created.runId}`);
-        if (record.status === 'queued' || record.status === 'running') { await delay(100); continue; }
+        if (record.status === 'queued' || record.status === 'running') { await new Promise<void>((resolve) => setTimeout(resolve, 100)); continue; }
         const output = record.output ?? '';
         const proposedActions = this.parseActions(output);
         const appliedActions = await this.filterUntrustedActions(proposedActions);
