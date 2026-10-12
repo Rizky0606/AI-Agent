@@ -13,7 +13,9 @@ export interface AuthTokens {
 
 export interface AuthResponse {
   user: User;
-  tokens: AuthTokens;
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
 }
 
 export interface RefreshResponse {

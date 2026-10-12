@@ -17,7 +17,9 @@ test('Auth flow: login saves tokens to secure storage and registers device', asy
       return new Response(
         JSON.stringify({
           user: { id: 'usr-1', email: 'alice@android.test' },
-          tokens: { accessToken: 'acc-token-123', refreshToken: 'ref-token-456', expiresIn: 900 },
+          accessToken: 'acc-token-123',
+          refreshToken: 'ref-token-456',
+          expiresIn: 900,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
