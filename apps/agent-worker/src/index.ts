@@ -19,6 +19,7 @@ import {
   NineRouterGateway,
 } from '@personal-ai-os/model-gateway';
 import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
+import { RemoteRuntimeAdapter, RuntimeManager } from '@personal-ai-os/agent-core';
 
 export * from './task-executor.ts';
 
@@ -138,6 +139,31 @@ export const startWorkerProcess = async (): Promise<{
     });
   }
 
+  const runtimeBridgeUrl = process.env.RUNTIME_BRIDGE_URL;
+  const runtimeBridgeToken = process.env.RUNTIME_BRIDGE_TOKEN;
+  const runtimePreferred = process.env.RUNTIME_PREFERRED ?? 'omp';
+  if (!['omp', 'hermes'].includes(runtimePreferred)) throw new Error('RUNTIME_PREFERRED must be omp or hermes.');
+  if (isProduction && (!runtimeBridgeUrl || !runtimeBridgeToken)) throw new Error('Production worker requires RUNTIME_BRIDGE_URL and RUNTIME_BRIDGE_TOKEN.');
+  const runtimeManager = new RuntimeManager();
+  if (runtimeBridgeUrl && runtimeBridgeToken) {
+    for (const runtimeId of ['omp', 'hermes'] as const) {
+      runtimeManager.register(new RemoteRuntimeAdapter({
+        id: runtimeId,
+        name: runtimeId === 'omp' ? 'OMP host bridge' : 'Hermes host bridge',
+        version: runtimeId === 'omp' ? '18.6.1' : '0.20.5',
+        baseUrl: runtimeBridgeUrl,
+        token: runtimeBridgeToken,
+      }));
+    }
+    await runtimeManager.initializeAll();
+  }
+  if (runtimeBridgeUrl && runtimeBridgeToken) {
+    const interval = setInterval(() => void runtimeManager.healthCheckAll().then((health) => {
+      for (const [runtimeId, result] of health) if (!result.healthy) console.warn(JSON.stringify({ service: 'agent-worker', event: 'runtime_unhealthy', runtimeId, error: result.error }));
+    }), Number(process.env.RUNTIME_HEALTH_INTERVAL_MS ?? 30_000));
+    interval.unref();
+  }
+
   const workerConcurrency = Number(process.env.WORKER_CONCURRENCY ?? 2);
   const workerHandle = createAgentWorker({
     redisUrl,
@@ -147,6 +173,8 @@ export const startWorkerProcess = async (): Promise<{
     executorOptions: {
       approvalCreator,
       modelGateway,
+      runtimeManager,
+      preferredRuntimeId: runtimePreferred,
       guard: new SecuredCapabilityGuard(new PermissionEngine(), {
         approvalValidator: approvalRepo,
       }),

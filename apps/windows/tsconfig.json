@@ -8,5 +8,5 @@
     "jsx": "react-jsx",
     "outDir": "dist"
   },
-  "include": ["src", "test", "vite.config.ts"]
+  "include": ["src", "test", "vite.config.ts", "vite-env.d.ts"]
 }

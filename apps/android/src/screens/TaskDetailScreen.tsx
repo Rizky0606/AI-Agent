@@ -19,6 +19,7 @@ import {
 } from '../hooks/use-queries.ts';
 import { TaskEventsWebSocketClient } from '../services/task-events-websocket.ts';
 import type { TaskEventEnvelope } from '@personal-ai-os/shared';
+import { getRuntimeOutputPreviews } from '../runtime-output.ts';
 
 export interface TaskDetailScreenProps {
   taskId: string;
@@ -76,6 +77,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
   const currentStep = checkpoint?.stepIndex ?? 1;
   const totalSteps = checkpoint?.totalSteps ?? 4;
   const pendingSteps = Math.max(0, totalSteps - currentStep);
+  const runtimeOutputs = getRuntimeOutputPreviews(task.artifacts);
 
   // Filter and transform events into clean human summaries, stripping raw runtime noise
   const humanTimeline = liveEvents.map((evt) => {
@@ -215,6 +217,16 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
             </View>
           ) : null}
         </View>
+        {runtimeOutputs.map((output) => (
+          <View key={output.id} style={styles.runtimeOutputCard}>
+            <Text style={styles.sectionHeading}>{output.title}</Text>
+            <Text style={styles.runtimeOutputWarning}>Output runtime adalah data tidak tepercaya; pratinjau teks dibatasi.</Text>
+            <ScrollView style={styles.runtimeOutputScroll} nestedScrollEnabled>
+              <Text selectable style={styles.runtimeOutputText}>{output.content}</Text>
+            </ScrollView>
+            {output.truncated ? <Text style={styles.runtimeOutputWarning}>Pratinjau dibatasi 20.000 karakter; artifact lengkap tetap tersimpan.</Text> : null}
+          </View>
+        ))}
 
         {/* Action Controls */}
         <View style={styles.controlsRow}>
@@ -431,6 +443,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  runtimeOutputCard: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, borderRadius: theme.borderRadius.md, borderWidth: 1, borderColor: theme.colors.surfaceBorder, marginBottom: theme.spacing.md },
+  runtimeOutputWarning: { color: theme.colors.warning, fontSize: 12, marginBottom: theme.spacing.sm },
+  runtimeOutputScroll: { maxHeight: 320, backgroundColor: theme.colors.background, borderRadius: theme.borderRadius.sm, padding: theme.spacing.sm },
+  runtimeOutputText: { color: theme.colors.textPrimary, fontSize: 12, lineHeight: 18, fontFamily: 'monospace' },
   timelineSection: {
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,

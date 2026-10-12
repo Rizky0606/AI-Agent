@@ -223,6 +223,40 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 - **Keterbatasan / Mengapa SEBAGIAN**:
   - Verifikasi langsung deployment pada mesin fisik Oracle Cloud VPS ARM64 (Perbaikan 0 dan 5) masih menunggu sesi koneksi SSH langsung dari pengguna.
 
+
+### Runtime bridge update
+
+- **Status**: **SEBAGIAN — source/test verified; production service not installed**.
+- Live probe evidence: `docs/verification/runtimes-live.md`; OMP 18.6.1 JSONL via 9Router, Hermes 0.20.5 plain-text CLI.
+- Bridge source: `apps/runtime-bridge/`; token auth, workspace realpath/symlink controls, process-group timeout/cancel, queue/rate/output bounds, SSE, audit JSONL.
+- Worker wiring: `RUNTIME_BRIDGE_URL`, `RUNTIME_BRIDGE_TOKEN`, `RUNTIME_PREFERRED`; health checks and routing fallback event fields added.
+- Docker egress gateway verified: `172.20.0.1`, subnet `172.20.0.0/16`.
+- **Not claimed**: systemd/firewall installation, production token, API → queue → worker → bridge → runtime → evaluator VPS proof. Requires owner approval for unit and firewall.
+
+### VPS activation proof
+
+- **Status**: **SEBAGIAN — bridge live; full worker/API/evaluator flow pending**.
+- Unit enabled/active on host; bind `172.20.0.1:9120`; UFW allows TCP 9120 only from `172.20.0.0/16`.
+- Authenticated health returned HTTP 200; invalid token returned HTTP 401.
+- Hermes 0.20.5 live bridge run completed with `OK`; OMP 18.6.1 live bridge run completed with assistant `OK`.
+- Runtime state paths explicitly writable under systemd hardening.
+- No claim of API → queue → worker → bridge → runtime → evaluator completion.
+
+### Worker runtime execution
+
+- Explicit `payload.useRuntime=true` now routes through selected `RuntimeManager` adapter.
+- Worker emits runtime tool output, evaluates the resulting artifact, and persists completed/failed state.
+- Isolated authenticated API→in-memory queue→TaskExecutor→RemoteRuntimeAdapter→temporary bridge/fake OMP test completes and persists output artifact (`apps/api/test/runtime-task-e2e.test.ts`). This proves orchestration contract without production credentials or real Redis.
+- Production smoke initially failed because the worker lacked `RUNTIME_BRIDGE_URL`/`RUNTIME_BRIDGE_TOKEN`, then because `host.docker.internal` resolved to `172.17.0.1` while the bridge listened on `172.20.0.1`. Worker configuration was corrected to load `.env` and use `http://172.20.0.1:9120`.
+- Final production smoke task `972edc30-5393-444e-80e7-006bb2bb0ee2` completed at progress 100 with `runtime_output` artifact. Events: `task.created`, `task.started`, `task.tool_call`, `task.completed`.
+
+### Android runtime task entry
+
+- Mobile task screen now submits opted-in OMP/Hermes runtime tasks via authenticated API client; requires selected project.
+- Task detail displays persisted runtime output as untrusted text, with a 20,000-character preview bound; full artifact remains server-persisted.
+- Android lint/typecheck/build pass; tests 19/19. Runtime preview selector tests cover malformed records and truncation.
+- Device login→task→worker→bridge→evaluator flow remains unverified on a physical device; no authorized test account was available for authenticated task smoke.
+
 ---
 
 ## 3. Checklist Kesiapan Platform

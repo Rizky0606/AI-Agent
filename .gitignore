@@ -7,3 +7,5 @@ coverage/
 .turbo/
 *.log
 *.tsbuildinfo
+apps/android/personal-ai-os.apk
+apps/windows/src-tauri/target/

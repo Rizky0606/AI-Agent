@@ -51,10 +51,15 @@ services:
     restart: unless-stopped
 
   worker:
+    env_file: .env
     build:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.worker
-    env_file: .env
+    environment:
+      RUNTIME_BRIDGE_URL: ${RUNTIME_BRIDGE_URL:-http://host.docker.internal:9120}
+      RUNTIME_BRIDGE_TOKEN: ${RUNTIME_BRIDGE_TOKEN:?RUNTIME_BRIDGE_TOKEN is required}
+    extra_hosts:
+      - host.docker.internal:host-gateway
     depends_on:
       migrate:
         condition: service_completed_successfully
