@@ -32,9 +32,10 @@ jobs:
           BUILD_JSON="$(eas build --platform android --profile preview --non-interactive --clear-cache --wait --json)"
           BUILD_ID="$(printf '%s' "$BUILD_JSON" | node -e "let s=''; process.stdin.on('data', c => s += c).on('end', () => { const value = JSON.parse(s); process.stdout.write(Array.isArray(value) ? value[0].id : value.id); });")"
           test -n "$BUILD_ID"
-          eas build:download --build-id "$BUILD_ID" --non-interactive
-          APK_PATH="$(find "${RUNNER_TEMP:-/tmp}" -type f -name '*.apk' -print -quit)"
-          test -n "$APK_PATH"
+          DOWNLOAD_LOG="$(eas build:download --build-id "$BUILD_ID" --non-interactive 2>&1)"
+          printf '%s\n' "$DOWNLOAD_LOG"
+          APK_PATH="$(printf '%s\n' "$DOWNLOAD_LOG" | node -e "let s=''; process.stdin.on('data', c => s += c).on('end', () => { const match = s.match(/Build downloaded to (.+\.apk)/); if (!match) process.exit(1); process.stdout.write(match[1].trim()); });")"
+          test -f "$APK_PATH"
           cp "$APK_PATH" personal-ai-os.apk
       - uses: actions/upload-artifact@v4
         with:
