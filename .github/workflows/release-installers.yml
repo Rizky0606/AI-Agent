@@ -26,10 +26,16 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
       - run: eas init --account rizkyf06 --non-interactive
         working-directory: apps/android
-      - run: eas build --platform android --profile preview --non-interactive --clear-cache --wait
+      - name: Build Android APK
         working-directory: apps/android
-      - run: eas build:download --platform android --latest --path personal-ai-os.apk
-        working-directory: apps/android
+        run: |
+          BUILD_JSON="$(eas build --platform android --profile preview --non-interactive --clear-cache --wait --json)"
+          BUILD_ID="$(printf '%s' "$BUILD_JSON" | node -e "let s=''; process.stdin.on('data', c => s += c).on('end', () => { const value = JSON.parse(s); process.stdout.write(Array.isArray(value) ? value[0].id : value.id); });")"
+          test -n "$BUILD_ID"
+          eas build:download --build-id "$BUILD_ID" --non-interactive
+          APK_PATH="$(find . -type f -name '*.apk' -print -quit)"
+          test -n "$APK_PATH"
+          mv "$APK_PATH" personal-ai-os.apk
       - uses: actions/upload-artifact@v4
         with:
           name: personal-ai-os-android-apk
