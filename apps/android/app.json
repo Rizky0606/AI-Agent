@@ -11,7 +11,8 @@
       "bundleIdentifier": "com.personalai.os"
     },
     "android": {
-      "package": "com.personalai.os"
+      "package": "com.personalai.os",
+      "jsEngine": "jsc"
     },
     "plugins": ["expo-secure-store"]
   }
