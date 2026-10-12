@@ -63,6 +63,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Apply database migrations
+        run: sh scripts/migrate-db.sh
+
 
       - name: Run CI Suite (Lint, Typecheck, Test, Build)
         run: pnpm test:ci
