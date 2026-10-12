@@ -57,7 +57,7 @@ Live `RemoteRuntimeAdapter` proof on VPS: Hermes bridge execution completed with
 
 ## Android runtime task submission status
 
-Android task creation and detail output are implemented. Isolated smoke passes through authenticated API → in-memory queue → `TaskExecutor` → `RemoteRuntimeAdapter` → temporary bridge + fake `omp`. Production smoke reached API/Redis/BullMQ/worker and emitted task lifecycle events, but task `cdc44873-c90f-4da6-8817-0289882fb799` failed at progress 50 with evaluator error: `Self-claim completion strictly prohibited without concrete proof of lint, typecheck, test, build, diff.` Artifact was absent. Investigate production worker/runtime routing before claiming readiness. Physical-device flow remains unverified.
+Android task creation and detail output are implemented. Isolated smoke passes through authenticated API → in-memory queue → `TaskExecutor` → `RemoteRuntimeAdapter` → temporary bridge + fake `omp`. Production worker was corrected to load runtime bridge configuration and target the Docker gateway where bridge listens. Final production task `972edc30-5393-444e-80e7-006bb2bb0ee2` completed at progress 100 with `runtime_output`; events: `task.created`, `task.started`, `task.tool_call`, `task.completed`. Physical-device flow remains unverified.
 
 No public bind. Compose egress inspection verified `172.20.0.0/16`, gateway `172.20.0.1`.
 
