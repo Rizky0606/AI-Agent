@@ -12,6 +12,7 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
+    "@babel/runtime": "^7.29.10",
     "@personal-ai-os/shared": "workspace:*",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",

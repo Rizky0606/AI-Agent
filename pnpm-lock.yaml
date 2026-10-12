@@ -81,6 +81,9 @@ importers:
 
   apps/android:
     dependencies:
+      '@babel/runtime':
+        specifier: ^7.29.10
+        version: 7.29.10
       '@personal-ai-os/shared':
         specifier: workspace:*
         version: link:../../packages/shared
