@@ -165,8 +165,8 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    await this.storage.setAccessToken(res.tokens.accessToken);
-    await this.storage.setRefreshToken(res.tokens.refreshToken);
+    await this.storage.setAccessToken(res.accessToken);
+    await this.storage.setRefreshToken(res.refreshToken);
     return res;
   }
 
@@ -175,8 +175,8 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    await this.storage.setAccessToken(res.tokens.accessToken);
-    await this.storage.setRefreshToken(res.tokens.refreshToken);
+    await this.storage.setAccessToken(res.accessToken);
+    await this.storage.setRefreshToken(res.refreshToken);
     return res;
   }
 

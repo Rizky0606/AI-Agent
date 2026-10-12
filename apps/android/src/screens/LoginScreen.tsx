@@ -93,7 +93,7 @@ export const LoginScreen: React.FC = () => {
             style={styles.input}
             value={password}
             onChangeText={setPassword}
-            placeholder="Minimal 6 karakter"
+            placeholder="Minimal 12 karakter"
             placeholderTextColor={theme.colors.textMuted}
             secureTextEntry
           />
