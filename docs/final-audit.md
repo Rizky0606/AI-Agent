@@ -249,6 +249,12 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 - Focused worker test passes with fake runtime; live `RemoteRuntimeAdapter` → bridge → Hermes proof completed with `OK`.
 - Full API → Redis/BullMQ → worker process → bridge → evaluator proof remains pending because no authenticated API task session was run.
 
+### Android runtime task entry
+
+- Mobile task screen now submits opted-in OMP/Hermes runtime tasks via authenticated API client; requires selected project.
+- Android lint/typecheck/build pass; tests 17/17.
+- Device login→task→worker→bridge→evaluator flow remains unverified on a physical device.
+
 ---
 
 ## 3. Checklist Kesiapan Platform

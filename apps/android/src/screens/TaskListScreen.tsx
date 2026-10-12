@@ -1,16 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Modal,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { ProgressBar } from '../components/ProgressBar.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { theme } from '../components/Theme.ts';
-import { useTasks } from '../hooks/use-queries.ts';
+import { useCreateTask, useTasks } from '../hooks/use-queries.ts';
+import { createRuntimeTaskRequest } from '../runtime-task.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
 export interface TaskListScreenProps {
@@ -31,33 +34,63 @@ export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) 
     projectId: activeProjectId ?? undefined,
     status: activeFilter,
   });
+  const createTask = useCreateTask();
+  const [createVisible, setCreateVisible] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [runtime, setRuntime] = useState<'omp' | 'hermes'>('omp');
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const submitRuntimeTask = async () => {
+    const instruction = prompt.trim();
+    if (!activeProjectId) { setSubmitError('Pilih project terlebih dahulu.'); return; }
+    if (!instruction) { setSubmitError('Masukkan instruksi tugas.'); return; }
+    setSubmitError(null);
+    try {
+      const request = createRuntimeTaskRequest(activeProjectId, instruction, runtime, `${activeProjectId}/${Date.now()}`);
+      const { task } = await createTask.mutateAsync(request);
+      setPrompt('');
+      setCreateVisible(false);
+      onSelectTask(task.id);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : 'Tugas gagal dibuat.');
+    }
+  };
 
   return (
     <View style={styles.container}>
-      {/* Header and status filter pills */}
-      <View style={styles.header}>
+      <View style={styles.headerActions}>
         <Text style={styles.headerTitle}>Daftar Tugas (Tasks)</Text>
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={STATUS_FILTERS}
-          keyExtractor={(item) => item}
-          style={styles.filterList}
-          renderItem={({ item }) => {
-            const isSelected = item === 'Semua' ? !taskStatusFilter : taskStatusFilter === item;
-            return (
-              <TouchableOpacity
-                style={[styles.filterChip, isSelected && styles.filterChipActive]}
-                onPress={() => setTaskStatusFilter(item === 'Semua' ? null : item)}
-              >
-                <Text style={[styles.filterText, isSelected && styles.filterTextActive]}>
-                  {item === 'Semua' ? 'Semua' : item.replace('_', ' ').toUpperCase()}
-                </Text>
-              </TouchableOpacity>
-            );
-          }}
-        />
+        <TouchableOpacity style={styles.createButton} onPress={() => { setSubmitError(null); setCreateVisible(true); }}>
+          <Text style={styles.createButtonText}>+ Tugas Runtime</Text>
+        </TouchableOpacity>
       </View>
+      <FlatList horizontal showsHorizontalScrollIndicator={false} data={STATUS_FILTERS} keyExtractor={(item) => item} style={styles.filterList} renderItem={({ item }) => {
+        const selected = item === 'Semua' ? !taskStatusFilter : taskStatusFilter === item;
+        return <TouchableOpacity style={[styles.filterChip, selected && styles.filterChipActive]} onPress={() => setTaskStatusFilter(item === 'Semua' ? null : item)}><Text style={[styles.filterText, selected && styles.filterTextActive]}>{item === 'Semua' ? item : item.replace('_', ' ').toUpperCase()}</Text></TouchableOpacity>;
+      }} />
+      <Modal visible={createVisible} transparent animationType="slide" onRequestClose={() => setCreateVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Tugas coding baru</Text>
+            <Text style={styles.modalHint}>{activeProjectId ? `Project: ${activeProjectId}` : 'Pilih project di tab Projects terlebih dahulu.'}</Text>
+            <View style={styles.runtimeChoices}>
+              {(['omp', 'hermes'] as const).map((id) => (
+                <TouchableOpacity key={id} style={[styles.runtimeChoice, runtime === id && styles.runtimeChoiceSelected]} onPress={() => setRuntime(id)}>
+                  <Text style={[styles.runtimeChoiceText, runtime === id && styles.runtimeChoiceTextSelected]}>{id.toUpperCase()}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput style={styles.promptInput} value={prompt} onChangeText={setPrompt} placeholder="Instruksi untuk runtime..." multiline textAlignVertical="top" accessibilityLabel="Instruksi tugas runtime" />
+            {submitError ? <Text style={styles.errorText}>{submitError}</Text> : null}
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setCreateVisible(false)}><Text style={styles.cancelButtonText}>Batal</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.submitButton, (!activeProjectId || !prompt.trim() || createTask.isPending) && styles.submitDisabled]} disabled={!activeProjectId || !prompt.trim() || createTask.isPending} onPress={() => void submitRuntimeTask()}>
+                <Text style={styles.submitButtonText}>{createTask.isPending ? 'Mengirim…' : 'Buat tugas'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {isLoading ? (
         <View style={styles.centerContainer}>
@@ -115,6 +148,26 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background,
   },
+  headerActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: theme.spacing.md, paddingTop: theme.spacing.md, backgroundColor: theme.colors.surface },
+  createButton: { backgroundColor: theme.colors.primary, borderRadius: theme.borderRadius.md, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
+  createButtonText: { color: '#fff', fontWeight: '700' },
+  modalBackdrop: { flex: 1, justifyContent: 'center', padding: theme.spacing.lg, backgroundColor: 'rgba(0,0,0,0.65)' },
+  modalCard: { backgroundColor: theme.colors.surface, padding: theme.spacing.lg, borderRadius: theme.borderRadius.lg, gap: theme.spacing.md },
+  modalTitle: { color: theme.colors.textPrimary, fontSize: 20, fontWeight: '700' },
+  modalHint: { color: theme.colors.textSecondary, fontSize: 13 },
+  runtimeChoices: { flexDirection: 'row', gap: theme.spacing.sm },
+  runtimeChoice: { paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.md, backgroundColor: theme.colors.surfaceElevated },
+  runtimeChoiceSelected: { backgroundColor: theme.colors.primary },
+  runtimeChoiceText: { color: theme.colors.textSecondary, fontWeight: '700' },
+  runtimeChoiceTextSelected: { color: '#fff' },
+  promptInput: { minHeight: 120, borderWidth: 1, borderColor: theme.colors.surfaceBorder, borderRadius: theme.borderRadius.md, padding: theme.spacing.md, color: theme.colors.textPrimary },
+  errorText: { color: theme.colors.danger, fontSize: 13 },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: theme.spacing.sm },
+  cancelButton: { paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
+  cancelButtonText: { color: theme.colors.textSecondary },
+  submitButton: { backgroundColor: theme.colors.primary, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.md },
+  submitDisabled: { opacity: 0.5 },
+  submitButtonText: { color: '#fff', fontWeight: '700' },
   header: {
     paddingHorizontal: theme.spacing.md,
     paddingTop: theme.spacing.md,

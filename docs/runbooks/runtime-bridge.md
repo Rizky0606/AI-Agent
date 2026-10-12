@@ -55,6 +55,10 @@ The worker resolves health/fallback through `RuntimeManager`, executes the selec
 
 Live `RemoteRuntimeAdapter` proof on VPS: Hermes bridge execution completed with exit `0`, output `OK`; token was not printed.
 
+## Android runtime task submission status
+
+Android `TaskListScreen` now offers `+ Tugas Runtime`; requires selecting a project, prompt, then `omp` or `hermes`. It creates a `coding_runtime` task with `useRuntime: true`, switches to task detail, and relies on existing realtime task events. Android lint/typecheck/build passed; tests passed 17/17. Physical device/API task flow has not yet been exercised.
+
 No public bind. Compose egress inspection verified `172.20.0.0/16`, gateway `172.20.0.1`.
 
 ## Verification after approval
