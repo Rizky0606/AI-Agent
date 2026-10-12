@@ -1,4 +1,8 @@
 # Runbook: Prosedur Deployment, Topologi Jaringan, Resource Limits, dan Rollback (Oracle Cloud ARM64)
+## Buildable client installers
+
+See [`install-apps.md`](install-apps.md) for the Android APK and Windows NSIS release workflow, prerequisites, installation, and known signing limits.
+
 
 Dokumen ini mendefinisikan standar operasional prosedur untuk deployment produksi, isolasi jaringan, manajemen kapasitas memori/CPU pada VPS Oracle Cloud ARM64 Ampere A1 (2 OCPU / 11 GiB RAM / 0B Swap), mekanisme healthcheck & container orchestration, backup terjadwal, dan prosedur rollback darurat.
 

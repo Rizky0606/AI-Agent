@@ -80,7 +80,7 @@ export const createAgentStore = (
   };
 
   return create<AgentState>((set, get) => ({
-    serverUrl: 'http://localhost:3000',
+    serverUrl: import.meta.env.VITE_SERVER_URL ?? 'https://ai.ojixx.my.id',
     authToken: '',
     connectionStatus: 'disconnected',
     lastConnectedAt: null,

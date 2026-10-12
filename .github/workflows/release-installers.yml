@@ -1,0 +1,58 @@
+name: Build installable apps
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: eas build --platform android --profile preview --non-interactive --wait
+        working-directory: apps/android
+      - run: eas build:download --platform android --latest --path personal-ai-os.apk
+        working-directory: apps/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personal-ai-os-android-apk
+          path: apps/android/personal-ai-os.apk
+          if-no-files-found: error
+
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @personal-ai-os/windows tauri build --bundles nsis
+        env:
+          VITE_SERVER_URL: https://ai.ojixx.my.id
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personal-ai-os-windows-installer
+          path: apps/windows/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
