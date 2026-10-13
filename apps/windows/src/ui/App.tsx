@@ -1,10 +1,51 @@
 import React, { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useAgentStore } from './context.ts';
 import './Theme.css';
 
+interface FileTreeEntry { path: string; name: string; kind: 'directory' | 'file'; size: number; }
+
+const ProjectPanel: React.FC = () => {
+  const { allowedRoots, capabilities } = useAgentStore();
+  const [root, setRoot] = useState(allowedRoots[0] ?? '');
+  const [entries, setEntries] = useState<FileTreeEntry[]>([]);
+  const [selectedPath, setSelectedPath] = useState('');
+  const [text, setText] = useState('');
+  const [originalText, setOriginalText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { if (!allowedRoots.includes(root)) setRoot(allowedRoots[0] ?? ''); }, [allowedRoots, root]);
+  const refresh = async () => { if (!root) return; setLoading(true); setError(null); try { setEntries(await invoke<FileTreeEntry[]>('list_allowed_tree', { path: root, maxDepth: 6 })); } catch (err) { setError(String(err)); } finally { setLoading(false); } };
+  const openFile = async (path: string) => { setSelectedPath(path); setError(null); try { const content = await invoke<string>('read_allowed_text', { path, maxBytes: 512_000 }); setText(content); setOriginalText(content); } catch (err) { setError(String(err)); setText(''); setOriginalText(''); } };
+  const save = async () => { if (!selectedPath || text === originalText || !capabilities.filesystem) return; if (!window.confirm(`Write changes to ${selectedPath}?\n\nOld/new text differs.`)) return; setError(null); try { await invoke('write_allowed_file', { path: selectedPath, content: text }); setOriginalText(text); await refresh(); } catch (err) { setError(String(err)); } };
+  const diffPreview = selectedPath && text !== originalText ? <details><summary>Diff preview</summary><pre style={{ maxHeight: 120, overflow: 'auto' }}>{`OLD\n${originalText}\nNEW\n${text}`}</pre></details> : null;
+  return <section className="card" style={{ marginTop: 12 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><h2 className="card-title" style={{ margin: 0 }}>Project</h2><select className="text-input" value={root} onChange={(event) => setRoot(event.target.value)}>{allowedRoots.map((path) => <option key={path} value={path}>{path}</option>)}</select><button className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={!root || loading}>Refresh</button></div>{error && <div className="chat-error">{error}</div>}<div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) 2fr', gap: 10, marginTop: 10 }}><div style={{ maxHeight: 260, overflow: 'auto' }}>{entries.map((entry) => <button key={entry.path} className="chat-conversation" style={{ display: 'block', width: '100%', textAlign: 'left' }} disabled={entry.kind === 'directory'} onClick={() => void openFile(entry.path)}>{entry.kind === 'directory' ? '📁 ' : '📄 '}{entry.name}</button>)}</div><div>{diffPreview}<textarea className="text-input" style={{ width: '100%', minHeight: 220, fontFamily: 'monospace' }} value={text} onChange={(event) => setText(event.target.value)} disabled={!selectedPath} placeholder="Select an allowlisted text file" />{selectedPath && <div style={{ display: 'flex', gap: 8, marginTop: 6 }}><code>{selectedPath}</code><button className="btn btn-primary btn-sm" onClick={() => void save()} disabled={!capabilities.filesystem || text === originalText}>Save after confirmation</button></div>}</div></div></section>;
+};
+
+const ChatPanel: React.FC = () => {
+  const state = useAgentStore();
+  const conversation = state.conversations.find((item) => item.id === state.activeConversationId);
+  return <div><div className="chat-layout"><aside className="card chat-sidebar"><button className="btn btn-primary" onClick={state.newConversation}>New conversation</button>{state.conversations.filter((item) => item.id).map((item) => <button key={item.id} className="chat-conversation" onClick={() => state.setActiveConversation(item.id)}>{item.title}</button>)}</aside><section className="card chat-panel"><div className="chat-toolbar"><select value={state.selectedMode} onChange={(event) => state.setSelectedMode(event.target.value as typeof state.selectedMode)}><option value="auto">Auto</option><option value="fast">Fast</option><option value="coding">Coding</option><option value="complex">Complex</option><option value="research">Research</option></select><input className="text-input" value={state.selectedModel} onChange={(event) => state.setSelectedModel(event.target.value)} placeholder="Model (auto)" /></div><div className="chat-messages">{conversation?.messages.map((message) => <div key={message.id} className={`chat-message ${message.role}`}><strong>{message.role === 'user' ? 'You' : 'Assistant'}</strong><div>{message.content}</div></div>)}</div>{state.chatError && <div className="chat-error">{state.chatError}<button className="btn btn-sm" onClick={state.clearChatError}>Clear</button><button className="btn btn-sm" onClick={state.retryChat}>Retry</button></div>}<textarea className="text-input chat-input" value={state.chatDraft} onChange={(event) => state.setChatDraft(event.target.value)} placeholder="Message" />{state.chatStreaming ? <button className="btn btn-danger" onClick={state.cancelChat}>Cancel</button> : <button className="btn btn-primary" onClick={state.sendChat} disabled={!state.chatDraft.trim()}>Send</button>}</section></div><ProjectPanel /></div>;
+};
+const ModelSettings: React.FC = () => {
+  const { serverUrl, authToken } = useAgentStore();
+  const [status, setStatus] = useState('Loading model catalog...');
+  const [models, setModels] = useState<Array<{ id: string; capabilities?: string[] }>>([]);
+  const refresh = async () => {
+    try {
+      const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/v1/models`, { headers: { Authorization: `Bearer ${authToken}` } });
+      if (!response.ok) throw new Error(`Catalog request failed (${response.status})`);
+      const body = (await response.json()) as { source?: string; models?: Array<{ id: string; capabilities?: string[] }> };
+      setModels(body.models ?? []);
+      setStatus(`Source: ${body.source ?? 'unknown'} · ${body.models?.length ?? 0} models`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Model catalog unavailable'); }
+  };
+  useEffect(() => { void refresh(); }, [serverUrl, authToken]);
+  return <div className="card" style={{ marginTop: 12 }}><h3 className="card-title">Model catalog</h3><p className="card-subtitle">{status}</p>{models.map((model) => <div key={model.id} className="log-entry"><span className="log-text">{model.id}</span><span className="log-time">{model.capabilities?.join(', ') ?? 'capabilities unavailable'}</span></div>)}<button className="btn btn-secondary btn-sm" onClick={() => void refresh()}>Refresh</button></div>;
+};
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'capabilities' | 'allowlist' | 'tasks' | 'logs' | 'settings'
+    'chat' | 'dashboard' | 'capabilities' | 'allowlist' | 'tasks' | 'logs' | 'settings'
   >('dashboard');
 
   const {
@@ -86,6 +127,7 @@ export const App: React.FC = () => {
 
       {/* Tabs */}
       <nav className="nav-tabs">
+        <button className={`tab-btn ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</button>
         <button
           className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
           onClick={() => setActiveTab('dashboard')}
@@ -126,6 +168,7 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="agent-content">
+        {activeTab === 'chat' && <ChatPanel />}
         {activeTab === 'dashboard' && (
           <div className="grid-2">
             <div className="card">
@@ -543,6 +586,7 @@ export const App: React.FC = () => {
         )}
 
         {activeTab === 'settings' && (
+          <>
           <div className="card" style={{ maxWidth: 600 }}>
             <h2 className="card-title">Pengaturan Agen & Server</h2>
             <p className="card-subtitle">
@@ -601,6 +645,8 @@ export const App: React.FC = () => {
               </div>
             </div>
           </div>
+          <ModelSettings />
+          </>
         )}
       </main>
     </div>

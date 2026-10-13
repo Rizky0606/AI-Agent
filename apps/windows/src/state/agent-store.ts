@@ -24,27 +24,26 @@ export interface DiagnosticLog {
   message: string;
 }
 
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; }
+export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; }
+
 export interface AgentState {
-  // Connection & Server
   serverUrl: string;
   authToken: string;
   connectionStatus: ConnectionStatus;
   lastConnectedAt: string | null;
-
-  // Device
   device: DeviceIdentity;
-
-  // Security & Capabilities
   capabilities: Record<CapabilityName, boolean>;
   allowedRoots: string[];
-
-  // Local Tasks
   tasks: LocalTaskEntry[];
-
-  // Diagnostics Logs
   logs: DiagnosticLog[];
-
-  // Actions
+  conversations: ChatConversation[];
+  activeConversationId: string;
+  chatDraft: string;
+  chatStreaming: boolean;
+  chatError: string | null;
+  selectedModel: string;
+  selectedMode: 'auto' | 'fast' | 'coding' | 'complex' | 'research';
   setServerUrl: (url: string) => void;
   setAuthToken: (token: string) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -60,6 +59,15 @@ export interface AgentState {
   addLog: (level: 'info' | 'warn' | 'error', message: string) => void;
   clearLogs: () => void;
   resetAllDefaults: () => void;
+  setChatDraft: (draft: string) => void;
+  setActiveConversation: (id: string) => void;
+  newConversation: () => void;
+  sendChat: () => void;
+  cancelChat: () => void;
+  retryChat: () => void;
+  clearChatError: () => void;
+  setSelectedModel: (model: string) => void;
+  setSelectedMode: (mode: AgentState['selectedMode']) => void;
 }
 
 export const createAgentStore = (
@@ -91,8 +99,24 @@ export const createAgentStore = (
 
     tasks: [],
     logs: [],
+    conversations: [{ id: '', title: 'New conversation', messages: [] }],
+    activeConversationId: '',
+    chatDraft: '',
+    chatStreaming: false,
+    chatError: null,
+    selectedModel: 'auto',
+    selectedMode: 'auto',
 
     setServerUrl: (url) => set({ serverUrl: url }),
+    setChatDraft: (chatDraft) => set({ chatDraft }),
+    setActiveConversation: (activeConversationId) => set({ activeConversationId }),
+    newConversation: () => { const id = crypto.randomUUID(); set((state) => ({ conversations: [{ id, title: 'New conversation', messages: [] }, ...state.conversations], activeConversationId: id })); },
+    sendChat: () => { const state = get(); if (!state.chatDraft.trim() || !activeConnection) return; const id = state.activeConversationId || crypto.randomUUID(); set({ activeConversationId: id, chatDraft: '', chatStreaming: true }); activeConnection.sendChatMessage({ type: 'chat.send', conversationId: id, content: state.chatDraft.trim(), model: state.selectedModel === 'auto' ? undefined : state.selectedModel, mode: state.selectedMode }); },
+    cancelChat: () => { activeConnection?.cancelChat(); set({ chatStreaming: false }); },
+    retryChat: () => undefined,
+    clearChatError: () => set({ chatError: null }),
+    setSelectedModel: (selectedModel) => set({ selectedModel }),
+    setSelectedMode: (selectedMode) => set({ selectedMode }),
     setAuthToken: (token) => set({ authToken: token }),
     setDevice: (device) => set({ device }),
     setConnectionStatus: (status) =>
@@ -127,6 +151,17 @@ export const createAgentStore = (
         executor: exec,
         onStatusChange: (status) => set({ connectionStatus: status }),
         onLogMessage: (level, msg) => get().addLog(level, msg),
+          onChatMessage: (frame) => set((current) => {
+            const conversationId = frame.conversationId ?? current.activeConversationId;
+            const conversations = current.conversations.map((conversation) => {
+              if (conversation.id !== conversationId) return conversation;
+              const id = frame.messageId ?? `assistant-${Date.now()}`;
+              const existing = conversation.messages.find((message) => message.id === id);
+              const content = frame.delta ? `${existing?.content ?? ''}${frame.delta}` : frame.content ?? existing?.content ?? '';
+              return { ...conversation, messages: existing ? conversation.messages.map((message) => message.id === id ? { ...message, content } : message) : [...conversation.messages, { id, role: 'assistant' as const, content }] };
+            });
+            return { conversations, chatStreaming: frame.type === 'message.delta', chatError: frame.type === 'error' ? frame.message ?? frame.code ?? 'Chat error' : current.chatError };
+          }),
       });
 
       await activeConnection.connect();

@@ -4,6 +4,17 @@ import type { DeviceIdentity } from './device-identity.ts';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
+export interface ChatFrame {
+  type: string;
+  conversationId?: string;
+  messageId?: string;
+  delta?: string;
+  content?: string;
+  code?: string;
+  message?: string;
+  usage?: Record<string, unknown>;
+}
+
 export interface AgentConnectionOptions {
   serverUrl: string;
   token: string;
@@ -13,6 +24,7 @@ export interface AgentConnectionOptions {
   maxReconnectAttempts?: number | undefined;
   onStatusChange?: ((status: ConnectionStatus) => void) | undefined;
   onLogMessage?: ((level: 'info' | 'warn' | 'error', message: string) => void) | undefined;
+  onChatMessage?: ((message: ChatFrame) => void) | undefined;
 }
 
 export interface InboundServerMessage {
@@ -35,6 +47,7 @@ export class AgentConnection {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private activeAbortControllers: Map<string, AbortController> = new Map();
+  private chatWs: WebSocket | null = null;
 
   constructor(options: AgentConnectionOptions) {
     this.options = options;
@@ -90,7 +103,8 @@ export class AgentConnection {
         try {
           const raw = typeof event.data === 'string' ? event.data : event.data.toString();
           const msg = JSON.parse(raw) as InboundServerMessage;
-          void this.handleServerMessage(msg);
+          if (msg.type.startsWith('message.') || msg.type === 'conversation.created' || msg.type === 'error') this.options.onChatMessage?.(msg as ChatFrame);
+          else void this.handleServerMessage(msg);
         } catch (err) {
           this.log(
             'warn',
@@ -224,7 +238,21 @@ export class AgentConnection {
       this.activeAbortControllers.delete(cmdId);
     }
   }
+  private sendChat(payload: Record<string, unknown>): void {
+    if (this.chatWs?.readyState === WebSocket.OPEN) this.chatWs.send(JSON.stringify(payload));
+  }
 
+  sendChatMessage(payload: Record<string, unknown>): void {
+    if (!this.chatWs || this.chatWs.readyState !== WebSocket.OPEN) {
+      const base = this.options.serverUrl.replace(/\/+$/, '').replace(/^http(s?):/i, 'ws$1:');
+      this.chatWs = new WebSocket(`${base}/v1/chat/ws?token=${encodeURIComponent(this.options.token)}`);
+      this.chatWs.onmessage = (event) => { try { this.options.onChatMessage?.(JSON.parse(String(event.data)) as ChatFrame); } catch { this.log('warn', 'Invalid chat frame received'); } };
+      this.chatWs.onerror = () => this.options.onChatMessage?.({ type: 'error', code: 'CHAT_CONNECTION', message: 'Chat connection failed' });
+      this.chatWs.onopen = () => this.sendChat(payload);
+    } else this.sendChat(payload);
+  }
+
+  cancelChat(messageId?: string): void { this.sendChat({ type: 'chat.cancel', ...(messageId ? { messageId } : {}) }); }
   private send(payload: Record<string, unknown>): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(payload));

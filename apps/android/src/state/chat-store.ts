@@ -1,9 +1,11 @@
 import { create } from 'zustand';
-import type { ChatMessage, MessageAttachment } from '../api/types.ts';
-
+import type { ChatMessage, ChatMode, MessageAttachment, ModelDescriptor } from '../api/types.ts';
 export interface ChatState {
   currentConversationId: string | null;
   messages: ChatMessage[];
+  models: ModelDescriptor[];
+  selectedModel: string;
+  selectedMode: ChatMode;
   isStreaming: boolean;
   streamingMessageId: string | null;
   streamingDelta: string;
@@ -11,8 +13,10 @@ export interface ChatState {
   draftAttachments: MessageAttachment[];
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
   error: string | null;
-
   // Actions
+  setModels: (models: ModelDescriptor[]) => void;
+  setSelectedModel: (model: string) => void;
+  setSelectedMode: (mode: ChatMode) => void;
   setConversationId: (id: string | null) => void;
   setMessages: (messages: ChatMessage[]) => void;
   appendMessage: (message: ChatMessage) => void;
@@ -34,6 +38,9 @@ export const createChatStore = () =>
   create<ChatState>((set) => ({
     currentConversationId: null,
     messages: [],
+    models: [],
+    selectedModel: 'auto',
+    selectedMode: 'auto',
     isStreaming: false,
     streamingMessageId: null,
     streamingDelta: '',
@@ -41,6 +48,10 @@ export const createChatStore = () =>
     draftAttachments: [],
     connectionStatus: 'disconnected',
     error: null,
+
+    setModels: (models) => set({ models }),
+    setSelectedModel: (selectedModel) => set({ selectedModel }),
+    setSelectedMode: (selectedMode) => set({ selectedMode }),
 
     setConversationId: (id) =>
       set({ currentConversationId: id, messages: [], streamingDelta: '', isStreaming: false }),

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -8,6 +8,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { defaultApiClient } from '../api/client.ts';
+import type { ModelCatalogResponse } from '../api/types.ts';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { theme } from '../components/Theme.ts';
 import { useHealth } from '../hooks/use-queries.ts';
@@ -29,7 +31,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const { fcmToken, pushNotificationsEnabled, setPushNotificationsEnabled, showToast } =
     useUiStore();
   const { data: health, isLoading: healthLoading } = useHealth();
+  const [catalog, setCatalog] = useState<ModelCatalogResponse | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const fcmStatus = defaultFcmService.getStatus();
+  const loadCatalog = async () => {
+    try { setCatalogError(null); setCatalog(await defaultApiClient.listModels()); } catch (error) { setCatalogError(error instanceof Error ? error.message : 'Model catalog unavailable'); }
+  };
+  useEffect(() => { void loadCatalog(); }, []);
 
   const handleTestDeepLink = (path: string) => {
     const target = DeepLinkService.parseUrl(`personal-ai://${path}`);
@@ -92,11 +100,21 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             <View style={styles.healthRow}>
               <Text style={styles.healthLabel}>API Gateway:</Text>
               <StatusPill status="connected" />
+
             </View>
           </View>
         ) : (
           <Text style={styles.offlineWarning}>Tidak dapat menghubungi server backend.</Text>
         )}
+      </View>
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>Model Catalog</Text>
+        <Text style={styles.infoTextMuted}>{catalog ? `Source: ${catalog.source}` : 'Loading model catalog...'}</Text>
+        {catalogError ? <Text style={styles.offlineWarning}>{catalogError}</Text> : null}
+        {catalog?.models.map((model) => <Text key={model.id} style={styles.infoText}>{model.id} · {model.capabilities.join(', ')}</Text>)}
+        <TouchableOpacity style={styles.deepLinkBtn} onPress={() => void defaultApiClient.refreshModels().then(setCatalog).catch((error) => setCatalogError(error instanceof Error ? error.message : 'Refresh failed'))}>
+          <Text style={styles.deepLinkBtnText}>Refresh models</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Notifications & FCM Point */}

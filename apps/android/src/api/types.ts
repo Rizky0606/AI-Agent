@@ -87,12 +87,21 @@ export interface ApprovalRecord {
 
 export interface ArtifactItem {
   id: string;
-  name: string;
-  type: 'file' | 'code' | 'markdown' | 'report';
-  sizeBytes?: number | undefined;
-  url?: string | undefined;
+  filename: string;
+  mimeType: string;
+  size: number;
+  checksum?: string | undefined;
+  version?: number | undefined;
+  projectId?: string | null | undefined;
+  conversationId?: string | null | undefined;
+  taskId?: string | null | undefined;
   createdAt: string;
-  taskId?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface ArtifactPreview {
+  content: string;
+  truncated: boolean;
 }
 
 export interface HealthResponse {
@@ -100,4 +109,19 @@ export interface HealthResponse {
   uptimeSeconds: number;
   database: 'connected' | 'disconnected';
   redis: 'connected' | 'disconnected';
+}
+
+export type ChatMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+
+export interface ModelDescriptor {
+  id: string;
+  provider: string;
+  capabilities: string[];
+  contextWindow?: number;
+  costMetadata?: Record<string, unknown>;
+}
+
+export interface ModelCatalogResponse {
+  source: 'live' | 'persisted';
+  models: ModelDescriptor[];
 }

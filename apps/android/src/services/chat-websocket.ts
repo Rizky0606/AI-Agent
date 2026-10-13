@@ -1,6 +1,6 @@
 import type { ApiClient } from '../api/client.ts';
 import { defaultApiClient } from '../api/client.ts';
-import type { ChatMessage, MessageAttachment } from '../api/types.ts';
+import type { ChatMessage, ChatMode, MessageAttachment } from '../api/types.ts';
 import { useChatStore } from '../state/chat-store.ts';
 
 export interface ChatWebSocketOptions {
@@ -117,6 +117,8 @@ export class ChatWebSocketClient {
     content: string;
     attachments?: MessageAttachment[] | undefined;
     model?: string | undefined;
+    mode?: ChatMode | undefined;
+    workspaceId?: string | undefined;
   }): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Chat WebSocket is not connected');
@@ -127,6 +129,8 @@ export class ChatWebSocketClient {
       content: params.content,
       attachments: params.attachments ?? [],
       model: params.model,
+      mode: params.mode ?? 'auto',
+      workspaceId: params.workspaceId,
       stream: true,
     };
 

@@ -81,27 +81,28 @@ impl PathAllowlistManager {
         self.validate_safe_path(candidate)?;
 
         let target = if candidate.exists() {
-            dunce::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf())
+            dunce::canonicalize(candidate).map_err(|_| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?
         } else {
-            // Normalize path by resolving parent
-            candidate.to_path_buf()
+            let parent = candidate.parent().ok_or_else(|| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?;
+            let canonical_parent = dunce::canonicalize(parent).map_err(|_| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?;
+            canonical_parent.join(candidate.file_name().ok_or_else(|| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?)
         };
 
         let roots = self.allowed_roots.read().unwrap();
-        if roots.is_empty() {
-            return Err(SecurityError::PathOutsideAllowlist(
+        if roots.iter().any(|root| target.starts_with(root)) {
+            Ok(target)
+        } else {
+            Err(SecurityError::PathOutsideAllowlist(
                 candidate.to_string_lossy().to_string(),
-            ));
+            ))
         }
-
-        for root in roots.iter() {
-            if target.starts_with(root) {
-                return Ok(target);
-            }
-        }
-
-        Err(SecurityError::PathOutsideAllowlist(
-            candidate.to_string_lossy().to_string(),
-        ))
     }
 }

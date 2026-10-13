@@ -1,15 +1,18 @@
 import { type TokenStorage, defaultTokenStorage } from '../storage/secure-store.ts';
 import { deriveWsUrl, getInitialApiUrl, getInitialWsUrl } from './config.ts';
-import type {
-  ApprovalRecord,
-  AuthResponse,
-  ChatMessage,
-  Conversation,
-  Device,
-  HealthResponse,
-  Project,
-  RefreshResponse,
-  User,
+import {
+  type ApprovalRecord,
+  type ArtifactItem,
+  type ArtifactPreview,
+  type AuthResponse,
+  type ChatMessage,
+  type Conversation,
+  type Device,
+  type HealthResponse,
+  type ModelCatalogResponse,
+  type Project,
+  type RefreshResponse,
+  type User,
 } from './types.ts';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
 
@@ -289,6 +292,35 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify({ role, content, metadata }),
     });
+  }
+
+  async listModels(): Promise<ModelCatalogResponse> {
+    return this.request<ModelCatalogResponse>('/v1/models');
+  }
+
+  async refreshModels(): Promise<ModelCatalogResponse> {
+    return this.request<ModelCatalogResponse>('/v1/models/refresh', { method: 'POST', body: '{}' });
+  }
+  async listArtifacts(projectId?: string): Promise<{ artifacts: ArtifactItem[] }> {
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    const response = await this.request<{ data: ArtifactItem[] }>(`/v1/artifacts${query}`);
+    return { artifacts: response.data };
+  }
+
+  async getArtifact(artifactId: string): Promise<{ artifact: ArtifactItem }> {
+    const response = await this.request<{ data: ArtifactItem }>(`/v1/artifacts/${artifactId}`);
+    return { artifact: response.data };
+  }
+
+  async previewArtifact(artifactId: string, maxBytes = 32_768): Promise<ArtifactPreview> {
+    const token = await this.storage.getAccessToken();
+    const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await fetch(`${this.baseUrl}/v1/artifacts/${encodeURIComponent(artifactId)}/download`, { headers });
+    if (!response.ok) {
+      throw new ApiError(response.status, 'ARTIFACT_PREVIEW_FAILED', `Preview failed (${response.status})`);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return { content: new TextDecoder().decode(bytes.slice(0, maxBytes)), truncated: bytes.byteLength > maxBytes };
   }
 
   // --- Tasks ---
