@@ -6,10 +6,10 @@ import type {
 } from '@personal-ai-os/evaluator';
 import type { RiskLevel } from '@personal-ai-os/permissions';
 
+export type AgentMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+export type ExecutionRuntime = 'sandbox' | 'windows_agent' | 'repo_runtime' | 'fast_model';
 export type AgentTaskIntent =
   'simple_chat' | 'coding' | 'research' | 'windows_local' | 'heavy_untrusted';
-
-export type ExecutionRuntime = 'fast_model' | 'repo_runtime' | 'windows_agent' | 'sandbox';
 
 export interface IntentAnalysisResult {
   intent: AgentTaskIntent;
@@ -59,6 +59,7 @@ export interface TaskPlan {
 
 export interface AgentRoute {
   intent: AgentTaskIntent;
+  mode: AgentMode;
   runtime: ExecutionRuntime;
   modelId: string;
   requiresWindowsAgent: boolean;
@@ -74,6 +75,7 @@ export interface AgentRoute {
 export interface RouterContext {
   userId: string;
   projectId?: string | undefined;
+  mode?: AgentMode | undefined;
   isWindowsOnline?: boolean | undefined;
   isSandboxAvailable?: boolean | undefined;
   preferredRuntimeId?: string | undefined;

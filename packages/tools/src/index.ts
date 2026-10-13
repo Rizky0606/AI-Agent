@@ -24,4 +24,5 @@ export * from './builtin/workspace-read-file.ts';
 export * from './builtin/web-search.ts';
 export * from './builtin/web-fetch.ts';
 export * from './builtin/browser-navigate.ts';
+export * from './registry/create-default-tool-registry.ts';
 export * from './builtin/save-artifact.ts';

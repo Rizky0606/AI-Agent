@@ -27,6 +27,9 @@ export class AgentRouter {
   route(prompt: string, context: RouterContext): RouteResolution {
     const analysis = this.analyzer.analyze(prompt);
     const plan = this.planner.createPlan(analysis, prompt);
+    const mode = context.mode ?? 'auto';
+    const intent =
+      mode === 'fast' ? 'simple_chat' : mode === 'coding' ? 'coding' : mode === 'research' ? 'research' : analysis.intent;
 
     let modelId = 'glm-4-flash';
     let requiresWindowsAgent = false;
@@ -35,7 +38,7 @@ export class AgentRouter {
     let reason = analysis.reasoning;
     let selectedRuntimeId: string | undefined = undefined;
 
-    switch (analysis.intent) {
+    switch (intent) {
       case 'simple_chat':
         modelId = context.modelPreferences?.fastModel ?? 'glm-4-flash';
         maxAttempts = 1;
@@ -70,7 +73,8 @@ export class AgentRouter {
     }
 
     const route: AgentRoute = {
-      intent: analysis.intent,
+      intent,
+      mode,
       runtime: analysis.recommendedRuntime,
       modelId,
       requiresWindowsAgent,
@@ -93,9 +97,9 @@ export class AgentRouter {
    */
   async routeWithHealth(prompt: string, context: RouterContext): Promise<RouteResolution> {
     const resolution = this.route(prompt, context);
-    const { route, analysis } = resolution;
+    const { route } = resolution;
 
-    if (!this.runtimeManager || analysis.intent !== 'coding') {
+    if (!this.runtimeManager || resolution.route.intent !== 'coding') {
       return resolution;
     }
 
