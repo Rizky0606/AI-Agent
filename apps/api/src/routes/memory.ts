@@ -15,6 +15,18 @@ interface AuthUser {
   email: string;
 }
 
+/**
+ * `:id` is a uuid. Without this, a path like `/v1/memories/search` reaches Postgres as a uuid
+ * literal and the driver fails with `22P02`, turning a bad request into a 500.
+ */
+const idParamsSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', format: 'uuid' } },
+  },
+} as const;
+
 export function registerMemoryRoutes(
   app: FastifyInstance,
   options: { memoryRepo: MemoryRepository; auth?: AuthService | undefined },
@@ -157,6 +169,7 @@ export function registerMemoryRoutes(
   // 4. Get memory by ID
   app.get(
     '/v1/memories/:id',
+    { schema: idParamsSchema },
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const user = await getUser(req);
       const item = await memoryRepo.getMemory(user.id, req.params.id);
@@ -172,6 +185,7 @@ export function registerMemoryRoutes(
   // 5. Correct memory
   app.patch(
     '/v1/memories/:id',
+    { schema: idParamsSchema },
     async (
       req: FastifyRequest<{
         Params: { id: string };
@@ -196,6 +210,7 @@ export function registerMemoryRoutes(
   // 6. Delete memory
   app.delete(
     '/v1/memories/:id',
+    { schema: idParamsSchema },
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const user = await getUser(req);
       const deleted = await memoryRepo.deleteMemory(user.id, req.params.id);

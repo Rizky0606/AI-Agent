@@ -146,6 +146,18 @@ test('Memory API: write policy, creation, correction, deletion, and context asse
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(getDeletedRes.statusCode, 404);
+
+  // A non-uuid `:id` must be rejected before it reaches the database. `/v1/memories/search`
+  // matched `/:id` and was passed to Postgres as a uuid literal, which failed with `22P02`
+  // and surfaced as a 500.
+  for (const method of ['GET', 'DELETE'] as const) {
+    const badIdRes = await app.inject({
+      method,
+      url: '/v1/memories/search',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(badIdRes.statusCode, 400, `${method} /v1/memories/search must be a 400`);
+  }
 });
 
 /**

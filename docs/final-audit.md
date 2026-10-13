@@ -118,7 +118,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - `docker compose restart api`, lalu `GET /v1/memories` → **`count=0`**. Memori hilang tanpa error, tanpa peringatan, tanpa log.
   - `docker exec personal-ai-os-postgres-1 psql ... -c "SELECT to_regclass('public.memories')"` → **null**. Tabel `memories` tidak ada. Produksi memiliki 18 tabel, dan `memories` bukan salah satunya.
   - `SELECT count(*) FROM memories` → `ERROR: relation "memories" does not exist`.
-  - `GET /v1/memories/search?q=...` → `404 Memory not found`, karena route `/v1/memories/:id` menangkapnya. Kontrak pencarian sebenarnya adalah `POST /v1/memories/search` (lihat di bawah).
+  - `GET /v1/memories/search?q=...` → `404 Memory not found`, karena route `/v1/memories/:id` menangkapnya. Kontrak pencarian sebenarnya adalah `POST /v1/memories/search` (lihat di bawah). Setelah fallback senyap dihapus, request yang sama menjadi `500 22P02` — bukti bahwa fallback itu memang menutupi error database, bukan menanganinya.
 - **Akar masalah**:
   - Tabel `memories` dideklarasikan di Drizzle (`apps/api/src/db/schema.ts:265`) termasuk `vector('embedding', {dimensions:1536})` (`:279`), tetapi **tidak ada `CREATE TABLE memories`** di seluruh migrasi `apps/api/src/db/migrations/` (berkas `0000`–`0006`). Schema dan migrasi menyimpang.
   - `DrizzleMemoryRepository` membungkus setiap operasi DB dengan `if (!this.db)` dan `try/catch`, sehingga kegagalan itu selalu jatuh diam-diam ke `InMemoryMemoryStore`. (Referensi baris dihapus karena kode itu sendiri sudah dihapus pada perbaikan di bawah.)
@@ -136,12 +136,13 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - `docker compose restart api` → `GET /v1/memories` → **`count=1`**. Persistensi lintas restart terbukti.
   - `SELECT count(*) FROM memories` di PostgreSQL → `1`, dan `\d memories` menunjukkan `vector(1536)` serta seluruh index dan constraint.
   - `POST /v1/memories/search` → `200` `{"data":[],"semanticSearchActive":false,"status":"inactive"}`.
+  - `GET`/`DELETE` `/v1/memories/search` (bukan uuid) → `400 VALIDATION_ERROR` `params/id must match format "uuid"`. Sebelum perbaikan keduanya `500` dengan `22P02` dari Postgres: `:id` tidak divalidasi, sehingga segmen path apa pun dikirim sebagai literal uuid ke driver.
 - **Yang masih terbuka di butir ini**:
   - **Pencarian semantik tetap tidak aktif, dan itu jujur.** `POST https://9router.ojixx.my.id/v1/embeddings` mengembalikan `{"error":{"message":"No credentials for provider: openai"}}`, jadi tidak ada provider embedding yang dapat menghasilkan vektor. `InactiveEmbeddingProvider` dipertahankan, `isSemanticSearchActive()` mengembalikan `false`, dan API menyatakan statusnya secara eksplisit. Kolom `vector(1536)` sudah siap, tetapi index ANN belum dibuat karena belum ada pencarian yang memakainya.
-  - `GET /v1/memories/search` masih `404`; kontraknya `POST`. Ini perilaku yang benar untuk method yang salah, bukan cacat, tetapi perlu diketahui klien.
+  - `GET /v1/memories/search` → `400`, bukan `404`. Method pencarian yang benar tetap `POST`; path itu memang cocok dengan `/:id`, dan sekarang ditolak di lapisan validasi alih-alih gagal di database.
   - **Retensi belum ditegakkan.** `retention` tersimpan dan divalidasi oleh check constraint, tetapi tidak ada sweeper yang menghapus data kedaluwarsa. Karena `permanent` adalah default dan satu-satunya nilai yang dipakai produksi saat ini, dampaknya nihil sampai ada pemanggil yang memakai nilai lain.
   - Tidak ada ekstraksi memori otomatis: `apps/agent-worker` tidak mengimpor `@personal-ai-os/memory`. Satu-satunya jalur tulis adalah `POST /v1/memories` dari klien.
-- **Bukti test regresi**: `apps/api/test/memory.test.ts` — `Memory API: database failures are not silently swallowed by an in-memory fallback`. Test ini memakai database palsu yang melempar `relation "memories" does not exist` dan menuntut error itu naik ke pemanggil. Sudah diverifikasi **gagal** bila `catch` fallback dikembalikan.
+- **Bukti test regresi**: `apps/api/test/memory.test.ts` — `Memory API: database failures are not silently swallowed by an in-memory fallback`. Test ini memakai database palsu yang melempar `relation "memories" does not exist` dan menuntut error itu naik ke pemanggil. Sudah diverifikasi **gagal** bila `catch` fallback dikembalikan. Test yang sama juga menuntut `GET`/`DELETE /v1/memories/search` → `400`; sudah diverifikasi **gagal** bila `schema` pada route `/:id` dihapus.
 
 ---
 
@@ -415,7 +416,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 dan 2 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 3 dan seterusnya masih terbuka.
 
 1. **Perbaiki pemulihan task — SELESAI (2026-10-13)**. `queue` kini diteruskan dan wajib; test regresi baru (`live-worker-execution.test.ts`) gagal bila queue tidak diteruskan; bukti live task `running` tanpa job → restart → `completed`.
-2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi. `GET /v1/memories/search` memang `404` karena kontraknya `POST`, bukan cacat.
+2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. `:id` pada route memory kini divalidasi sebagai uuid, sehingga `GET`/`DELETE /v1/memories/search` menjawab `400`, bukan `500`. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi.
 3. **Buat evaluator menilai bukti nyata** — ganti `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dengan lingkungan yang benar-benar menjalankan lint/typecheck/test/build, dan jangan biarkan `executeRegisteredTool` menulis `completed` tanpa evaluator.
 4. **Beri research jalur pencarian nyata** — daftarkan provider search yang sungguh-sungguh (SearXNG self-host atau API pihak ketiga) dan buat `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi.
 5. **Sambungkan dispatch perintah ke Windows Agent** — hubungkan `dispatchCommand` ke jalur task dengan approval, dan ganti identitas perangkat menjadi kriptografis (`devices.public_key` diisi dan diverifikasi).
