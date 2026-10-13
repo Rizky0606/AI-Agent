@@ -64,8 +64,13 @@ services:
       RUNTIME_BRIDGE_TOKEN: ${RUNTIME_BRIDGE_TOKEN:?RUNTIME_BRIDGE_TOKEN is required}
       ARTIFACTS_DIR: /app/data/artifacts
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # Per-task coding workspaces: real git repos the agent runs lint/typecheck/test/build in.
+      CODING_WORKSPACE_ROOT: /app/data/workspaces
     volumes:
       - ./data/artifacts:/app/data/artifacts
+      # Named volume, not a bind mount: a fresh install would otherwise hand the worker a
+      # root-owned host directory it cannot write task workspaces into.
+      - coding-workspaces:/app/data/workspaces
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
@@ -258,6 +263,7 @@ volumes:
   redis-data:
   caddy-data:
   caddy-config:
+  coding-workspaces:
 
 networks:
   # Internal network: isolated with no internet access (internal: true)

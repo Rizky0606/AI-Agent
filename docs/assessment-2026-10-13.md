@@ -181,13 +181,13 @@ Setiap milestone harus menghasilkan bukti yang dapat diulang. Tidak ada mileston
 | **M0. Koreksi kebenaran dokumen** | `docs/final-audit.md` dan `docs/capability-matrix.yaml` tidak lagi menyatakan LULUS untuk memory, recovery, evaluator, research, Windows dispatch, dan notifikasi. Setiap status punya bukti live atau diturunkan ke `partial`/`not_implemented`. Tanpa perubahan kode. |
 | **M1. Recovery task** | Task `running` yang ditinggal restart worker kembali dieksekusi otomatis tanpa duplikasi side effect. Test regresi memanggil `recoverInterruptedTasks(queue)` sungguhan dan gagal bila task tetap `running` setelah worker hidup. Reproduksi live: task `running/40` → restart → `completed`. |
 | **M2. Memory durable** | **SELESAI untuk persistensi (2026-10-13).** Migrasi `0007_memories.sql` + `vector(1536)` + 5 index; memori bertahan setelah restart API (create → restart → list masih 1, terverifikasi live). Fallback senyap ke `InMemoryMemoryStore` dihapus. `:id` divalidasi uuid, jadi `GET`/`DELETE /v1/memories/search` → `400`, bukan `500`. **Belum**: provider embedding (9Router tidak menyediakan) dan sweeper retention. |
-| **M3. Evaluator berbasis bukti** | `CodingEnvironment` produksi benar-benar menjalankan lint/typecheck/test/build di workspace task, dan `CodingEvaluator` menerima output nyata. Task coding tanpa bukti eksekusi **tidak boleh** mencapai `completed`. |
+| **M3. Evaluator berbasis bukti** | **SELESAI (2026-10-13).** `LocalCodingEnvironment` (`packages/agent-core/src/coding/local-environment.ts`) menjalankan `node --run lint/typecheck/test/build` di workspace per task; `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dihapus. Worker memberi setiap task coding workspace git sendiri di `CODING_WORKSPACE_ROOT=/app/data/workspaces` (named volume `coding-workspaces`). `executeRegisteredTool` menjalankan `GenericEvaluator` sebelum `completed`. Bukti live: workspace dengan `lint` keluar 1 → `failed` (`score 0.71`); workspace dengan script lulus → `completed` (`score 1`, artifact diff nyata). **Belum**: acceptance criteria belum dipersist sebelum eksekusi, sehingga `GenericEvaluator` pada jalur tool masih memakai kriteria default. |
 | **M4. Windows dispatch** | Task dengan `payload.targetDevice` mengirim `command.execute` melalui WSS ke device yang online, menerima hasil, menyimpannya sebagai artifact, dan melewati approval untuk aksi berisiko. Test: device offline → task masuk state transparan, bukan sukses palsu. |
 | **M5. Notifikasi + scheduler** | `NotificationEngine` memakai storage durable; task selesai/gagal menghasilkan baris `notifications` dengan delivery state. Scheduler tick jalan di salah satu proses dengan bukti slot idempoten di DB. FCM memakai token OAuth nyata dari service account, bukan literal. |
 | **M6. Research** | Satu provider search nyata terdaftar (keputusan pemilik: SearXNG self-host tanpa kredensial, atau API key pihak ketiga). Klaim riset terikat ke URL yang benar-benar di-fetch. `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi. |
 | **M7. Audit menyeluruh** | Setiap tool call, MCP call, browser action, dan artifact write menulis baris `audit_logs` dengan aktor, action, resource, hasil. Bukan `console.log`. |
 
-Ketergantungan: M1 dan M2 berdiri sendiri. M3 membutuhkan workspace eksekusi (M4 atau sandbox). M5 membutuhkan M1 agar event task dapat dipercaya. M7 sebaiknya menyertai M3–M6.
+Ketergantungan: M1 dan M2 berdiri sendiri. M3 kini membawa workspace eksekusinya sendiri (per task, di dalam volume worker), jadi ia tidak lagi menunggu M4. M5 membutuhkan M1 agar event task dapat dipercaya. M7 sebaiknya menyertai M3–M6.
 
 ---
 
@@ -217,4 +217,13 @@ docker exec personal-ai-os-postgres-1 psql -U personal_ai_os -d personal_ai_os \
 
 # 6. Katalog tool produksi
 #    GET /v1/catalog -> {"tools":[{"name":"web_fetch"}]}
+
+# 7. Evaluator menilai bukti nyata (M3)
+docker exec -u node personal-ai-os-worker-1 sh -c '
+  mkdir -p /app/data/workspaces/m3-fail && cd /app/data/workspaces/m3-fail &&
+  printf "process.exit(1);\n" > bad.mjs &&
+  printf "{\"name\":\"f\",\"private\":true,\"scripts\":{\"lint\":\"node bad.mjs\"}}\n" > package.json &&
+  git init --quiet && git add -A && git -c user.email=p@x -c user.name=p commit -qm init'
+# POST /v1/tasks {kind:"coding_task", payload:{workspaceDir:"/app/data/workspaces/m3-fail"}}
+#   -> status failed, evaluationResult.score=0.71, issue "Lint issue: Command failed: node --run lint"
 ```

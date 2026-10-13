@@ -35,6 +35,7 @@ import {
   IntentAnalyzer,
   Planner,
   ResearchAgent,
+  prepareCodingWorkspace,
   type ResearchEnvironment,
   type ResearchTaskInput,
   type RuntimeManager,
@@ -90,6 +91,8 @@ export interface TaskExecutorOptions {
   runtimeManager?: RuntimeManager | undefined;
   preferredRuntimeId?: string | undefined;
   codingAgent?: CodingAgent | undefined;
+  /** Parent directory for per-task coding workspaces. Each task gets its own git-initialised subdirectory. */
+  codingWorkspaceRoot?: string | undefined;
   researchAgent?: ResearchAgent | undefined;
   modelGateway?: ModelGateway | undefined;
   defaultModel?: string | undefined;
@@ -113,6 +116,7 @@ export class TaskExecutor {
   private readonly researchAgent: ResearchAgent;
   private readonly modelGateway?: ModelGateway | undefined;
   private readonly defaultModel?: string | undefined;
+  private readonly codingWorkspaceRoot: string;
 
   constructor(
     taskRepo: TaskRepository,
@@ -135,6 +139,8 @@ export class TaskExecutor {
     this.researchAgent = options?.researchAgent ?? new ResearchAgent();
     this.modelGateway = options?.modelGateway;
     this.defaultModel = options?.defaultModel;
+    this.codingWorkspaceRoot =
+      options?.codingWorkspaceRoot ?? process.env.CODING_WORKSPACE_ROOT ?? 'data/workspaces';
   }
 
   async execute(job: TaskJobData): Promise<void> {
@@ -400,6 +406,13 @@ export class TaskExecutor {
         (task.checkpoint?.actionState?.approvalId as string) ??
         (task.payload?.approvalId as string) ??
         undefined;
+      // A coding task runs against a real directory. Payloads that name one use it verbatim;
+      // otherwise the executor hands the task its own git-initialised workspace so the checks
+      // that follow execute for real instead of being answered by a stub.
+      const workspaceDir =
+        typeof task.payload?.workspaceDir === 'string'
+          ? task.payload.workspaceDir
+          : await prepareCodingWorkspace(this.codingWorkspaceRoot, task.id);
 
       const codingInput: CodingTaskInput = {
         taskId: task.id,
@@ -411,6 +424,7 @@ export class TaskExecutor {
           'Coding task execution',
         repoPath: (task.payload?.repoPath as string) ?? undefined,
         targetBranch: (task.payload?.targetBranch as string) ?? undefined,
+        workspaceDir,
         filesToModify:
           (task.payload?.filesToModify as Array<{ path: string; content: string }>) ?? undefined,
         mockEnvironment: (task.payload?.mockEnvironment as CodingEnvironment) ?? undefined,
@@ -620,13 +634,54 @@ export class TaskExecutor {
     const event = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', { tool: toolName, input: task.payload?.toolInput ?? {}, output: result.data, truncated: result.truncated });
     this.broadcaster.publish(event);
     const checkpoint = createVersionedCheckpoint({ version: (task.checkpoint?.version ?? 0) + 1, stepIndex: 2, totalSteps: 2, lastExecutedAction: `tool_call:${toolName}`, actionType: 'external_tool', verified: true, actionState: { output: result.data } });
+    // A tool call is evidence, not a verdict. The task is only complete once an evaluator has
+    // accepted what the tool actually returned.
+    const criteria: AcceptanceCriterion[] = (task.payload
+      ?.acceptanceCriteria as AcceptanceCriterion[]) ?? [
+      {
+        id: 'task_output',
+        description: 'Menghasilkan artefak output task yang valid',
+        category: 'generic',
+        required: true,
+        expectedEvidenceType: 'artifact',
+      },
+    ];
+    // Evidence is only attached when the tool actually produced something; a call that returned
+    // nothing must not be dressed up as an artifact.
+    const toolOutput = result.data;
+    const hasOutput = toolOutput !== undefined && toolOutput !== null;
+    const evaluationResult = new GenericEvaluator().evaluate(criteria, {
+      artifacts: hasOutput
+        ? [
+            {
+              title: `Task Output (tool_call:${toolName})`,
+              content: typeof toolOutput === 'string' ? toolOutput : JSON.stringify(toolOutput),
+            },
+          ]
+        : [],
+      outputs: hasOutput ? { tool: toolName, result: toolOutput } : {},
+      logs: [`Executed tool ${toolName}`, `Output truncated: ${result.truncated}`],
+    });
+    if (!evaluationResult.passed) {
+      const reason =
+        evaluationResult.completionBlockedReason ??
+        evaluationResult.remainingIssues[0] ??
+        'Evaluator menolak penyelesaian task tool tanpa bukti.';
+      await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', { error: reason });
+      const failEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.failed', {
+        error: reason,
+        evaluationResult,
+        retryable: false,
+      });
+      this.broadcaster.publish(failEvent);
+      return;
+    }
     await this.taskRepo.updateTaskProgress(task.userId, task.id, 100, checkpoint);
     await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed');
-    const completeEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { result: result.data, tool: toolName });
+    const completeEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { result: result.data, tool: toolName, evaluationResult });
     this.broadcaster.publish(completeEvent);
     defaultTracer.endSpan(span, { status: 'ok' });
   }
-
 
   /**
    * Real generic path: registered tool when named, otherwise a bounded model call through the

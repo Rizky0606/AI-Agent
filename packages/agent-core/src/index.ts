@@ -9,6 +9,7 @@ export * from './router/agent-router.ts';
 // Agents
 export * from './coding/coding-agent.ts';
 export * from './research/research-agent.ts';
+export * from './coding/local-environment.ts';
 
 // Skills
 export * from './skills/index.ts';

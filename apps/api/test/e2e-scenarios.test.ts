@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { after, before } from 'node:test';
 import { Redis } from 'ioredis';
 import postgres from 'postgres';
@@ -23,7 +26,7 @@ import {
   type TaskRepository,
   type TaskStatus,
 } from '@personal-ai-os/shared';
-import { CodingEvaluator } from '@personal-ai-os/evaluator';
+import { prepareCodingWorkspace } from '@personal-ai-os/agent-core';
 
 import { createAgentWorker } from '../../agent-worker/src/index.ts';
 import { TaskExecutor } from '../../agent-worker/src/task-executor.ts';
@@ -613,15 +616,25 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
   await app.listen({ port: 0, host: '127.0.0.1' });
   const port = (app.server.address() as { port: number }).port;
 
-  // Start Worker with real CodingEvaluator
+  // Real checks run against a real directory, so the fixture supplies scripts that actually pass.
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'aios-e2e-coding-'));
+  const fixtureWorkspace = await prepareCodingWorkspace(fixtureRoot, 'scenario-2');
+  const passingScript = 'node -e "process.exit(0)"';
+  await writeFile(
+    join(fixtureWorkspace, 'package.json'),
+    JSON.stringify({
+      name: 'e2e-coding-fixture',
+      private: true,
+      scripts: { lint: passingScript, typecheck: passingScript, test: passingScript, build: passingScript },
+    }),
+  );
+
   const workerHandle = createAgentWorker({
     redisUrl: REDIS_URL,
     queueName,
     taskRepo: taskRepo as never,
     broadcaster,
-    executorOptions: {
-      codingEvaluator: new CodingEvaluator(),
-    },
+    executorOptions: { codingWorkspaceRoot: fixtureRoot },
   });
 
   try {
@@ -658,6 +671,7 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
           category: 'coding',
           title: 'Implement unit tests',
           instructions: 'Implement unit tests for calculator service',
+          workspaceDir: fixtureWorkspace,
           filesToModify: [
             {
               path: 'src/calc.ts',

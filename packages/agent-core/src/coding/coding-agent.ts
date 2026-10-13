@@ -12,6 +12,7 @@ import type {
   GitInspectionResult,
   RepairAttemptProof,
 } from '../types.ts';
+import { LocalCodingEnvironment } from './local-environment.ts';
 
 export interface CodingEnvironment {
   getGitStatus(): Promise<{ clean: boolean; branch: string; uncommittedFiles: string[] }>;
@@ -22,8 +23,8 @@ export interface CodingEnvironment {
   runTypecheck(): Promise<{ passed: boolean; output: string }>;
   runTests(): Promise<{
     passed: boolean;
-    passedCount: number;
-    failedCount: number;
+    passedCount?: number | undefined;
+    failedCount?: number | undefined;
     output: string;
   }>;
   runBuild(): Promise<{ passed: boolean; output: string }>;
@@ -38,6 +39,8 @@ export interface CodingTaskInput {
   userId: string;
   projectId?: string | undefined;
   instructions: string;
+  /** Real directory the workflow executes in. Ignored when `mockEnvironment` is supplied. */
+  workspaceDir?: string | undefined;
   repoPath?: string | undefined;
   targetBranch?: string | undefined;
   filesToModify?: Array<{ path: string; content: string }> | undefined;
@@ -87,7 +90,11 @@ export class CodingAgent {
   }
 
   async execute(input: CodingTaskInput): Promise<CodingExecutionReport> {
-    const env = input.mockEnvironment ?? this.createDefaultEnvironment();
+    const env: CodingEnvironment =
+      input.mockEnvironment ??
+      new LocalCodingEnvironment({
+        workspaceDir: input.workspaceDir ?? this.config.workspaceRoot,
+      });
     let currentStage: CodingWorkflowStage = 'understand';
     const repairProofs: RepairAttemptProof[] = [];
     const modifiedFiles: string[] = [];
@@ -408,38 +415,6 @@ export class CodingAgent {
       artifacts,
       limitations: [],
       nextSteps: ['Review hasil pada diff artifact atau picu pipeline deploy jika diperlukan.'],
-    };
-  }
-
-  private createDefaultEnvironment(): CodingEnvironment {
-    return {
-      async getGitStatus() {
-        return { clean: true, branch: 'master', uncommittedFiles: [] };
-      },
-      async createIsolatedBranch() {},
-      async readFile() {
-        return '';
-      },
-      async writeFile() {},
-      async runLint() {
-        return { passed: true, output: 'ESLint clean' };
-      },
-      async runTypecheck() {
-        return { passed: true, output: 'tsc --noEmit passed' };
-      },
-      async runTests() {
-        return { passed: true, passedCount: 1, failedCount: 0, output: 'All tests passed' };
-      },
-      async runBuild() {
-        return { passed: true, output: 'Build succeeded' };
-      },
-      async getDiff() {
-        return {
-          diffSummary: 'No changes',
-          fullDiff: '',
-          changedFiles: [],
-        };
-      },
     };
   }
 }

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Redis } from 'ioredis';
 import {
   type TaskCheckpoint,
@@ -16,6 +19,7 @@ import {
   SecuredCapabilityGuard,
 } from '@personal-ai-os/permissions';
 import { PLACEHOLDER_WORKER_LABEL, TaskExecutor, createAgentWorker } from '../src/index.ts';
+import { prepareCodingWorkspace } from '@personal-ai-os/agent-core';
 import {
   InMemoryTaskEventBroadcaster,
   RedisTaskEventBroadcaster,
@@ -446,6 +450,43 @@ test('Worker executes explicit toolName through ToolRegistry and persists result
   assert.deepEqual(repo.events.find((event) => event.eventType === 'task.tool_call')?.payload.output, { echoed: 'ok' });
 });
 
+test('Registered tool that returns no output cannot complete the task', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const registry = new ToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
+  const silent: ToolDefinition<{ value: string }, undefined> = {
+    name: 'test_silent',
+    description: 'returns nothing',
+    capability: 'tool:test',
+    resourceScope: 'workspace',
+    riskLevel: 'LOW',
+    action: 'tool:read',
+    timeoutMs: 1000,
+    supportsCancellation: true,
+    outputLimitBytes: 4096,
+    inputValidator: () => ({ valid: true, data: { value: 'x' } }),
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async () => undefined,
+  };
+  registry.registerTool(silent);
+  const { task } = await repo.createTask({ userId: 'user-silent', projectId: 'proj-silent', kind: 'generic_task', payload: { toolName: 'test_silent' } });
+  const executor = new TaskExecutor(repo, broadcaster, { registry });
+
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 1 });
+
+  assert.equal((await repo.getTask(task.userId, task.id))?.status, 'failed');
+  const failEvent = repo.events.find((e) => e.eventType === 'task.failed');
+  assert.equal(
+    (failEvent?.payload?.evaluationResult as { passed?: boolean } | undefined)?.passed,
+    false,
+  );
+  assert.equal(
+    repo.events.some((e) => e.eventType === 'task.completed'),
+    false,
+    'A tool that produced no output must not emit task.completed',
+  );
+});
+
 test('Registered tool waits for approval then resumes through validator exactly once', async () => {
   const repo = new TestTaskRepo();
   const broadcaster = new InMemoryTaskEventBroadcaster();
@@ -596,10 +637,26 @@ test('Approval stops HIGH/CRITICAL action at waiting_approval and resumes exact 
 // ============================================================================
 // 5. Real Agents (Coding & Research) execute without PLACEHOLDER_WORKER_LABEL
 // ============================================================================
+/**
+ * A throwaway git workspace whose check scripts are real commands. `exitCode` decides whether
+ * they pass, which is what lets a test drive the evaluator down either branch.
+ */
+async function createCodingWorkspaceFixture(exitCode: number): Promise<{ root: string; workspaceDir: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'aios-coding-'));
+  const workspaceDir = await prepareCodingWorkspace(root, 'fixture');
+  const script = `node -e "process.exit(${exitCode})"`;
+  await writeFile(
+    join(workspaceDir, 'package.json'),
+    JSON.stringify({ name: 'fixture', private: true, scripts: { lint: script, typecheck: script, test: script, build: script } }),
+  );
+  return { root, workspaceDir };
+}
+
 test('Real coding task executes with CodingAgent & CodingEvaluator without placeholder label', async () => {
   const repo = new TestTaskRepo();
   const broadcaster = new InMemoryTaskEventBroadcaster();
-  const executor = new TaskExecutor(repo, broadcaster);
+  const fixture = await createCodingWorkspaceFixture(0);
+  const executor = new TaskExecutor(repo, broadcaster, { codingWorkspaceRoot: fixture.root });
 
   const { task } = await repo.createTask({
     userId: 'user-coder',
@@ -607,7 +664,7 @@ test('Real coding task executes with CodingAgent & CodingEvaluator without place
     kind: 'coding_task',
     payload: {
       instructions: 'Fix memory leak in buffer pooling',
-      repoPath: 'packages/memory',
+      workspaceDir: fixture.workspaceDir,
       filesToModify: [{ path: 'src/pool.ts', content: 'export const pool = new Map();' }],
     },
   });
@@ -634,6 +691,70 @@ test('Real coding task executes with CodingAgent & CodingEvaluator without place
     assert.equal(evt.payload?.placeholder, undefined);
     assert.notEqual(evt.payload?.note, PLACEHOLDER_WORKER_LABEL);
   }
+});
+
+test('Coding task is failed when the real checks fail', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const fixture = await createCodingWorkspaceFixture(1);
+  const executor = new TaskExecutor(repo, broadcaster, { codingWorkspaceRoot: fixture.root });
+
+  const { task } = await repo.createTask({
+    userId: 'user-coder-fail',
+    projectId: 'proj-coder-fail',
+    kind: 'coding_task',
+    payload: {
+      instructions: 'Refactor pooling without breaking the build',
+      workspaceDir: fixture.workspaceDir,
+      filesToModify: [{ path: 'src/pool.ts', content: 'export const pool = new Map();' }],
+    },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 1,
+  });
+
+  const failedTask = await repo.getTask(task.userId, task.id);
+  assert.equal(failedTask?.status, 'failed', 'A failing check must not be reported as completion');
+  const failEvent = repo.events.find((e) => e.taskId === task.id && e.eventType === 'task.failed');
+  assert.ok(failEvent, 'Must emit task.failed when the real checks fail');
+  const evaluation = failEvent.payload?.evaluationResult as { passed?: boolean } | undefined;
+  assert.equal(evaluation?.passed, false);
+});
+
+test('Coding task gets its own git workspace when the payload names none', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const root = await mkdtemp(join(tmpdir(), 'aios-coding-root-'));
+  const executor = new TaskExecutor(repo, broadcaster, { codingWorkspaceRoot: root });
+
+  const { task } = await repo.createTask({
+    userId: 'user-coder-ws',
+    projectId: 'proj-coder-ws',
+    kind: 'coding_task',
+    payload: { instructions: 'Tulis satu file', filesToModify: [{ path: 'src/a.ts', content: 'export const a = 1;' }] },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 1,
+  });
+
+  const workspaceDir = join(root, task.id);
+  assert.equal(await readFile(join(workspaceDir, 'src/a.ts'), 'utf8'), 'export const a = 1;');
+  await stat(join(workspaceDir, '.git'));
+  // The scratch workspace has no lint/typecheck/test/build scripts, so the honest verdict is a
+  // failure rather than a fabricated success.
+  assert.equal((await repo.getTask(task.userId, task.id))?.status, 'failed');
 });
 
 test('Real research task executes with ResearchAgent & ResearchEvaluator without placeholder label', async () => {

@@ -3,7 +3,7 @@
 **Tanggal Audit**: 2026-10-11, diperbarui 2026-10-13  
 **Auditor**: Principal Software Architect & Security Engineer  
 **Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
-**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery) dan persistensi memori pada butir 5 **sudah diperbaiki dan diverifikasi live** pada tanggal yang sama. Butir 5 tetap **SEBAGIAN**, bukan LULUS: pencarian semantik belum punya provider embedding dan retensi belum ditegakkan. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": masih ada 2 cacat fungsional terbuka — evaluator tanpa bukti nyata (butir 8) dan tidak adanya jalur dispatch perintah ke Windows Agent (butir 11).
+**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery), persistensi memori pada butir 5, dan eksekusi coding berbasis workspace nyata pada butir 7 **sudah diperbaiki dan diverifikasi live** pada tanggal yang sama. Butir 5 dan 7 tetap **SEBAGIAN**, bukan LULUS: pencarian semantik belum punya provider embedding, retensi belum ditegakkan, dan research masih tanpa jalur pencarian. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": cacat fungsional yang masih terbuka adalah research tanpa jalur pencarian (butir 7) dan tidak adanya jalur dispatch perintah ke Windows Agent (butir 11).
 
 ---
 
@@ -15,8 +15,8 @@ Quality gates dijalankan pada checkout `release/installers` (Linux aarch64), buk
 
 - **Linter (`pnpm lint`)**: 14/14 paket **LULUS** (0 error, 0 warning).
 - **Production Build (`pnpm build`)**: 14/14 paket **LULUS**.
-- **Verifikasi referensi path (`pnpm verify:audit`)**: 88 path unik valid (147 referensi diperiksa).
-- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 30/30, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 5/5, API in-container 51/51 (0 skipped).
+- **Verifikasi referensi path (`pnpm verify:audit`)**: 88 path unik valid (145 referensi diperiksa).
+- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 33/33, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 5/5, `@personal-ai-os/agent-core` 34/34, `@personal-ai-os/evaluator` 9/9, API in-container 51/51 (0 skipped).
 - **Catatan penting tentang Skenario 4**: test `apps/api/test/e2e-scenarios.test.ts:868-914` yang diklaim membuktikan pemulihan task **tidak memanggil `recoverInterruptedTasks` sama sekali**. Ia memanggil `executor.execute()` secara langsung dan menaikkan counter yang di-hardcode di dalam test. Test tersebut tidak dapat gagal karena perilaku sistem apa pun, sehingga lulusnya test itu tidak membuktikan apa pun tentang recovery. Lihat Butir 3.
 - **Catatan tentang `pnpm test` di root**: perintah itu tidak dapat dipakai; task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite harus dijalankan per paket.
 
@@ -164,40 +164,42 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 7: Coding dan Research Menghasilkan Bukti, Laporan, Artefak
 
-- **Status**: **GAGAL** (sebelumnya dinyatakan LULUS)
+- **Status**: **SEBAGIAN** (sebelumnya GAGAL; jalur coding kini berjalan nyata, jalur research masih tanpa pencarian)
 - **Persyaratan**: Coding Agent dan Research Agent mengikuti workflow terstruktur dan menghasilkan bukti terverifikasi (diff, test output, sitasi, report artifact).
 - **Bukti File Relatif**:
   - `packages/agent-core/src/coding/coding-agent.ts`: Workflow tahap: understand → inspect → plan → implement → test → debug → review_diff → document → report.
   - `packages/agent-core/src/research/research-agent.ts`: Workflow: decompose → search → browse → extract → cross-check → score → synthesize → cite → report.
   - `packages/tools/src/artifacts/`: Penyimpanan artefak hasil eksekusi task.
-- **Bukti bahwa coding tidak menghasilkan bukti nyata**:
-  - `CodingAgent` memakai `input.mockEnvironment ?? this.createDefaultEnvironment()` (`packages/agent-core/src/coding/coding-agent.ts:90`).
-  - `createDefaultEnvironment()` mengembalikan `{ passed: true }` untuk `runLint`, `runTypecheck`, `runTests`, dan `runBuild` (`:414-438`), dengan output literal seperti `'ESLint clean'` dan `'All tests passed'`.
-  - Worker selalu memakai default itu: `new CodingAgent(undefined, undefined, this.guard)` (`apps/agent-worker/src/task-executor.ts:134`).
-  - Akibat: tidak ada satu pun perintah lint/typecheck/test/build yang dijalankan oleh sistem produksi. "Bukti" yang dinilai evaluator adalah string yang ditulis di dalam kode.
+- **Bukti bahwa coding kini menghasilkan bukti nyata (2026-10-13)**:
+  - `packages/agent-core/src/coding/local-environment.ts` (baru): `LocalCodingEnvironment` menjalankan `git status`/`branch`, menulis file, dan menjalankan `node --run lint|typecheck|test|build` di direktori workspace nyata; setiap perintah punya timeout dan output terpotong sebelum disimpan.
+  - `CodingAgent.execute` memakai `input.mockEnvironment ?? new LocalCodingEnvironment({ workspaceDir: input.workspaceDir ?? this.config.workspaceRoot })` (`packages/agent-core/src/coding/coding-agent.ts:92-97`). `createDefaultEnvironment()` yang mengembalikan `{passed:true}` hardcoded **dihapus**.
+  - `prepareCodingWorkspace(root, taskId)` membuat direktori per task di dalam root terkunci (`mkdir` 0o700, `realpath`, cek containment, `git init`), dan `git` dijalankan dengan `safe.directory` yang di-scope ke direktori itu saja — bukan `*`.
+  - Worker memberi setiap task coding workspace sendiri: `CODING_WORKSPACE_ROOT=/app/data/workspaces` (named volume `coding-workspaces`, dibuat di image dengan owner `node`), dipakai via `prepareCodingWorkspace(this.codingWorkspaceRoot, task.id)` (`apps/agent-worker/src/task-executor.ts:409-415`).
+  - Bukti live 2026-10-13 (task `a5776358-f9d2-40f3-be71-13e6ba4f5276`, workspace dengan script lulus): `completed`, progress 100, `artifact-diff-…` memuat diff git nyata `+export const helper = (n) => n + 1;`.
+  - Bukti live (task `3f5aeee2-225c-4b4c-ba87-8d31aa5b8c92`, workspace dengan `lint` `exit 1`): `failed`, `evaluationResult.score=0.71`, isu `Lint issue: Command failed: node --run lint`.
 - **Bukti bahwa research tidak punya jalur pencarian**:
   - `web_search` default menembak `https://example.com/search?q=…` (`packages/tools/src/builtin/web-search.ts:64`) dan **tidak terdaftar di registry mana pun** (`packages/tools/src/registry/create-default-tool-registry.ts:20` hanya mendaftarkan `web_fetch`).
   - `ResearchAgent` tanpa env memakai sumber hardcoded MDN/nodejs.org (`packages/agent-core/src/research/research-agent.ts:99-115`) dan claim hardcoded (`:135-158`) yang lolos evaluator.
   - Tahap `browse` dideklarasikan (`packages/agent-core/src/types.ts:172-180`) tetapi tidak pernah diset; `fetchContent` tidak pernah dipanggil.
   - `ResearchEvaluator` hanya menghitung field (`packages/evaluator/src/research-evaluator.ts`); ia tidak pernah mem-fetch URL untuk memverifikasi sumber.
-- **Yang benar-benar bekerja**: `web_fetch` nyata (SSRF guard + HTTP fetch asli), `ArtifactManager` menyimpan hasil dengan checksum sha256, dan alur tahap coding/research terdeklarasi sebagai tipe. Yang tidak ada adalah eksekusi dan verifikasinya.
+- **Yang benar-benar bekerja**: jalur coding kini mengeksekusi perintah nyata di workspace nyata dan menyerahkan hasilnya ke `CodingEvaluator`; `web_fetch` nyata (SSRF guard + HTTP fetch asli); `ArtifactManager` menyimpan hasil dengan checksum sha256. Yang belum ada: jalur pencarian research dan verifikasi URL oleh `ResearchEvaluator`.
 
 ---
 
 ### Butir 8: Evaluator Menentukan Completion
 
-- **Status**: **SEBAGIAN** (sebelumnya dinyatakan LULUS)
+- **Status**: **SEBAGIAN** (sebelumnya dinyatakan LULUS; jalur tool kini digerbangi, acceptance criteria belum dipersist)
 - **Persyaratan**: Agen dilarang menyatakan tugas selesai berdasarkan klaim verbal mandiri; penyelesaian ditentukan secara independen oleh Evaluator engine berbasis bukti eksekusi tooling.
 - **Bukti File Relatif**:
   - `packages/evaluator/src/coding-evaluator.ts`: Evaluasi objektif berbasis 7 kriteria nyata (lint, typecheck, tests, build, security, requirement coverage, diff).
   - `packages/evaluator/src/research-evaluator.ts`: Evaluasi kelengkapan sitasi, kredibilitas sumber, dan konsistensi klaim.
   - `packages/agent-core/src/coding/coding-agent.ts`: Task hanya berstatus 'completed' jika evaluasi memenuhi skor 100%.
-- **Bukti live 2026-10-13 (menunjukkan cacat)**:
-  - `executeRegisteredTool` menulis status `completed` **tanpa memanggil evaluator sama sekali** (`apps/agent-worker/src/task-executor.ts:624`). Jalur ini yang dipakai semua task `generic_task` dengan `payload.toolName`, termasuk smoke browser dan MCP.
-  - Test `apps/agent-worker/test/worker.test.ts:184-195` justru **membuktikan** hal itu: task mencapai `completed` melalui jalur tool tanpa evaluator.
-  - `apps/api/test/e2e-scenarios.test.ts:623` meneruskan opsi `codingEvaluator` yang **bukan field `TaskExecutorOptions`**, sehingga opsi itu diabaikan.
-- **Yang benar-benar bekerja**: evaluator memang dipanggil pada jalur coding/research/standard (`apps/agent-worker/src/task-executor.ts:977,1005,1036`), dan `GenericEvaluator` menolak hasil tanpa artifact/output. `packages/agent-core/test/evaluator-gating.test.ts` membuktikan penolakan klaim mandiri pada jalur itu.
-- **Keterbatasan yang membuat status turun ke SEBAGIAN**: evaluator hanya bisa menentukan completion bila ia dijalankan, dan bukti yang ia nilai pada jalur coding berasal dari lingkungan mock (lihat Butir 7). Acceptance criteria juga tidak pernah dipersist sebelum eksekusi: `TaskCheckpoint` tidak punya field kriteria (`packages/shared/src/tasks/types.ts:13-24`), sedangkan `acceptanceCriteria` di `packages/agent-core/src/router/planner.ts:31-116,150-216` hanya string plan yang tidak pernah dikonsumsi evaluator.
+- **Bukti live 2026-10-13**:
+  - `executeRegisteredTool` kini menjalankan `GenericEvaluator` atas hasil tool sebelum menulis `completed` (`apps/agent-worker/src/task-executor.ts:637-674`). Bukti hanya dilampirkan bila tool benar-benar mengembalikan data; tool yang mengembalikan `undefined`/`null` tidak boleh `completed` (test "Registered tool that returns no output cannot complete the task").
+  - Bukti coding nyata: task `a5776358-…` → `completed`, `evaluationResult.passed=true`, `score=1`; task `3f5aeee2-…` → `failed`, `score=0.71`, kriteria lint gagal karena `node --run lint` keluar 1.
+  - `apps/api/test/e2e-scenarios.test.ts` Skenario 2 kini menjalankan evaluator atas workspace nyata (fixture dengan script yang benar-benar lulus) dan tidak lagi meneruskan opsi `codingEvaluator` yang diabaikan.
+- **Yang benar-benar bekerja**: evaluator dipanggil pada keempat jalur (coding, research, standard, tool) dan menolak klaim mandiri tanpa artefak/output. `packages/agent-core/test/evaluator-gating.test.ts` membuktikan penolakan itu.
+- **Keterbatasan yang membuat status tetap SEBAGIAN**: acceptance criteria belum pernah dipersist sebelum eksekusi — `TaskCheckpoint` tidak punya field kriteria (`packages/shared/src/tasks/types.ts:13-24`), sedangkan `acceptanceCriteria` di `packages/agent-core/src/router/planner.ts:31-116,150-216` hanya string plan yang tidak dikonsumsi evaluator. Pada jalur tool, `GenericEvaluator` memakai kriteria default `task_output` dan menerima artifact apa pun sebagai bukti; ia belum memeriksa apakah output tool memenuhi permintaan pengguna.
 
 ---
 
@@ -342,7 +344,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **Queue / cancel / checkpoint / recovery**       | **LULUS**    | Queue, cancel, dan checkpoint bekerja. **Recovery diperbaiki 2026-10-13**: `createAgentWorker` kini membuat `BullMqTaskQueue` dan mengembalikannya sebagai `queue`, `startWorkerProcess` melewatkannya ke `recoverInterruptedTasks`, dan parameter itu menjadi wajib sehingga panggilan tanpa queue tidak lagi dikompilasi. Bukti live: task `running`/40 tanpa job di Redis → restart worker → `recoveredCount: 1` → `completed`/100. Lihat Butir 3. |
 | **Windows device identity + allowlist**          | **SEBAGIAN** | Path allowlist dan capability registry nyata dan ditegakkan. Identitas perangkat **bukan** kriptografis (`devices.public_key` tidak pernah diisi; `deviceId` dari query string), tidak ada allowlist teks-perintah/biner, dan `dispatchCommand` nol pemanggil sehingga tidak ada jalur produksi task → perangkat. Lihat Butir 11. |
 | **MCP / tools / browser ber-permission & audit** | **SEBAGIAN** | Permission **lulus**: semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit tidak lulus**: `audit_logs` produksi hanya 10 baris keputusan approval; tool call, MCP call, browser action, dan artifact write tidak tercatat. MCP audit hanya `console.log`. Lihat Butir 12. |
-| **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada jalur coding/research/standard dan menolak klaim mandiri di jalur itu. Namun `executeRegisteredTool` menulis `completed` **tanpa evaluator** (`apps/agent-worker/src/task-executor.ts:624`), dan bukti coding berasal dari lingkungan mock `{passed:true}` hardcoded. Lihat Butir 7 dan 8. |
+| **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada keempat jalur (coding, research, standard, tool). **Jalur tool diperbaiki 2026-10-13**: `executeRegisteredTool` menjalankan `GenericEvaluator` atas hasil tool sebelum menulis `completed`, dan tidak melampirkan bukti palsu bila tool mengembalikan `null`/`undefined` (`apps/agent-worker/src/task-executor.ts:637-674`). **Bukti coding kini nyata**: `LocalCodingEnvironment` menjalankan `node --run lint/typecheck/test/build` di workspace per task; bukti live task `3f5aeee2-…` → `failed` (`score 0.71`, lint keluar 1), task `a5776358-…` → `completed` (`score 1`). Sisa: acceptance criteria belum dipersist sebelum eksekusi. Lihat Butir 7 dan 8. |
 | **Approval terikat aksi spesifik**               | **LULUS**    | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence` di `apps/api/src/routes/approvals.ts`.                                                                                |
 | **Scheduler & Event Deduplication**              | **SEBAGIAN** | Idempotency key dan dedupe window ada, `EventEngine` tidak dapat dispatch tanpa `PermissionEngine`. Namun `NotificationEngine` di API dibuat **tanpa storage** (`apps/api/src/index.ts:211`), `SqlNotificationRepository` tidak pernah diinstansiasi, dan `notifications` produksi berisi **0 baris**. Lihat Butir 10. |
 | **FCM Push Notification Live Kredensial**        | **GAGAL**    | Bukan sekadar menunggu kredensial. `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` hardcoded ketika service account tersedia, sehingga pengiriman akan selalu gagal `401` bahkan setelah kredensial nyata disuntikkan. Tidak ada alur OAuth token dari service account. |
@@ -360,7 +362,7 @@ Suite ini dijalankan dengan komponen nyata (Fastify nyata, Redis BullMQ nyata, W
 | No  | Skenario                                                                               | Status test | Apakah membuktikan klaimnya? | Catatan bukti                                                                                                                                                                                   |
 | :-- | :------------------------------------------------------------------------------------- | :---------- | :--------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | Register/login, chat streaming via WebSocket                                           | LULUS       | **Ya**                       | WebSocket `/v1/chat/ws` menerima token delta streaming dari `LocalFake9RouterServer`.                                                                                   |
-| 2   | Buat task → worker eksekusi → event realtime → Evaluator completed                      | LULUS       | **Tidak sepenuhnya**         | Task coding memang lewat Redis BullMQ dan `task.completed` diterima. Tetapi evaluator menilai bukti dari lingkungan mock yang mengembalikan `{passed:true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`), dan `apps/api/test/e2e-scenarios.test.ts:623` meneruskan opsi `codingEvaluator` yang bukan field `TaskExecutorOptions`. Jadi "7 kriteria nyata" tidak dijalankan. |
+| 2   | Buat task → worker eksekusi → event realtime → Evaluator completed                      | LULUS       | **Ya**                       | Task coding lewat Redis BullMQ, `task.completed` diterima, dan evaluator kini menilai bukti dari workspace nyata: Skenario 2 membuat fixture git dengan script `lint/typecheck/test/build` yang benar-benar lulus (`apps/api/test/e2e-scenarios.test.ts:620-632`) dan menyerahkan `workspaceDir` ke payload, sehingga `node --run <script>` dieksekusi sungguhan. Opsi `codingEvaluator` yang diabaikan sudah dihapus. |
 | 3   | Aksi HIGH memicu waiting_approval, approve dilanjutkan, deny dihentikan                | LULUS       | **Ya**                       | Aksi berisiko memicu `waiting_approval`; `/v1/approvals/:id/approve` melanjutkan hingga selesai, `/v1/approvals/:id/deny` menghentikan task. Alur ini juga diverifikasi live di produksi. |
 | 4   | Matikan worker di tengah task, hidupkan lagi, pulih dari checkpoint tanpa duplikasi    | LULUS       | **Tidak** (test) / **Ya** (live) | Test ini **tidak memanggil `recoverInterruptedTasks` sama sekali** (`apps/api/test/e2e-scenarios.test.ts:868-914`), jadi lulusnya tidak membuktikan apa pun. Bukti live sebelum perbaikan: task tetap `running/40` permanen. Setelah perbaikan 2026-10-13, bukti live memenuhi klaim: task `running`/40 tanpa job Redis → restart worker → `recoveredCount: 1` → `completed`/100. Test regresi baru ada di `apps/agent-worker/test/live-worker-execution.test.ts`. |
 | 5   | Windows Agent terhubung, allowlist berjalan, luar allowlist ditolak, offline ditangani | LULUS       | **Sebagian**                 | Handshake `/v1/agent/ws`, eksekusi perintah allowlist, penolakan traversal `C:\Windows\System32`, dan transisi offline memang diuji — tetapi semuanya di dalam satu proses test. Tidak ada jalur produksi yang mendispatch perintah ke perangkat (`dispatchCommand` nol pemanggil). |
@@ -377,7 +379,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 1. **Memory tidak persisten — SELESAI (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + 5 index + check constraint; `DrizzleMemoryRepository` tidak lagi menelan error DB; `artifacts` yang tak terpakai dihapus dari schema. Bukti live: create → restart API → data tetap ada. Sisa: provider embedding (eksternal) dan sweeper retensi.
 2. **Recovery task menggantung — SELESAI (2026-10-13)**. `recoverInterruptedTasks` sekarang menerima `queue` wajib, `createAgentWorker` menyediakan queue, dan test regresi baru gagal bila queue tidak diteruskan. Diverifikasi live: task `running` tanpa job → restart → `completed`.
-3. **Evaluator tidak memverifikasi apa pun pada jalur coding** — `createDefaultEnvironment()` mengembalikan `{passed:true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`) dan `executeRegisteredTool` melewati evaluator sepenuhnya (`apps/agent-worker/src/task-executor.ts:624`).
+3. **Evaluator tidak memverifikasi apa pun pada jalur coding — SELESAI (2026-10-13)**. `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dihapus dan diganti `LocalCodingEnvironment` yang menjalankan `node --run lint/typecheck/test/build` di workspace per task (`packages/agent-core/src/coding/local-environment.ts`); `executeRegisteredTool` kini menjalankan `GenericEvaluator` sebelum `completed` (`apps/agent-worker/src/task-executor.ts:637-674`). Bukti live: workspace dengan `lint` gagal → `failed` (`score 0.71`); workspace dengan script lulus → `completed` (`score 1`).
 4. **Research tanpa jalur pencarian** — `web_search` menembak `example.com` dan tidak terdaftar di registry mana pun; `ResearchAgent` memakai sumber hardcoded.
 5. **Tidak ada jalur dispatch perintah ke Windows Agent** — `dispatchCommand` nol pemanggil produksi.
 6. **Notifikasi belum pernah terkirim** — `notifications` 0 baris; `NotificationEngine` di API tanpa storage.
@@ -405,7 +407,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 | **Koneksi Windows Worker Terputus Saat Eksekusi**  | Sedang | Sedang       | Sesi koneksi perangkat disimpan **in-memory** (`apps/api/src/services/device-connection-manager.ts`), sehingga restart API menghapus seluruh sesi dan semua perangkat tampak offline sampai mereka reconnect. Selain itu tidak ada jalur dispatch perintah dari task ke perangkat (lihat Butir 11), jadi mitigasi "task ditahan dan dilanjutkan" belum dapat diverifikasi. |
 | **Exhaustion Disk Akibat Log atau Database**       | Rendah | Rendah       | Rotasi log Docker aktif (`/etc/docker/daemon.json`: `max-size 10m`, `max-file 3`). Retensi backup **14 hari** (`RETENTION_DAYS` default di `scripts/backup-postgres.sh:15`), bukan 7 hari seperti tertulis sebelumnya. Disk terpakai 42G/174G (25%). |
 | **Kehilangan Memori Diam-diam**                    | Tinggi | **Rendah**   | **Dimitigasi 2026-10-13.** Tabel `memories` kini dibuat oleh migrasi `0007_memories.sql`, dan `DrizzleMemoryRepository` tidak lagi menelan kegagalan database, sehingga error terlihat alih-alih menjadi `201` palsu. Bukti live: create → restart API → data tetap ada. Sisa risiko: pencarian semantik tidak aktif (bukan kehilangan data) dan retensi tidak ditegakkan. |
-| **Klaim Completion Palsu**                         | Tinggi | Sedang       | Belum dimitigasi. Jalur `executeRegisteredTool` menulis `completed` tanpa evaluator, dan bukti coding berasal dari lingkungan mock. |
+| **Klaim Completion Palsu**                         | Tinggi | **Rendah**   | **Dimitigasi 2026-10-13.** Lingkungan coding mock `{passed:true}` dihapus dan diganti eksekusi nyata di workspace per task; `executeRegisteredTool` kini menjalankan `GenericEvaluator` sebelum menulis `completed` dan tidak melampirkan bukti bila tool tidak mengembalikan data. Bukti live: check gagal → `failed` (`score 0.71`), check lulus → `completed` (`score 1`). Sisa risiko: `GenericEvaluator` pada jalur tool memakai kriteria default dan belum memeriksa apakah output memenuhi permintaan pengguna; acceptance criteria belum dipersist sebelum eksekusi. |
 
 ---
 
@@ -413,11 +415,11 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 ### Prioritas P0 (cacat fungsional, tidak memerlukan kredensial eksternal)
 
-Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 dan 2 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 3 dan seterusnya masih terbuka.
+Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1, 2, dan 3 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 4 dan seterusnya masih terbuka.
 
 1. **Perbaiki pemulihan task — SELESAI (2026-10-13)**. `queue` kini diteruskan dan wajib; test regresi baru (`live-worker-execution.test.ts`) gagal bila queue tidak diteruskan; bukti live task `running` tanpa job → restart → `completed`.
 2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. `:id` pada route memory kini divalidasi sebagai uuid, sehingga `GET`/`DELETE /v1/memories/search` menjawab `400`, bukan `500`. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi.
-3. **Buat evaluator menilai bukti nyata** — ganti `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dengan lingkungan yang benar-benar menjalankan lint/typecheck/test/build, dan jangan biarkan `executeRegisteredTool` menulis `completed` tanpa evaluator.
+3. **Buat evaluator menilai bukti nyata — SELESAI (2026-10-13)**. `createDefaultEnvironment()` diganti `LocalCodingEnvironment` (perintah nyata, timeout, output terpotong) dan `executeRegisteredTool` digerbangi evaluator. Sisa yang belum selesai dari butir ini: acceptance criteria harus dipersist sebelum eksekusi agar evaluator menilai terhadap kriteria task, bukan kriteria default.
 4. **Beri research jalur pencarian nyata** — daftarkan provider search yang sungguh-sungguh (SearXNG self-host atau API pihak ketiga) dan buat `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi.
 5. **Sambungkan dispatch perintah ke Windows Agent** — hubungkan `dispatchCommand` ke jalur task dengan approval, dan ganti identitas perangkat menjadi kriptografis (`devices.public_key` diisi dan diverifikasi).
 6. **Perbaiki notifikasi dan FCM** — `NotificationEngine` di API harus memakai storage durable, dan `fcm-provider.ts` harus memperoleh token OAuth nyata dari service account, bukan literal `dummy-env-token`.
@@ -469,9 +471,11 @@ Time:     ~28s
 ```text
 @personal-ai-os/tools          30/30
 @personal-ai-os/mcp            17/17
-@personal-ai-os/agent-worker   30/30
+@personal-ai-os/agent-worker   33/33
 @personal-ai-os/memory          7/7
 @personal-ai-os/permissions     5/5
+@personal-ai-os/agent-core     34/34
+@personal-ai-os/evaluator       9/9
 API (in-container)             51/51, 0 skipped
 ```
 
@@ -512,11 +516,21 @@ SSRF 169.254.169.254 -> failed
 # Sesudah: job BullMQ dihapus dari Redis; task dipaksa running/progress=40; restart worker;
 #          log {"action":"recovery","recoveredCount":1}; final state completed/progress=100
 
-# Cacat 3: audit hanya approval
+# Cacat 3 (DIPERBAIKI 2026-10-13): evaluator menilai bukti mock
+# Workspace nyata /app/data/workspaces/m3-fail (script lint -> exit 1):
+#   POST /v1/tasks {kind:"coding_task", payload:{workspaceDir:"/app/data/workspaces/m3-fail", ...}}
+#   -> failed; evaluationResult.score=0.71; remainingIssues:
+#      ["Lint issue: Command failed: node --run lint",
+#       "Coverage issue: Cakupan kebutuhan (60%) di bawah standar 80%"]
+# Workspace nyata /app/data/workspaces/m3-pass (semua script -> exit 0):
+#   -> completed, progress 100, evaluationResult.passed=true, score=1
+#      artifact-diff-... memuat diff git nyata: "+export const helper = (n) => n + 1;"
+
+# Cacat 4 (BELUM DIPERBAIKI): audit hanya approval
 SELECT action, count(*) FROM audit_logs GROUP BY action;
  approval:denied   | 5
  approval:approved | 5
 
-# Cacat 4: notifikasi belum pernah terkirim
+# Cacat 5: notifikasi belum pernah terkirim
 SELECT count(*) FROM notifications; -> 0
 ```
