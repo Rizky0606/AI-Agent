@@ -8,5 +8,7 @@ coverage/
 *.log
 *.tsbuildinfo
 apps/android/personal-ai-os.apk
+# Expo continuous native generation output (recreate with `npx expo prebuild`)
+apps/android/android/
 apps/windows/src-tauri/target/
 apps/windows/src-tauri/gen/schemas/
