@@ -68,12 +68,19 @@ export class ArtifactManager {
     return `${ArtifactManager.META_PREFIX}${artifactId}.json`;
   }
 
-  /** Reads a sidecar written by another process, if the storage backend is shared. */
+  /**
+   * Resolves artifact metadata, falling back to a sidecar another process wrote and
+   * caching the result so repeated lookups stay in-memory.
+   */
   private async loadMetadata(artifactId: string): Promise<ArtifactMetadata | undefined> {
+    const cached = this.metadataStore.get(artifactId);
+    if (cached) return cached;
     try {
       const raw = await this.storage.get(this.metaKey(artifactId));
       const parsed = JSON.parse(raw.toString('utf8')) as ArtifactMetadata;
-      return parsed.id === artifactId ? parsed : undefined;
+      if (parsed.id !== artifactId) return undefined;
+      this.metadataStore.set(artifactId, parsed);
+      return parsed;
     } catch {
       return undefined;
     }
@@ -200,11 +207,7 @@ export class ArtifactManager {
     requestingUserId?: string | undefined,
     signedToken?: string | undefined,
   ): Promise<ArtifactMetadata> {
-    let artifact = this.metadataStore.get(artifactId);
-    if (!artifact) {
-      artifact = await this.loadMetadata(artifactId);
-      if (artifact) this.metadataStore.set(artifactId, artifact);
-    }
+    const artifact = await this.loadMetadata(artifactId);
     if (!artifact) {
       throw new ArtifactNotFoundError(artifactId);
     }
@@ -332,7 +335,11 @@ export class ArtifactManager {
     return this.userUsage.get(userId) ?? 0;
   }
 
-  listArtifactsByUser(userId: string, projectId?: string | null): ArtifactMetadata[] {
+  async listArtifactsByUser(userId: string, projectId?: string | null): Promise<ArtifactMetadata[]> {
+    for (const key of await this.storage.listKeys(ArtifactManager.META_PREFIX)) {
+      await this.loadMetadata(key.slice(ArtifactManager.META_PREFIX.length, -'.json'.length));
+    }
+
     const list: ArtifactMetadata[] = [];
     for (const art of this.metadataStore.values()) {
       if (art.ownerId === userId) {

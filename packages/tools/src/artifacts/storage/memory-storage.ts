@@ -57,6 +57,10 @@ export class InMemoryArtifactStorage implements StorageAdapter {
     return this.store.has(key);
   }
 
+  async listKeys(prefix: string): Promise<string[]> {
+    return [...this.store.keys()].filter((key) => key.startsWith(prefix));
+  }
+
   clear(): void {
     this.store.clear();
   }

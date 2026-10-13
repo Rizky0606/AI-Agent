@@ -247,3 +247,31 @@ test('ArtifactManager resolves artifacts written by another process over shared 
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('ArtifactManager lists artifacts written by another process', async () => {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'artifact-list-'));
+  try {
+    const writer = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    await writer.createArtifact({
+      ownerId: 'alice',
+      filename: 'worker-screenshot.png',
+      mimeType: 'image/png',
+      content: Buffer.from([0x89, 0x50]),
+    });
+    await writer.createArtifact({
+      ownerId: 'bob',
+      filename: 'other-user.txt',
+      mimeType: 'text/plain',
+      content: 'not alice',
+    });
+
+    const reader = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    const listed = await reader.listArtifactsByUser('alice');
+    assert.deepEqual(
+      listed.map((artifact) => artifact.filename),
+      ['worker-screenshot.png'],
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

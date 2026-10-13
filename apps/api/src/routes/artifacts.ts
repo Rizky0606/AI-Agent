@@ -102,7 +102,7 @@ export function registerArtifactRoutes(
       reply: FastifyReply,
     ) => {
       const user = await getUser(req);
-      const list = artifactManager.listArtifactsByUser(user.id, req.query.projectId ?? null);
+      const list = await artifactManager.listArtifactsByUser(user.id, req.query.projectId ?? null);
       return reply.send({ data: list });
     },
   );
