@@ -2,6 +2,13 @@
 
 Tanggal: 2026-10-10. Branch: `deploy/vps-setup` (lokal, belum push).
 
+> **SUPERSEDED.** Catatan ini adalah snapshot titik-waktu dari branch `deploy/vps-setup`
+> (2026-10-10) dan tidak lagi akurat. Khususnya, "TEMUAN KRITIS" di bawah sudah tidak berlaku:
+> worker menjalankan loop BullMQ sungguhan (`startWorkerProcess` di `apps/agent-worker/src/index.ts`)
+> dan `TaskExecutor` mengeksekusi model/tool nyata untuk task non-simulasi. Status terkini ada di
+> `docs/capability-acceptance-report.md` dan `docs/capability-matrix.yaml`.
+
+
 ## Fase 0 — SELESAI
 - Ubuntu 24.04.5, aarch64, 2 OCPU, 11 GiB RAM (no swap), disk 155G avail.
 - Docker 29.8.2, Compose v5.6.0, enabled, user ubuntu di grup docker.

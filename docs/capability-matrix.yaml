@@ -86,6 +86,6 @@ capabilities:
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'
-  code: apps/agent-worker/src/task-executor.ts:189
+  code: apps/agent-worker/src/task-executor.ts:47
   production_claim: forbidden until real generic orchestration exists
   proof: apps/agent-worker/test/worker.test.ts; apps/agent-worker/test/live-worker-execution.test.ts
