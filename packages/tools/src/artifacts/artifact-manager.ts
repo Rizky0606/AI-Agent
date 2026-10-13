@@ -48,8 +48,6 @@ export class ArtifactManager {
 
   // Metadata store
   private readonly metadataStore = new Map<string, ArtifactMetadata>();
-  // User storage tracking
-  private readonly userUsage = new Map<string, number>();
 
   // Metadata sidecar prefix. The in-memory map is process-local, so a shared
   // storage backend is what lets the worker's artifacts resolve in the API process.
@@ -136,7 +134,12 @@ export class ArtifactManager {
     const artifactId = randomUUID();
     const storageKey = `${input.ownerId}/${artifactId}/${sanitizedFilename}`;
 
-    const currentUsage = this.userUsage.get(input.ownerId) ?? 0;
+    // Usage is summed from the shared sidecars rather than tracked in a per-process counter,
+    // so the cap holds across the API/worker split and survives a container restart.
+    const currentUsage = (await this.listArtifactsByUser(input.ownerId)).reduce(
+      (total, artifact) => total + artifact.size,
+      0,
+    );
 
     // Check quota before upload if size is known
     if (input.size !== undefined) {
@@ -172,9 +175,6 @@ export class ArtifactManager {
         Math.max(0, this.userQuotaBytes - currentUsage),
       );
     }
-
-    // Update user usage
-    this.userUsage.set(input.ownerId, currentUsage + putResult.size);
 
     const metadata: ArtifactMetadata = {
       id: artifactId,
@@ -250,8 +250,6 @@ export class ArtifactManager {
     await this.storage.delete(this.metaKey(artifactId)).catch(() => false);
     this.metadataStore.delete(artifactId);
 
-    const currentUsage = this.userUsage.get(artifact.ownerId) ?? 0;
-    this.userUsage.set(artifact.ownerId, Math.max(0, currentUsage - artifact.size));
     return true;
   }
 
@@ -329,10 +327,6 @@ export class ArtifactManager {
 
     // 3. Otherwise access is strictly denied
     throw new ArtifactAccessDeniedError(artifact.id, requestingUserId);
-  }
-
-  getUserStorageUsage(userId: string): number {
-    return this.userUsage.get(userId) ?? 0;
   }
 
   async listArtifactsByUser(userId: string, projectId?: string | null): Promise<ArtifactMetadata[]> {

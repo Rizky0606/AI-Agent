@@ -178,6 +178,56 @@ test('ArtifactManager strictly enforces user storage quotas', async () => {
   );
 });
 
+test('ArtifactManager enforces the quota across processes sharing storage', async () => {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'artifact-quota-'));
+  try {
+    const openManager = () =>
+      new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir), userQuotaBytes: 1000 });
+
+    await openManager().createArtifact({
+      ownerId: 'alice',
+      filename: 'first.bin',
+      mimeType: 'application/octet-stream',
+      content: Buffer.alloc(600),
+    });
+
+    // A fresh manager has an empty in-memory map, so the cap only holds if usage is
+    // derived from the sidecars the first manager wrote.
+    await assert.rejects(
+      async () =>
+        openManager().createArtifact({
+          ownerId: 'alice',
+          filename: 'second.bin',
+          mimeType: 'application/octet-stream',
+          content: Buffer.alloc(600),
+        }),
+      (err: unknown) => err instanceof ArtifactQuotaExceededError,
+    );
+
+    // Usage stays scoped to the owner.
+    await openManager().createArtifact({
+      ownerId: 'bob',
+      filename: 'bob.bin',
+      mimeType: 'application/octet-stream',
+      content: Buffer.alloc(600),
+    });
+
+    // Deleting releases the bytes, so the owner can write again.
+    const manager = openManager();
+    const [artifact] = await manager.listArtifactsByUser('alice');
+    assert.ok(artifact);
+    await manager.deleteArtifact(artifact.id, 'alice');
+    await manager.createArtifact({
+      ownerId: 'alice',
+      filename: 'third.bin',
+      mimeType: 'application/octet-stream',
+      content: Buffer.alloc(600),
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('DiskArtifactStorage stores and streams files safely with atomic write', async () => {
   const tmpDir = await mkdtemp(join(tmpdir(), 'disk-artifact-'));
   const diskStorage = new DiskArtifactStorage(tmpDir);
