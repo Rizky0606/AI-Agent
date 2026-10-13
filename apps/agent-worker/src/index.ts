@@ -25,7 +25,13 @@ import {
   BrowserController,
   createDefaultToolRegistry,
   DiskArtifactStorage,
+  type ToolRegistry,
 } from '@personal-ai-os/tools';
+import {
+  McpHub,
+  parseMcpServerDefinitions,
+  StdioMcpServerAdapter,
+} from '@personal-ai-os/mcp';
 import { PlaywrightRunner } from './browser/playwright-runner.ts';
 
 export * from './task-executor.ts';
@@ -188,6 +194,14 @@ export const startWorkerProcess = async (): Promise<{
         maxConcurrency: Number(process.env.BROWSER_MAX_CONCURRENCY ?? 1),
       });
 
+  const registry = createDefaultToolRegistry({ guard, browserController });
+  const mcpHub = new McpHub({
+    auditSink: (entry) => {
+      console.log(JSON.stringify({ service: 'agent-worker', event: 'mcp_audit', ...entry }));
+    },
+  });
+  const mcpAdapters = await registerMcpServers(mcpHub, registry);
+
   const workerHandle = createAgentWorker({
     redisUrl,
     concurrency: workerConcurrency,
@@ -200,7 +214,7 @@ export const startWorkerProcess = async (): Promise<{
       runtimeManager,
       preferredRuntimeId: runtimePreferred,
       guard,
-      registry: createDefaultToolRegistry({ guard, browserController }),
+      registry,
     },
   });
 
@@ -234,6 +248,7 @@ export const startWorkerProcess = async (): Promise<{
     isClosing = true;
     await workerHandle.close();
     await browserController?.close();
+    await Promise.all(mcpAdapters.map((adapter) => adapter.close()));
     await broadcaster.close(true);
     await sqlClient.end({ timeout: 5 });
   };
@@ -245,7 +260,60 @@ export const startWorkerProcess = async (): Promise<{
   };
 };
 
-// Standalone execution if started directly via process
+/**
+ * Launches every server named by `MCP_SERVERS` and registers its allowlisted tools.
+ *
+ * One misconfigured server must not take the worker down with it, so failures are
+ * logged and skipped. The returned adapters own child processes and must be closed.
+ */
+export const registerMcpServers = async (
+  hub: McpHub,
+  registry: ToolRegistry,
+): Promise<StdioMcpServerAdapter[]> => {
+  const definitions = parseMcpServerDefinitions(process.env.MCP_SERVERS);
+  const adapters: StdioMcpServerAdapter[] = [];
+
+  for (const { config, launch, capability } of definitions) {
+    const adapter = new StdioMcpServerAdapter({
+      serverId: config.id,
+      command: launch.command,
+      args: launch.args,
+      env: launch.env,
+      cwd: launch.cwd,
+      capability,
+      onDiagnostic: (line) => {
+        console.warn(JSON.stringify({ service: 'agent-worker', event: 'mcp_diagnostic', serverId: config.id, line }));
+      },
+    });
+
+    try {
+      const toolDefs = await hub.registerServer(config, adapter);
+      for (const toolDef of toolDefs) registry.registerTool(toolDef);
+      adapters.push(adapter);
+      console.log(
+        JSON.stringify({
+          service: 'agent-worker',
+          event: 'mcp_registered',
+          serverId: config.id,
+          tools: toolDefs.map((tool) => tool.name),
+        }),
+      );
+    } catch (err) {
+      await adapter.close().catch(() => {});
+      console.error(
+        JSON.stringify({
+          service: 'agent-worker',
+          event: 'mcp_registration_failed',
+          serverId: config.id,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  }
+
+  return adapters;
+};
+
 const isMainModule = (): boolean => {
   if (!process.argv[1]) return false;
   try {

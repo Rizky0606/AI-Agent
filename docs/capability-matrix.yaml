@@ -49,12 +49,12 @@ capabilities:
     proof: packages/tools/test; apps/agent-worker/test/live-worker-execution.test.ts
     limitation: the API catalog registers web_fetch only; the worker additionally registers browser_navigate because it owns the Playwright Chromium runner. save_artifact and web_search stay unregistered (artifact dependency; mock search provider)
   browser_mcp:
-    status: partial
-    code: packages/mcp; packages/tools
-    permission_boundary: SSRF/domain policy/isolation/approval
-    clients: backend
-    proof: packages/mcp/test; packages/tools/test
-    limitation: McpHub, the untrusted-output sanitizer, and the capability allowlist are implemented and tested, but no concrete transport adapter (stdio/HTTP) exists, so no server can be registered and no MCP tool reaches the production registry
+    status: implemented
+    code: packages/mcp/src/hub/mcp-hub.ts; packages/mcp/src/transport/stdio-adapter.ts; packages/mcp/src/config/server-config.ts; apps/agent-worker/src/index.ts
+    permission_boundary: PermissionEngine (`tool:mcp_*` is MEDIUM and `external_mcp` scope, so every call needs approval); capability allowlist; untrusted-output sanitizer
+    clients: backend (worker)
+    proof: packages/mcp/test/stdio-adapter.test.ts; packages/mcp/test/server-config.test.ts; apps/agent-worker/test/mcp-registration.test.ts; packages/permissions/test/permissions.test.ts
+    limitation: only a stdio transport exists, so `sse` and `in_process` server configs cannot be launched; servers are declared through the deployment-time `MCP_SERVERS` variable (arbitrary local process execution, never end-user input); every tool of a server shares the single declared capability because MCP has no capability concept of its own; no real third-party MCP server is configured in this deployment
   android:
     status: partial
     code: apps/android/src/screens; apps/android/src/api
