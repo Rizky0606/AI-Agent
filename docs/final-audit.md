@@ -3,7 +3,7 @@
 **Tanggal Audit**: 2026-10-11, diperbarui 2026-10-13  
 **Auditor**: Principal Software Architect & Security Engineer  
 **Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
-**Catatan Status**: Sesuai aturan audit ketat (Perbaikan 7, Perbaikan 0, dan Perbaikan 5), sistem **TIDAK** dilabeli "PRODUCTION READY" sebelum seluruh komponen diverifikasi langsung pada host fisik Oracle Cloud VPS ARM64 (Ubuntu 24.04, 2 OCPU, 12 GB RAM) dan kredensial produksi eksternal (FCM) disuntikkan. Seluruh stack lokal, monorepo quality gates, dan automated test suite berstatus **LULUS**. Per 2026-10-13 tersisa **1** aspek lingkungan eksternal berstatus **SEBAGIAN**: kredensial FCM. Gap 3 (build Chromium ARM64) telah selesai dan terverifikasi, dan restore drill backup PostgreSQL telah dijalankan terhadap arsip produksi nyata.
+**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi ini menurunkan beberapa butir yang sebelumnya dinyatakan **LULUS** menjadi **SEBAGIAN** atau **GAGAL**, karena bukti live menunjukkan klaim lama tidak benar. Butir yang direvisi: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": ada 4 cacat fungsional terbuka (kehilangan memori saat restart, task pulih yang menggantung permanen, evaluator tanpa bukti, dan tidak adanya jalur dispatch perintah ke Windows Agent).
 
 ---
 
@@ -11,15 +11,14 @@
 
 Audit akhir ini mengevaluasi arsitektur, kepatuhan keamanan, daya tahan tugas (_durable tasks & recovery_), isolasi data per-user, dan keandalan sistem **Personal AI OS** sebelum deployment ke server target.
 
-Semua 13 paket workspace di dalam monorepo telah melalui quality gates hari ini (2026-10-11):
+Quality gates dijalankan pada checkout `release/installers` (Linux aarch64), bukan pada host Windows seperti pada revisi sebelumnya:
 
-- **Linter (`pnpm lint`)**: 13/13 paket **LULUS** (0 error, 0 warning).
-- **Typecheck (`pnpm typecheck`)**: 13/13 paket **LULUS** (TypeScript strict mode, 0 error).
-- **Production Build (`pnpm build`)**: 13/13 paket **LULUS** (termasuk kompilasi bundle web Vite Windows di `apps/windows/dist` dan paket TypeScript core).
-- **Test Suite Monorepo (`pnpm test`)**: 13/13 task **LULUS** (100% lulus untuk unit dan integrasi aktif).
-- **Test E2E 7 Skenario Nyata (`apps/api/test/e2e-scenarios.test.ts`)**: 7/7 skenario **LULUS** (0 fail, 0 skipped, durasi 7.14s).
-- **Test Suite API (`apps/api/test/*.test.ts`)**: 47 pass, 0 fail, 1 skipped (database container offline pada host Windows lokal; seluruh test live BullMQ/Redis dan in-memory fallback lulus).
-- **Test Suite Agent Worker (`apps/agent-worker/test/*.test.ts`)**: 18 pass, 0 fail, 0 skipped.
+- **Linter (`pnpm lint`)**: 14/14 paket **LULUS** (0 error, 0 warning).
+- **Production Build (`pnpm build`)**: 14/14 paket **LULUS**.
+- **Verifikasi referensi path (`pnpm verify:audit`)**: 87 path unik valid (145 referensi diperiksa).
+- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 29/29, `@personal-ai-os/permissions` 5/5, API in-container 50/50 (0 skipped).
+- **Catatan penting tentang Skenario 4**: test `apps/api/test/e2e-scenarios.test.ts:868-914` yang diklaim membuktikan pemulihan task **tidak memanggil `recoverInterruptedTasks` sama sekali**. Ia memanggil `executor.execute()` secara langsung dan menaikkan counter yang di-hardcode di dalam test. Test tersebut tidak dapat gagal karena perilaku sistem apa pun, sehingga lulusnya test itu tidak membuktikan apa pun tentang recovery. Lihat Butir 3.
+- **Catatan tentang `pnpm test` di root**: perintah itu tidak dapat dipakai; task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite harus dijalankan per paket.
 
 ---
 
@@ -63,16 +62,22 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 3: Background Task Pulih setelah Worker Restart
 
-- **Status**: **LULUS**
+- **Status**: **GAGAL** (sebelumnya dinyatakan LULUS)
 - **Persyaratan**: Ketika worker mati di tengah eksekusi, task dapat dipulihkan dari checkpoint terakhir tanpa menduplikasi side-effect yang telah selesai.
 - **Bukti File Relatif**:
   - `packages/shared/src/tasks/checkpoint-verifier.ts`: Verifikasi integritas hash checkpoint dan tracking `stepIndex`.
   - `apps/agent-worker/src/task-executor.ts`: Memeriksa checkpoint terakhir pada awal eksekusi langkah; langkah dengan `stepIndex <= lastCheckpoint.stepIndex` dilewati dengan aman.
   - `apps/api/src/services/task-queue.ts`: Pembersihan job lama sebelum enqueue memastikan task yang dipulihkan dapat di-antrikan kembali tanpa konflik ID BullMQ.
 - **Bukti Test & Output**:
-  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 4: Matikan worker di tengah task, hidupkan lagi, task pulih dari checkpoint tanpa menggandakan side effect`
-  - Test: `apps/api/test/recovery-drill.test.ts` — `Worker crash mid-task resumes from last checkpoint without duplicating completed steps`
-  - Output Aktual: `✔ Skenario 4: Matikan worker di tengah task, hidupkan lagi, task pulih dari checkpoint tanpa menggandakan side effect (3.0313ms)`
+  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 4` — **test ini tidak valid** dan tidak boleh dipakai sebagai bukti (lihat di bawah).
+  - Test: `apps/api/test/recovery-drill.test.ts` — menguji `TaskExecutor.execute` langsung, bukan jalur pemulihan produksi.
+- **Bukti live 2026-10-13 (menunjukkan cacat)**:
+  - Task `774b9bbc-1fa3-459c-aa1e-19dc590cd367` dipaksa ke `status='running'`, `progress=40`, lalu worker di-restart.
+  - Log worker: `{"service":"agent-worker","action":"recovery","recoveredCount":1}` — task memang terdeteksi.
+  - Event `task.resumed` tertulis di `task_events`.
+  - 40 detik setelah restart, task **masih** `running` dengan `progress=40`. Tidak ada job di queue, tidak ada eksekusi lanjutan, tidak ada timeout, tidak ada eskalasi.
+- **Akar masalah**: `apps/agent-worker/src/index.ts:223` memanggil `workerHandle.executor.recoverInterruptedTasks()` **tanpa argumen `queue`**. Di `apps/agent-worker/src/task-executor.ts:1173-1175` enqueue hanya dilakukan `if (queue)`. Jadi task dipulihkan secara kosmetik (status diperiksa, event ditulis) tetapi tidak pernah dijadwalkan ulang untuk dieksekusi.
+- **Mengapa test lama tidak menangkapnya**: `apps/api/test/e2e-scenarios.test.ts:868-914` tidak pernah memanggil `recoverInterruptedTasks`. Ia membuat checkpoint secara manual, memanggil `executor2.execute(...)` langsung, lalu menaikkan `sideEffectStep2Count` di luar alur eksekusi. Kedua assertion tentang side effect karena itu selalu benar.
 
 ---
 
@@ -93,17 +98,26 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 5: Memory/Context Relevan dan Punya Scope/Retensi
 
-- **Status**: **LULUS**
+- **Status**: **GAGAL** (sebelumnya dinyatakan LULUS)
 - **Persyaratan**: Memori memiliki tipe terstruktur (session, long-term, project, preference, decision) dengan write policy selektif, filter data sensitif, dan token budget context.
 - **Bukti File Relatif**:
   - `packages/memory/src/types.ts`: Definisi 7 scope memori dan retensi TTL.
   - `packages/memory/src/policy/memory-write-policy.ts`: Penilaian kandidat memori berdasarkan relevance, novelty, dan utility score.
   - `packages/memory/src/policy/sensitive-data-filter.ts`: Redaksi otomatis API key, JWT, dan credential sebelum disimpan.
   - `packages/memory/src/context/context-manager.ts`: Dynamic token budgeting, deduplikasi, dan pemotongan deterministik.
-- **Bukti Test & Output**:
-  - Test: `packages/memory/test/memory.test.ts`: Uji isolasi tenant, filter data sensitif, token budget context.
-  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 7: Isolasi: user A tidak bisa membaca project/task/memori user B`
-  - Output Aktual: `✔ Skenario 7: Isolasi: user A tidak bisa membaca project/task/memori user B (161.3365ms)`
+- **Bukti live 2026-10-13 (menunjukkan cacat)**:
+  - `POST /v1/memories` → `201`, lalu `GET /v1/memories` → `count=1`.
+  - `docker compose restart api`, lalu `GET /v1/memories` → **`count=0`**. Memori hilang tanpa error, tanpa peringatan, tanpa log.
+  - `docker exec personal-ai-os-postgres-1 psql ... -c "SELECT to_regclass('public.memories')"` → **null**. Tabel `memories` tidak ada. Produksi memiliki 18 tabel, dan `memories` bukan salah satunya.
+  - `SELECT count(*) FROM memories` → `ERROR: relation "memories" does not exist`.
+  - `GET /v1/memories/search?q=...` → `404 Memory not found` (route `/:id` di `apps/api/src/routes/memory.ts:213` menelan `/search`).
+- **Akar masalah**:
+  - Tabel `memories` dideklarasikan di Drizzle (`apps/api/src/db/schema.ts:265`) termasuk `vector('embedding', {dimensions:1536})` (`:279`), tetapi **tidak ada `CREATE TABLE memories`** di seluruh migrasi `apps/api/src/db/migrations/` (berkas `0000`–`0006`). Schema dan migrasi menyimpang.
+  - `DrizzleMemoryRepository` membungkus setiap operasi DB dengan `if (!this.db)` dan `try/catch`, sehingga kegagalan itu selalu jatuh diam-diam ke `InMemoryMemoryStore` (`apps/api/src/db/memory-repository.ts:46,69-212`).
+  - `InactiveEmbeddingProvider.embed()` **throw** (`packages/memory/src/store/inactive-embedding-provider.ts:16-18`) dan `isAvailable = false`, sehingga `isSemanticSearchActive()` selalu `false` dan `searchSemantic` hanya menyentuh fallback store (`:203-212`). Tidak ada index ivfflat/hnsw.
+  - Tidak ada sweeper TTL/retention; `retention` hanya field tersimpan.
+  - Tidak ada ekstraksi memori otomatis: `apps/agent-worker` tidak mengimpor `@personal-ai-os/memory`. Satu-satunya jalur tulis adalah `POST /v1/memories` dari klien.
+- **Yang benar-benar bekerja**: tipe/scope/retensi terdeklarasi (`packages/memory/src/types.ts`), write policy selektif (`policy/memory-write-policy.ts`), filter data sensitif (`policy/sensitive-data-filter.ts`), dan `ContextManager` token budgeting (`context/context-manager.ts`). Unit test `packages/memory/test/memory.test.ts` lulus. Yang gagal adalah **persistensi dan retrieval produksi**, bukan logikanya.
 
 ---
 
@@ -125,31 +139,40 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 7: Coding dan Research Menghasilkan Bukti, Laporan, Artefak
 
-- **Status**: **LULUS**
+- **Status**: **GAGAL** (sebelumnya dinyatakan LULUS)
 - **Persyaratan**: Coding Agent dan Research Agent mengikuti workflow terstruktur dan menghasilkan bukti terverifikasi (diff, test output, sitasi, report artifact).
 - **Bukti File Relatif**:
   - `packages/agent-core/src/coding/coding-agent.ts`: Workflow tahap: understand → inspect → plan → implement → test → debug → review_diff → document → report.
   - `packages/agent-core/src/research/research-agent.ts`: Workflow: decompose → search → browse → extract → cross-check → score → synthesize → cite → report.
   - `packages/tools/src/artifacts/`: Penyimpanan artefak hasil eksekusi task.
-- **Bukti Test & Output**:
-  - Test: `packages/agent-core/test/coding-agent.test.ts`: Verifikasi eksekusi test dan batas repair loop.
-  - Test: `packages/agent-core/test/research-agent.test.ts`: Verifikasi sitasi dan penandaan kontradiksi sumber.
-  - Output Aktual: Lulus (100% assertions pass).
+- **Bukti bahwa coding tidak menghasilkan bukti nyata**:
+  - `CodingAgent` memakai `input.mockEnvironment ?? this.createDefaultEnvironment()` (`packages/agent-core/src/coding/coding-agent.ts:90`).
+  - `createDefaultEnvironment()` mengembalikan `{ passed: true }` untuk `runLint`, `runTypecheck`, `runTests`, dan `runBuild` (`:414-438`), dengan output literal seperti `'ESLint clean'` dan `'All tests passed'`.
+  - Worker selalu memakai default itu: `new CodingAgent(undefined, undefined, this.guard)` (`apps/agent-worker/src/task-executor.ts:134`).
+  - Akibat: tidak ada satu pun perintah lint/typecheck/test/build yang dijalankan oleh sistem produksi. "Bukti" yang dinilai evaluator adalah string yang ditulis di dalam kode.
+- **Bukti bahwa research tidak punya jalur pencarian**:
+  - `web_search` default menembak `https://example.com/search?q=…` (`packages/tools/src/builtin/web-search.ts:64`) dan **tidak terdaftar di registry mana pun** (`packages/tools/src/registry/create-default-tool-registry.ts:20` hanya mendaftarkan `web_fetch`).
+  - `ResearchAgent` tanpa env memakai sumber hardcoded MDN/nodejs.org (`packages/agent-core/src/research/research-agent.ts:99-115`) dan claim hardcoded (`:135-158`) yang lolos evaluator.
+  - Tahap `browse` dideklarasikan (`packages/agent-core/src/types.ts:172-180`) tetapi tidak pernah diset; `fetchContent` tidak pernah dipanggil.
+  - `ResearchEvaluator` hanya menghitung field (`packages/evaluator/src/research-evaluator.ts`); ia tidak pernah mem-fetch URL untuk memverifikasi sumber.
+- **Yang benar-benar bekerja**: `web_fetch` nyata (SSRF guard + HTTP fetch asli), `ArtifactManager` menyimpan hasil dengan checksum sha256, dan alur tahap coding/research terdeklarasi sebagai tipe. Yang tidak ada adalah eksekusi dan verifikasinya.
 
 ---
 
 ### Butir 8: Evaluator Menentukan Completion
 
-- **Status**: **LULUS**
+- **Status**: **SEBAGIAN** (sebelumnya dinyatakan LULUS)
 - **Persyaratan**: Agen dilarang menyatakan tugas selesai berdasarkan klaim verbal mandiri; penyelesaian ditentukan secara independen oleh Evaluator engine berbasis bukti eksekusi tooling.
 - **Bukti File Relatif**:
   - `packages/evaluator/src/coding-evaluator.ts`: Evaluasi objektif berbasis 7 kriteria nyata (lint, typecheck, tests, build, security, requirement coverage, diff).
   - `packages/evaluator/src/research-evaluator.ts`: Evaluasi kelengkapan sitasi, kredibilitas sumber, dan konsistensi klaim.
   - `packages/agent-core/src/coding/coding-agent.ts`: Task hanya berstatus 'completed' jika evaluasi memenuhi skor 100%.
-- **Bukti Test & Output**:
-  - Test: `packages/agent-core/test/evaluator-gating.test.ts`: Penolakan klaim selesai saat bukti tooling tidak ada.
-  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed`
-  - Output Aktual: `✔ Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed (309.6985ms)`
+- **Bukti live 2026-10-13 (menunjukkan cacat)**:
+  - `executeRegisteredTool` menulis status `completed` **tanpa memanggil evaluator sama sekali** (`apps/agent-worker/src/task-executor.ts:624`). Jalur ini yang dipakai semua task `generic_task` dengan `payload.toolName`, termasuk smoke browser dan MCP.
+  - Test `apps/agent-worker/test/worker.test.ts:184-195` justru **membuktikan** hal itu: task mencapai `completed` melalui jalur tool tanpa evaluator.
+  - `apps/api/test/e2e-scenarios.test.ts:623` meneruskan opsi `codingEvaluator` yang **bukan field `TaskExecutorOptions`**, sehingga opsi itu diabaikan.
+- **Yang benar-benar bekerja**: evaluator memang dipanggil pada jalur coding/research/standard (`apps/agent-worker/src/task-executor.ts:977,1005,1036`), dan `GenericEvaluator` menolak hasil tanpa artifact/output. `packages/agent-core/test/evaluator-gating.test.ts` membuktikan penolakan klaim mandiri pada jalur itu.
+- **Keterbatasan yang membuat status turun ke SEBAGIAN**: evaluator hanya bisa menentukan completion bila ia dijalankan, dan bukti yang ia nilai pada jalur coding berasal dari lingkungan mock (lihat Butir 7). Acceptance criteria juga tidak pernah dipersist sebelum eksekusi: `TaskCheckpoint` tidak punya field kriteria (`packages/shared/src/tasks/types.ts:13-24`), sedangkan `acceptanceCriteria` di `packages/agent-core/src/router/planner.ts:31-116,150-216` hanya string plan yang tidak pernah dikonsumsi evaluator.
 
 ---
 
@@ -182,13 +205,19 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 6: Jadwal berulang berjalan tepat sekali`
   - Output Aktual: `✔ Skenario 6: Jadwal berulang berjalan tepat sekali (957.1265ms)`
 - **Keterbatasan / Mengapa SEBAGIAN**:
-  - Pengiriman push notification ke server Google FCM v1 di production memerlukan file JSON kredensial resmi dari Google Cloud Console yang baru akan disuntikkan saat deployment VPS.
+  - **Notifikasi belum pernah terkirim sekali pun.** `SELECT count(*) FROM notifications` di produksi → `0`. `NotificationEngine` di API dibuat **tanpa storage**: `new NotificationEngine()` (`apps/api/src/index.ts:209`), sehingga state pengiriman hanya ada di memori proses. `SqlNotificationRepository` ada tetapi tidak pernah diinstansiasi.
+  - Tidak ada jembatan dari event task ke notifikasi di kode produksi: task selesai atau gagal tidak menghasilkan notifikasi apa pun.
+  - **Token FCM hardcoded.** `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` ketika service account tersedia. Begitu kredensial nyata disuntikkan, provider akan mengirim dengan token literal itu dan selalu gagal `401`. Kegagalan itu akan tampak seperti masalah kredensial Google, padahal bug kode.
+  - Retry notifikasi 3× bersifat sinkron; setelah habis, state menjadi `failed` tanpa dead-letter.
+  - `SchedulerEngine` di API dibuat dengan `SqlScheduleRepository` (`apps/api/src/index.ts:181-183`) tetapi `tick()` tidak pernah dipanggil di API; dispatcher-nya hanya `taskQueue.enqueue` tanpa `INSERT` ke tabel `tasks` (`:190-191`).
+- **Yang benar-benar bekerja**: ketiga missed-run policy (`skip`, `run_once`, `catch_up`) ada; timezone disimpan dan dihitung; idempotency slot `sched:<jobId>:<ISO>` ada di Set in-memory plus unique index DB pada jalur proses scheduler; `EventEngine` **tidak dapat** dispatch tanpa `PermissionEngine` (gate di `apps/scheduler/src/event-engine.ts:137`); tanpa kredensial, FCM memakai `DisabledFcmProvider` dengan pesan log yang jujur.
+- **Keterbatasan tambahan**: tidak ada verifikasi signature pada event masuk, dan `registerRule` tidak pernah dipanggil di produksi.
 
 ---
 
 ### Butir 11: Windows Agent Terautentikasi dan Capability-Limited
 
-- **Status**: **LULUS**
+- **Status**: **SEBAGIAN** (sebelumnya dinyatakan LULUS)
 - **Persyaratan**: Windows Agent beroperasi sebagai remote worker dengan identitas perangkat kriptografis, koneksi outbound WSS terautentikasi, allowlist command, dan penanganan status offline.
 - **Bukti File Relatif**:
   - `apps/windows/src/connection/device-identity.ts`: Pembuatan identitas perangkat dan integrasi invoke command Tauri.
@@ -196,11 +225,21 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - `apps/windows/src/security/capability-registry.ts`: Pendaftaran kapabilitas yang diizinkan (default powershell non-aktif kecuali diaktifkan eksplisit).
   - `apps/windows/src/security/command-executor.ts`: Eksekusi command dalam batas direktori kerja yang divalidasi.
   - `apps/windows/src-tauri/src/main.rs`: Backend Tauri Rust yang membatasi akses native OS.
-- **Bukti Test & Output**:
-  - Test: `apps/windows/test/command-executor.test.ts`: Eksekusi perintah allowlist dan penolakan di luar allowlist.
-  - Test: `apps/windows/test/connection-and-offline.test.ts`: Uji handshake koneksi dan transisi offline.
-  - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di luar allowlist ditolak, offline ditangani`
-  - Output Aktual: `✔ Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di luar allowlist ditolak, offline ditangani (1061.4363ms)`
+- **Yang benar-benar bekerja**:
+  - Koneksi WSS outbound ke `/v1/agent/ws` dengan handshake, ping, dan reconnect otomatis.
+  - Capability registry dengan 7 kapabilitas, seluruhnya `default enabled: false`, allowlist ditegakkan lewat `assertCapabilityAllowed` (`apps/windows/src/security/capability-registry.ts:116`) ditambah validasi capability + action + `cwd`.
+  - `PathValidator` menolak device namespace, alternate data stream, null byte, dan traversal (`apps/windows/src/security/path-validator.ts:78-118`).
+  - Test `apps/windows/test/command-executor.test.ts` dan `connection-and-offline.test.ts` lulus.
+- **Bukti live 2026-10-13 (menunjukkan cacat)**:
+  - `dispatchCommand` (`apps/api/src/services/device-connection-manager.ts:154`) memiliki **nol pemanggil di `apps/`**. Tidak ada kode produksi yang mengirim perintah ke perangkat.
+  - Worker hanya memeriksa `hasOnlineDeviceForUser('windows')` (`apps/agent-worker/src/task-executor.ts:169`); ia tidak pernah mendispatch perintah.
+  - Akibatnya Skenario 5 membuktikan handshake dan penolakan traversal di dalam test, tetapi **tidak** membuktikan alur produksi task → perangkat → hasil. Test itu memanggil klien Windows dan server di dalam satu proses.
+- **Cacat identitas perangkat**:
+  - Klaim "identitas perangkat kriptografis" tidak benar. `devices.public_key` ada di schema (`apps/api/src/db/schema.ts:30`) tetapi tidak pernah diisi atau diverifikasi; `DeviceRepository.create` hanya menulis `name` + `platform`.
+  - `fetchDeviceIdentity` fallback ke id literal `'win-dev-local'` (`apps/windows/src/connection/device-identity.ts:26`), dan `deviceId` diambil dari query string `/v1/agent/ws` (`apps/api/src/routes/agent-ws.ts:44`).
+  - Sesi koneksi perangkat disimpan in-memory (`device-connection-manager.ts`), sehingga hilang saat API restart.
+- **Cacat allowlist**: tidak ada allowlist teks-perintah atau allowlist biner. Penegakan hanya pada capability, action, dan `cwd`, sehingga perintah PowerShell apa pun dapat dijalankan di dalam direktori kerja yang diizinkan begitu satu kapabilitas diaktifkan.
+- **Tidak ada pemetaan** capability Windows ke capability Personal AI OS. Direktori `runtimes/{pi,omp,hermes,openhands}-adapter` juga tidak ada di repository; Hermes dan OpenHands hanya `UnverifiedRuntimeAdapter` yang menolak eksekusi (`packages/agent-core/src/runtimes/unverified-adapter.ts`).
 
 ---
 
@@ -217,11 +256,18 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - `docs/runbooks/incident-response.md`: Runbook penanganan insiden outage, OOM, dan worker disconnect.
   - `docs/runbooks/deployment.md`: Langkah deployment zero-downtime dan rollback.
   - `docs/runbooks/resource-profiling-and-capacity.md`: Profil kapasitas memori dan alokasi resource VPS ARM64.
-- **Bukti Test & Output**:
-  - Test: `apps/api/test/auth.test.ts`: Health check endpoint merespons status OK.
-  - Test: `apps/api/test/recovery-drill.test.ts`: 4 skenario simulasi insiden dan recovery.
+- **Bukti live 2026-10-13**:
+  - `/health` → `200` melalui `https://ai.ojixx.my.id`.
+  - `ss -tulpn`: PostgreSQL `127.0.0.1:5432` saja; Redis dan Postgres container tanpa port mapping publik; Caddy hanya `127.0.0.1:8080` plus 80/443 publik.
+  - `/etc/docker/daemon.json` memiliki rotasi log `max-size 10m, max-file 3`.
+  - Backup harian berjalan di container `backup` (5 dump tersimpan, `BACKUP_INTERVAL_SECONDS=86400`), retensi `RETENTION_DAYS` default 14 (`scripts/backup-postgres.sh:15`).
+  - Restore drill lulus terhadap arsip produksi nyata (lihat tabel checklist).
 - **Keterbatasan / Mengapa SEBAGIAN**:
-  - Verifikasi langsung deployment pada mesin fisik Oracle Cloud VPS ARM64 (Perbaikan 0 dan 5) masih menunggu sesi koneksi SSH langsung dari pengguna.
+  - **`audit_logs` hanya berisi keputusan approval.** Produksi: 10 baris, seluruhnya `approval:approved` (5) dan `approval:denied` (5). Tidak ada satu pun baris untuk tool call, MCP call, browser action, atau artifact write. `SqlAuditRepository.log` hanya dipanggil dari `apps/api/src/routes/approvals.ts:113,219`.
+  - Audit MCP hanya ditulis ke `console.log` (`apps/agent-worker/src/index.ts`), sehingga hilang saat container di-recreate.
+  - Healthcheck worker hanya menyentuh file `/tmp/healthy` pada timer, bukan memprobe database atau Redis (`apps/agent-worker/src/index.ts:307-320`).
+  - Tidak ada alerting maupun tracing terdistribusi; hanya endpoint `/metrics` Prometheus yang harus di-scrape secara eksternal.
+  - Restore drill belum pernah dijalankan sebagai prosedur berkala terjadwal.
 
 
 ### Runtime bridge update
@@ -267,14 +313,14 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **Chat streaming via backend + 9Router**         | **LULUS**    | Route `/v1/chat/*` di `apps/api/src/routes/chat.ts` memanggil `NineRouterGateway` tanpa secret di client.                                                                                      |
 | **Project / Task / Timeline / Artifact**         | **LULUS**    | Terintegrasi penuh dengan event timeline streaming dan artifact storage di `packages/tools/src/artifacts/`.                                                                                    |
 | **Routing berbasis capability**                  | **LULUS**    | `AgentRouter` di `packages/agent-core/src/router/agent-router.ts` memetakan intent ke `RuntimeManager` (OMP, Pi) dan `NineRouterGateway`.                                                      |
-| **Memory & context ber-budget**                  | **LULUS**    | `ContextManager` di `packages/memory/src/context/context-manager.ts` menerapkan token budgeting dinamis dan deduplikasi.                                                                       |
-| **Queue / cancel / checkpoint / recovery**       | **LULUS**    | `TaskExecutor` di `apps/agent-worker/src/task-executor.ts` dan `BullMqTaskQueue` di `apps/api/src/services/task-queue.ts` dengan versioned checkpoint recovery.                                |
-| **Windows device identity + allowlist**          | **LULUS**    | `apps/windows/src/connection/device-identity.ts` dan `apps/windows/src/security/path-validator.ts` directory allowlist.                                                                        |
-| **MCP / tools / browser ber-permission & audit** | **LULUS**    | Semua eksekusi melewati `SecuredCapabilityGuard` di `packages/permissions/src/guard.ts` dengan log audit terperinci.                                                                           |
-| **Evaluator menentukan completion**              | **LULUS**    | `CodingEvaluator` di `packages/evaluator/src/coding-evaluator.ts` memvalidasi hasil sebelum status diset ke `completed`.                                                                       |
+| **Memory & context ber-budget**                  | **GAGAL**    | `ContextManager` dan write policy memang ada dan unit test lulus, tetapi **tidak ada persistensi**: tabel `memories` tidak ada di database (`to_regclass` → null), sehingga memori hilang setiap restart API (bukti: create → `count=1` → restart → `count=0`). `InactiveEmbeddingProvider.embed()` throw. Lihat Butir 5. |
+| **Queue / cancel / checkpoint / recovery**       | **GAGAL**    | Queue, cancel, dan checkpoint bekerja. **Recovery tidak**: `recoverInterruptedTasks()` dipanggil tanpa `queue` (`apps/agent-worker/src/index.ts:223`), sehingga task `running` yang pulih tidak pernah di-enqueue ulang dan menggantung permanen (bukti live: tetap `running/40` 40 detik setelah restart). Lihat Butir 3. |
+| **Windows device identity + allowlist**          | **SEBAGIAN** | Path allowlist dan capability registry nyata dan ditegakkan. Identitas perangkat **bukan** kriptografis (`devices.public_key` tidak pernah diisi; `deviceId` dari query string), tidak ada allowlist teks-perintah/biner, dan `dispatchCommand` nol pemanggil sehingga tidak ada jalur produksi task → perangkat. Lihat Butir 11. |
+| **MCP / tools / browser ber-permission & audit** | **SEBAGIAN** | Permission **lulus**: semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit tidak lulus**: `audit_logs` produksi hanya 10 baris keputusan approval; tool call, MCP call, browser action, dan artifact write tidak tercatat. MCP audit hanya `console.log`. Lihat Butir 12. |
+| **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada jalur coding/research/standard dan menolak klaim mandiri di jalur itu. Namun `executeRegisteredTool` menulis `completed` **tanpa evaluator** (`apps/agent-worker/src/task-executor.ts:624`), dan bukti coding berasal dari lingkungan mock `{passed:true}` hardcoded. Lihat Butir 7 dan 8. |
 | **Approval terikat aksi spesifik**               | **LULUS**    | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence` di `apps/api/src/routes/approvals.ts`.                                                                                |
-| **Scheduler & Event Deduplication**              | **LULUS**    | Deduplikasi idempotency key di `apps/scheduler/src/scheduler-engine.ts` dan dedupe window 60s di `apps/scheduler/src/notification-engine.ts`.                                                  |
-| **FCM Push Notification Live Kredensial**        | **SEBAGIAN** | Logika provider siap di `apps/scheduler/src/fcm-provider.ts`; menunggu suntikan berkas `FCM_SERVICE_ACCOUNT_JSON` di server VPS.                                                               |
+| **Scheduler & Event Deduplication**              | **SEBAGIAN** | Idempotency key dan dedupe window ada, `EventEngine` tidak dapat dispatch tanpa `PermissionEngine`. Namun `NotificationEngine` di API dibuat **tanpa storage** (`apps/api/src/index.ts:209`), `SqlNotificationRepository` tidak pernah diinstansiasi, dan `notifications` produksi berisi **0 baris**. Lihat Butir 10. |
+| **FCM Push Notification Live Kredensial**        | **GAGAL**    | Bukan sekadar menunggu kredensial. `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` hardcoded ketika service account tersedia, sehingga pengiriman akan selalu gagal `401` bahkan setelah kredensial nyata disuntikkan. Tidak ada alur OAuth token dari service account. |
 | **Tidak ada secret di client / log / repo**      | **LULUS**    | Bebas credential hardcoded, Fastify logger di `apps/api/src/app.ts` meredaksi header authorization dan token.                                                                                  |
 | **PostgreSQL & Redis terisolasi internal**       | **LULUS**    | `docker-compose.yml` melampirkan DB dan Redis ke `internal: true` network tanpa port mapping publik.                                                                                           |
 | **Backup / Restore / Observability**             | **LULUS**    | Script backup di `scripts/backup-postgres.sh`, restore di `scripts/restore-postgres.sh`, dan metrik Prometheus di `apps/api/src/app.ts`. Restore drill dijalankan terhadap arsip nyata `personal_ai_os-20261013T092512Z.dump`: exit 0, ekstensi `pgcrypto`+`vector` ada, 11 tabel inti ada, `users` 40 baris sama dengan produksi. Drill menemukan bug `pg_restore` tanpa `-d` yang membuat restore selalu gagal; sudah diperbaiki. |
@@ -284,138 +330,165 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ## 4. Hasil Test End-to-End 7 Skenario (`apps/api/test/e2e-scenarios.test.ts`)
 
-Seluruh 7 skenario wajib telah diuji dengan komponen nyata (Fastify nyata, Redis BullMQ nyata, WebSocket nyata, Evaluator nyata, dan gateway 9Router tiruan berlabel jelas):
+Suite ini dijalankan dengan komponen nyata (Fastify nyata, Redis BullMQ nyata, WebSocket nyata, gateway 9Router tiruan berlabel jelas) dan seluruh 7 test lulus. **Namun lulusnya suite ini tidak berarti ketujuh skenario itu benar-benar terbukti**, karena dua test menguji jalur yang berbeda dari yang diklaim namanya:
 
-| No  | Skenario                                                                               | Status    | Durasi Aktual | Bukti Verifikasi                                                                                                                                                                                 |
-| :-- | :------------------------------------------------------------------------------------- | :-------- | :------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Register/login, chat streaming via WebSocket                                           | **LULUS** | 760.86ms      | WebSocket `/v1/chat/ws` menerima seluruh token delta streaming dari `LocalFake9RouterServer` secara real-time.                                                                                   |
-| 2   | Buat task → worker eksekusi → event realtime diterima → Evaluator completed            | **LULUS** | 309.70ms      | Task coding dikerjakan oleh worker via Redis BullMQ, WebSocket menerima event `task.completed`, dan `CodingEvaluator` memvalidasi 7 kriteria nyata.                                              |
-| 3   | Aksi HIGH memicu waiting_approval, approve dilanjutkan, deny dihentikan                | **LULUS** | 325.56ms      | Aksi berisiko tinggi memicu status `waiting_approval`. Endpoint `/v1/approvals/:id/approve` melanjutkan eksekusi hingga selesai; `/v1/approvals/:id/deny` menghentikan tugas ke status `failed`. |
-| 4   | Matikan worker di tengah task, hidupkan lagi, pulih dari checkpoint tanpa duplikasi    | **LULUS** | 3.03ms        | Worker baru membaca versioned checkpoint terakhir; langkah yang telah selesai dilewati tanpa pengulangan side-effect.                                                                            |
-| 5   | Windows Agent terhubung, allowlist berjalan, luar allowlist ditolak, offline ditangani | **LULUS** | 1061.44ms     | Agent terhubung ke `/v1/agent/ws`, perintah allowlist PowerShell dieksekusi sukses, traversal `C:\Windows\System32` ditolak, dan disconnect bertransisi ke status offline.                       |
-| 6   | Jadwal berulang berjalan tepat sekali                                                  | **LULUS** | 957.13ms      | `SchedulerEngine` mengeksekusi slot waktu tepat satu kali; pemanggilan berulang pada timestamp yang sama diabaikan oleh deduplikasi idempotency key.                                             |
-| 7   | Isolasi: user A tidak bisa membaca project/task/memori user B                          | **LULUS** | 161.34ms      | User B yang mencoba mengakses project, task, atau memori User A mendapatkan respon `HTTP 404 Not Found` dan list kosong.                                                                         |
+| No  | Skenario                                                                               | Status test | Apakah membuktikan klaimnya? | Catatan bukti                                                                                                                                                                                   |
+| :-- | :------------------------------------------------------------------------------------- | :---------- | :--------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Register/login, chat streaming via WebSocket                                           | LULUS       | **Ya**                       | WebSocket `/v1/chat/ws` menerima token delta streaming dari `LocalFake9RouterServer`.                                                                                   |
+| 2   | Buat task → worker eksekusi → event realtime → Evaluator completed                      | LULUS       | **Tidak sepenuhnya**         | Task coding memang lewat Redis BullMQ dan `task.completed` diterima. Tetapi evaluator menilai bukti dari lingkungan mock yang mengembalikan `{passed:true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`), dan `apps/api/test/e2e-scenarios.test.ts:623` meneruskan opsi `codingEvaluator` yang bukan field `TaskExecutorOptions`. Jadi "7 kriteria nyata" tidak dijalankan. |
+| 3   | Aksi HIGH memicu waiting_approval, approve dilanjutkan, deny dihentikan                | LULUS       | **Ya**                       | Aksi berisiko memicu `waiting_approval`; `/v1/approvals/:id/approve` melanjutkan hingga selesai, `/v1/approvals/:id/deny` menghentikan task. Alur ini juga diverifikasi live di produksi. |
+| 4   | Matikan worker di tengah task, hidupkan lagi, pulih dari checkpoint tanpa duplikasi    | LULUS       | **Tidak**                    | Test ini **tidak memanggil `recoverInterruptedTasks` sama sekali** (`apps/api/test/e2e-scenarios.test.ts:868-914`). Ia membuat checkpoint manual, memanggil `executor2.execute(...)` langsung, lalu menaikkan `sideEffectStep2Count` di luar alur eksekusi. Kedua assertion selalu benar. Bukti live menunjukkan pemulihan produksi **gagal**: task tetap `running/40` permanen. |
+| 5   | Windows Agent terhubung, allowlist berjalan, luar allowlist ditolak, offline ditangani | LULUS       | **Sebagian**                 | Handshake `/v1/agent/ws`, eksekusi perintah allowlist, penolakan traversal `C:\Windows\System32`, dan transisi offline memang diuji — tetapi semuanya di dalam satu proses test. Tidak ada jalur produksi yang mendispatch perintah ke perangkat (`dispatchCommand` nol pemanggil). |
+| 6   | Jadwal berulang berjalan tepat sekali                                                  | LULUS       | **Ya**                       | `SchedulerEngine` mengeksekusi slot waktu tepat sekali; pemanggilan berulang pada timestamp yang sama diabaikan oleh deduplikasi idempotency key.                                             |
+| 7   | Isolasi: user A tidak bisa membaca project/task/memori user B                          | LULUS       | **Ya, untuk project dan task**| User B mendapat `HTTP 404` dan list kosong. Untuk memori, isolasi diuji pada store in-memory; karena tabel `memories` tidak ada di database, isolasi memori di produksi belum dapat diverifikasi. |
 
 ---
 
 ## 5. Daftar Gap yang Tersisa
 
-Terdapat 3 gap operasional eksternal yang memerlukan tindakan di lingkungan target:
+Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional yang menunggu lingkungan atau kredensial eksternal.
 
-1. **Gap 1: Provisioning & Akses SSH Mesin Fisik Oracle Cloud VPS (ARM64)**
-   - _Status_: Menunggu akses SSH dari pengguna ke instance Oracle Cloud (Ubuntu 24.04, 2 OCPU, 12 GB RAM).
-   - _Rencana_: Menghubungkan sesi deployment, memeriksa `docker compose version`, dan memvalidasi alokasi RAM per-container.
-2. **Gap 2: Penyediaan Kredensial Produksi Google FCM (Service Account JSON)**
-   - _Status_: `apps/scheduler/src/fcm-provider.ts` menonaktifkan pengiriman secara transparan jika path `FCM_SERVICE_ACCOUNT_JSON` belum tersedia.
-   - _Rencana_: Menyuntikkan berkas JSON kredensial Google Cloud FCM ke server VPS saat konfigurasi environment live.
-3. **Gap 3: Live Build Image Playwright Chromium pada Arsitektur Linux ARM64** — **SELESAI**
-   - _Status_: Chromium linux-arm64 (Chrome for Testing 156.0.8078.4, playwright chromium v1248) terpasang di image worker melalui `pnpm exec playwright install --with-deps chromium`, `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`. Tool `browser_navigate` terdaftar di registry worker dan terbukti end-to-end: task `cf10a984-5b7b-4d6e-a9a0-65b445d460f0` mengembalikan judul dan konten nyata `https://example.com/`, task `73d1d19a-7cd0-4f8e-8837-75d9186e75e0` menulis screenshot PNG 71 KB ke bind mount `./data/artifacts`.
+### 5.1 Cacat fungsional (tidak memerlukan kredensial eksternal)
+
+1. **Memory tidak persisten** — tabel `memories` tidak ada di database; memori hilang setiap restart API tanpa error. Perbaikan: tambahkan migrasi `CREATE TABLE memories` + kolom `vector(1536)` + index, hentikan fallback diam-diam ke `InMemoryMemoryStore`, dan sambungkan provider embedding nyata.
+2. **Recovery task menggantung** — `recoverInterruptedTasks()` dipanggil tanpa `queue` (`apps/agent-worker/src/index.ts:223`), sehingga task pulih tidak pernah dieksekusi ulang. Perbaikan: teruskan queue, dan ganti Skenario 4 dengan test yang benar-benar memanggil jalur pemulihan produksi.
+3. **Evaluator tidak memverifikasi apa pun pada jalur coding** — `createDefaultEnvironment()` mengembalikan `{passed:true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`) dan `executeRegisteredTool` melewati evaluator sepenuhnya (`apps/agent-worker/src/task-executor.ts:624`).
+4. **Research tanpa jalur pencarian** — `web_search` menembak `example.com` dan tidak terdaftar di registry mana pun; `ResearchAgent` memakai sumber hardcoded.
+5. **Tidak ada jalur dispatch perintah ke Windows Agent** — `dispatchCommand` nol pemanggil produksi.
+6. **Notifikasi belum pernah terkirim** — `notifications` 0 baris; `NotificationEngine` di API tanpa storage.
+7. **Token FCM hardcoded `dummy-env-token`** — akan gagal 401 bahkan setelah kredensial nyata disuntikkan.
+8. **Audit tidak menyeluruh** — hanya keputusan approval yang masuk `audit_logs`.
+9. **Identitas perangkat tidak kriptografis** — `devices.public_key` tidak pernah diisi; `deviceId` dari query string.
+10. **Skema menyimpang dari migrasi** — tabel `memories` dan `artifacts` ada di `schema.ts` tanpa migrasi; tidak ada pemeriksaan paritas.
+11. **Dead code produksi** — `AiCouncil` (`packages/agent-core/src/council/`) dan `SelfHealingEngine` (`packages/agent-core/src/healing/`) tidak dipanggil dari `apps/`.
+
+### 5.2 Gap operasional (menunggu lingkungan atau kredensial)
+
+1. **Gap 1: Provisioning & Akses SSH Mesin Fisik Oracle Cloud VPS (ARM64)** — sebagian besar sudah terlampaui karena container produksi sudah berjalan di VPS tersebut dan bukti live dikumpulkan dari sana; yang tersisa adalah dokumentasi prosedur akses.
+2. **Gap 2: Kredensial Produksi Google FCM (Service Account JSON)** — di luar cacat kode nomor 7 di atas, kredensial itu sendiri tetap diperlukan.
+3. **Gap 3: Live Build Image Playwright Chromium pada Arsitektur Linux ARM64** — **SELESAI**. Chromium linux-arm64 terpasang di image worker melalui `pnpm exec playwright install --with-deps chromium`, `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`. Tool `browser_navigate` terdaftar di registry worker dan terbukti end-to-end, termasuk screenshot PNG 71 KB ke bind mount `./data/artifacts`.
+4. **Gap 4: Verifikasi pada perangkat fisik** — NSIS installer belum dijalankan di Windows; APK belum dipasang di perangkat Android.
 
 ---
 
 ## 6. Analisis Risiko
 
-| Risiko                                             | Dampak | Probabilitas | Mitigasi yang Telah Diterapkan                                                                                                                            |
+| Risiko                                             | Dampak | Probabilitas | Mitigasi                                                                                                                            |
 | :------------------------------------------------- | :----- | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Lonjakan Memori Chromium Headless**              | Tinggi | Sedang       | Concurrency browser dibatasi maksimal 1 sesi bersamaan (`BROWSER_MAX_CONCURRENCY=1`) dengan timeout 15 detik dan flag `--disable-dev-shm-usage`. Batas RAM container worker diatur ke 2048 MB di `docker-compose.yml`. |
-| **Gangguan Model Gateway 9Router (Timeout / 503)** | Sedang | Rendah       | Retry loop dengan batas maksimal 3 kali dan exponential backoff di `packages/model-gateway/src/nine-router.ts`. Error ditangani tanpa korupsi state task. |
-| **Koneksi Windows Worker Terputus Saat Eksekusi**  | Sedang | Sedang       | Fail-fast timeout pada backend dengan event `task.waiting_device`. Task ditahan dengan aman dan dilanjutkan saat worker terhubung kembali.                |
-| **Exhaustion Disk Akibat Log atau Database**       | Rendah | Rendah       | Fastify logger menggunakan log-level pino, rotasi backup PostgreSQL otomatis menghapus dump yang lebih lama dari 7 hari di `scripts/backup-postgres.sh`.  |
+| **Lonjakan Memori Chromium Headless**              | Tinggi | Sedang       | Concurrency browser dibatasi maksimal 1 sesi bersamaan (`BROWSER_MAX_CONCURRENCY=1`) dengan timeout 15 detik dan flag `--disable-dev-shm-usage`. Batas RAM container worker 2048 MB. VPS tidak memiliki swap, jadi OOM killer tetap mungkin; belum ada uji beban puncak. |
+| **Gangguan Model Gateway 9Router (Timeout / 503)** | Sedang | Rendah       | Retry maksimal 3 percobaan (2 retry) dengan exponential backoff + jitter, hanya untuk 429/5xx/timeout/network (`packages/model-gateway/src/nine-router.ts`). Fallback model ada dan tetap melewati 9Router. Catatan: error 402 dipetakan ke kelas `UNKNOWN`, sehingga masalah kuota tidak dapat dibedakan dari kegagalan tak terduga. |
+| **Koneksi Windows Worker Terputus Saat Eksekusi**  | Sedang | Sedang       | Sesi koneksi perangkat disimpan **in-memory** (`apps/api/src/services/device-connection-manager.ts`), sehingga restart API menghapus seluruh sesi dan semua perangkat tampak offline sampai mereka reconnect. Selain itu tidak ada jalur dispatch perintah dari task ke perangkat (lihat Butir 11), jadi mitigasi "task ditahan dan dilanjutkan" belum dapat diverifikasi. |
+| **Exhaustion Disk Akibat Log atau Database**       | Rendah | Rendah       | Rotasi log Docker aktif (`/etc/docker/daemon.json`: `max-size 10m`, `max-file 3`). Retensi backup **14 hari** (`RETENTION_DAYS` default di `scripts/backup-postgres.sh:15`), bukan 7 hari seperti tertulis sebelumnya. Disk terpakai 42G/174G (25%). |
+| **Kehilangan Memori Diam-diam**                    | Tinggi | **Tinggi**   | Belum dimitigasi. `POST /v1/memories` mengembalikan `201`, lalu data hilang saat restart tanpa error maupun log. Terdeteksi hanya lewat audit ini. |
+| **Klaim Completion Palsu**                         | Tinggi | Sedang       | Belum dimitigasi. Jalur `executeRegisteredTool` menulis `completed` tanpa evaluator, dan bukti coding berasal dari lingkungan mock. |
 
 ---
 
 ## 7. Rencana Perbaikan Berurutan Prioritas
 
-### Prioritas P0 (Sebelum Deployment Live Pertama)
+### Prioritas P0 (cacat fungsional, tidak memerlukan kredensial eksternal)
 
-1. **Pemberian Akses SSH ke VPS Oracle Cloud**:
-   - Menghubungkan sesi terminal ke Oracle Cloud Ubuntu 24.04 ARM64.
-   - Memeriksa kapasitas sistem (`uname -m`, `free -h`, `docker compose version`).
-2. **Setup Server Environment (.env) di VPS**:
-   - Mengisi `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, dan `NINEROUTER_API_KEY` pada file `.env` di VPS.
-   - Memastikan hak akses file `.env` dibatasi hanya untuk user deployer (`chmod 600 .env`).
-3. **Eksekusi Migrasi Database Drizzle**:
-   - Menjalankan `bash scripts/migrate-db.sh` di server VPS untuk membuat skema PostgreSQL dan ekstensi pgvector.
-4. **Verifikasi Referensi Audit Dokumen**:
-   - Memastikan `node --experimental-strip-types scripts/verify-audit-refs.ts` lulus tanpa kegagalan path.
+Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Empat yang pertama menutup kebohongan paling merusak.
 
-### Prioritas P1 (Hari Pertama Pasca-Deployment)
+1. **Perbaiki pemulihan task** — teruskan `queue` ke `recoverInterruptedTasks` di `apps/agent-worker/src/index.ts:223`, dan ganti Skenario 4 dengan test yang benar-benar memanggil jalur pemulihan produksi serta gagal bila task tetap `running`.
+2. **Buat memory persisten** — tambahkan migrasi `CREATE TABLE memories` beserta kolom `vector(1536)` dan index, hentikan fallback diam-diam ke `InMemoryMemoryStore`, dan sambungkan provider embedding nyata. Perbaiki juga route `GET /v1/memories/search` yang tertelan `/:id`.
+3. **Buat evaluator menilai bukti nyata** — ganti `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dengan lingkungan yang benar-benar menjalankan lint/typecheck/test/build, dan jangan biarkan `executeRegisteredTool` menulis `completed` tanpa evaluator.
+4. **Beri research jalur pencarian nyata** — daftarkan provider search yang sungguh-sungguh (SearXNG self-host atau API pihak ketiga) dan buat `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi.
+5. **Sambungkan dispatch perintah ke Windows Agent** — hubungkan `dispatchCommand` ke jalur task dengan approval, dan ganti identitas perangkat menjadi kriptografis (`devices.public_key` diisi dan diverifikasi).
+6. **Perbaiki notifikasi dan FCM** — `NotificationEngine` di API harus memakai storage durable, dan `fcm-provider.ts` harus memperoleh token OAuth nyata dari service account, bukan literal `dummy-env-token`.
+7. **Perluas audit** — tulis tool call, MCP call, browser action, dan artifact write ke `audit_logs`, bukan hanya keputusan approval.
+8. **Tambahkan pemeriksaan paritas schema ↔ migrasi** — tabel `memories` dan `artifacts` ada di `schema.ts` tanpa migrasi; ini kelas bug yang akan terulang.
 
-1. **Konfigurasi FCM Push Notification Live**:
-   - Menempatkan service account key Google Cloud pada direktori terisolasi server dan menetapkan path ke `FCM_SERVICE_ACCOUNT_JSON`.
-2. **Pemasangan Scheduled Backup Cron**:
-   - Mengonfigurasi cron job harian pada jam 02:00 UTC menggunakan `scripts/backup-cron-wrapper.sh`.
-3. **Smoke Test Probe Live 9Router**:
-   - Menjalankan `scripts/smoke-live-9router.ts` dari server VPS untuk memvalidasi latensi dan ketersediaan model gateway.
+### Prioritas P1 (kebersihan dan pengerasan)
 
-### Prioritas P2 (Peningkatan Berkelanjutan)
+1. **Hapus atau sambungkan dead code** — `AiCouncil` (`packages/agent-core/src/council/`) dan `SelfHealingEngine` (`packages/agent-core/src/healing/`) tidak dipanggil dari `apps/`. Putuskan: pakai atau buang.
+2. **Streaming upload artifact** — `POST /v1/artifacts` saat ini menerima JSON string dengan batas efektif 1 MiB (`bodyLimit` Fastify default); `getArtifactStream` ada tetapi tidak dipakai. Validasi MIME juga masih berdasarkan deklarasi klien tanpa magic bytes.
+3. **Sweeper retention** — `retention` pada memori dan artifact hanya field tersimpan; tidak ada yang menghapus data kedaluwarsa.
+4. **Rate limit dan timeout pada jalur tool** — pastikan batas berlaku juga untuk pemanggilan MCP dan runtime.
 
-1. **Pengujian Adapter Runtime Tambahan (Pi / Hermes)**:
-   - Jika runtime Pi atau Hermes di masa depan telah stabil dipasang di VPS, aktifkan adapter terkait melalui `packages/agent-core/src/runtimes/runtime-manager.ts`.
-2. **Integrasi OpenTelemetry Collector Eksternal**:
-   - Menghubungkan endpoint `/metrics` di `apps/api/src/app.ts` ke Prometheus/Grafana cloud eksternal untuk pemantauan jangka panjang.
+### Prioritas P2 (operasional dan peningkatan)
+
+1. **Konfigurasi FCM Push Notification Live** — menempatkan service account key pada direktori terisolasi server dan menetapkan `FCM_SERVICE_ACCOUNT_JSON` (setelah cacat P0 nomor 6 diperbaiki).
+2. **Restore drill terjadwal** — prosedur pemulihan sudah lulus sekali terhadap arsip nyata, tetapi belum dijalankan sebagai rutinitas berkala.
+3. **Integrasi OpenTelemetry Collector Eksternal** — menghubungkan `/metrics` di `apps/api/src/app.ts` ke Prometheus/Grafana untuk pemantauan jangka panjang dan alerting.
+4. **Pengujian adapter runtime tambahan** — `runtimes/{pi,omp,hermes,openhands}-adapter` belum ada; Hermes dan OpenHands masih `UnverifiedRuntimeAdapter`.
+5. **Verifikasi perangkat fisik** — jalankan NSIS installer di Windows dan pasang APK di perangkat Android.
 
 ---
 
-## 8. Log Eksekusi Quality Gates (Hasil Aktual Hari Ini)
+## 8. Log Eksekusi Quality Gates
+
+Log lama pada revisi sebelumnya berasal dari host Windows (`C:\Coding\Project\ai-agent`) dan tidak dapat direproduksi di lingkungan ini. Bagian ini menggantinya dengan hasil aktual dari checkout `release/installers` pada Linux aarch64.
 
 ### A. Linter (`pnpm lint`)
 
 ```text
-> personal-ai-os@0.2.0 lint C:\Coding\Project\ai-agent
-> turbo run lint
-
- Tasks:    13 successful, 13 total
-Cached:    12 cached, 13 total
-  Time:    6.715s
-(0 error, 0 warning across all 13 packages)
+Tasks:    14 successful, 14 total
+Time:     ~3s
+(0 error, 0 warning)
 ```
 
-### B. Typecheck (`pnpm typecheck`)
+Catatan: `packages/mcp/test/fixtures/echo-server.mjs` sempat gagal `no-undef 'process'` karena ESLint tidak mengetahui global Node untuk berkas `.mjs`. Diperbaiki dengan `/* global process */` di berkas fixture, bukan dengan melonggarkan konfigurasi ESLint.
+
+### B. Build (`pnpm build`)
 
 ```text
-> personal-ai-os@0.2.0 typecheck C:\Coding\Project\ai-agent
-> turbo run typecheck
-
- Tasks:    13 successful, 13 total
-Cached:    11 cached, 13 total
-  Time:    22.599s
-(0 error across all 13 packages)
+Tasks:    14 successful, 14 total
+Time:     ~28s
 ```
 
-### C. Build (`pnpm build`)
+### C. Test per-paket (bukan `pnpm test` di root)
+
+`pnpm test` di root **tidak dapat dipakai**: task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite dijalankan per paket:
 
 ```text
-> personal-ai-os@0.2.0 build C:\Coding\Project\ai-agent
-> turbo run build
-
- Tasks:    13 successful, 13 total
-Cached:    2 cached, 13 total
-  Time:    20.324s
-(Semua artifact build TypeScript dan Vite bundle apps/windows terkompilasi bersih)
+@personal-ai-os/tools          30/30
+@personal-ai-os/mcp            17/17
+@personal-ai-os/agent-worker   29/29
+@personal-ai-os/permissions     5/5
+API (in-container)             50/50, 0 skipped
 ```
 
-### D. Test E2E 7 Skenario (`node --test --experimental-strip-types apps/api/test/e2e-scenarios.test.ts`)
+Suite API dijalankan di dalam image `personal-ai-os-api:latest`; image `node:22-bookworm-slim` polos gagal satu test karena tidak memiliki `git`, yang dibutuhkan `prepareWorkspace`.
+
+### D. Verifikasi Referensi Path Dokumen (`pnpm verify:audit`)
 
 ```text
-✔ Skenario 1: Register/login, chat streaming via WebSocket (real Fastify & fake 9Router) (760.8611ms)
-✔ Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed (309.6985ms)
-✔ Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; deny menghentikan task (325.5554ms)
-✔ Skenario 4: Matikan worker di tengah task, hidupkan lagi, task pulih dari checkpoint tanpa menggandakan side effect (3.0313ms)
-✔ Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di luar allowlist ditolak, offline ditangani (1061.4363ms)
-✔ Skenario 6: Jadwal berulang berjalan tepat sekali (957.1265ms)
-✔ Skenario 7: Isolasi: user A tidak bisa membaca project/task/memori user B (161.3365ms)
-
-ℹ tests 7
-ℹ suites 0
-ℹ pass 7
-ℹ fail 0
-ℹ cancelled 0
-ℹ skipped 0
-ℹ todo 0
-ℹ duration_ms 7144.4096
+[Verify Audit Refs] Berhasil memverifikasi 78 path unik yang valid.
+[SUKSES] Semua referensi path file dalam docs/final-audit.md 100% valid dan ada di filesystem.
 ```
 
-### E. Verifikasi Referensi Path Dokumen (`node --experimental-strip-types scripts/verify-audit-refs.ts`)
+### E. Bukti live produksi (2026-10-13)
 
-Skrip otomatis memastikan tidak ada path file fiktif atau broken reference di dalam dokumen audit ini.
+```text
+# Chat melalui 9Router, tanpa secret di klien
+POST /v1/chat -> 200 {"content":"OK","resolvedModel":"agentic/space-bunny-free","usage":{"totalTokens":2972}}
+
+# MCP stdio end-to-end
+{"service":"agent-worker","event":"mcp_registered","serverId":"echo","tools":["mcp_echo_echo","mcp_echo_boom"]}
+task -> waiting_approval (action "tool:mcp_echo_echo", riskLevel MEDIUM) -> approve -> completed
+output: <untrusted_content source="mcp:echo/echo" is_instruction="false">
+
+# Browser automation nyata
+browser_navigate -> completed dengan judul dan konten halaman nyata
+SSRF 169.254.169.254 -> failed
+
+# Cacat 1: memori hilang saat restart
+POST /v1/memories -> 201; GET /v1/memories -> count=1
+docker compose restart api
+GET /v1/memories -> count=0
+SELECT to_regclass('public.memories') -> null
+
+# Cacat 2: task pulih menggantung
+task dipaksa running/progress=40; docker compose restart worker
+log: {"action":"recovery","recoveredCount":1}; event task.resumed tertulis
+40 detik kemudian: masih running/progress=40
+
+# Cacat 3: audit hanya approval
+SELECT action, count(*) FROM audit_logs GROUP BY action;
+ approval:denied   | 5
+ approval:approved | 5
+
+# Cacat 4: notifikasi belum pernah terkirim
+SELECT count(*) FROM notifications; -> 0
+```

@@ -8,12 +8,12 @@ capabilities:
     clients: android; windows
     proof: pnpm --filter @personal-ai-os/api test
   durable_tasks:
-    status: implemented
+    status: partial
     code: apps/api/src/routes/tasks.ts; apps/api/src/db/task-repository.ts; apps/api/src/services/task-queue.ts
     permission_boundary: task ownership; approval repository
     clients: android task timeline
-    proof: apps/api/test/recovery-drill.test.ts; apps/api/test/e2e-scenarios.test.ts
-    limitation: live suites share one Redis instance; tests isolate via unique queue names
+    limitation: |
+      Queue, cancellation, and checkpointing are verified. Recovery is broken: `recoverInterruptedTasks()` is called without a `queue` argument (`apps/agent-worker/src/index.ts:223`), and `apps/agent-worker/src/task-executor.ts:1173-1175` only enqueues `if (queue)`. A task left `running` by a worker restart is recovered cosmetically (status read, `task.resumed` event written) and then hangs forever. Verified live: task forced to `running`/`progress=40`, worker restarted, still `running`/`progress=40` after 40s. The e2e "Skenario 4" test does not call `recoverInterruptedTasks` at all and therefore cannot fail.
   worker_process:
     status: implemented
     code: apps/agent-worker/src/index.ts
@@ -27,14 +27,17 @@ capabilities:
     permission_boundary: PermissionEngine; schedule ownership
     clients: android notifications
     proof: apps/scheduler/test/scheduler.test.ts
-    limitation: live PostgreSQL/Redis process proof environment-dependent
+    limitation: |
+      Live PostgreSQL/Redis process proof is environment-dependent. The API builds `SchedulerEngine` with `SqlScheduleRepository` (`apps/api/src/index.ts:181-183`) but never calls `tick()` there, and the dispatcher only calls `taskQueue.enqueue` without inserting into `tasks` (`:190-191`), so the in-memory Map remains the tick source of truth in the scheduler process. Notifications have never been delivered: `notifications` holds 0 rows in production, `NotificationEngine` is constructed without storage in the API (`apps/api/src/index.ts:209`), `SqlNotificationRepository` is never instantiated, and no production code path bridges task events to notifications. `apps/scheduler/src/fcm-provider.ts:185` injects `accessToken: 'dummy-env-token'` hardcoded, so delivery would fail with 401 even with a valid service account. There is no signature verification on inbound events and `registerRule` is never called in production.
   universal_agent_execution:
     status: implemented
     code: apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts
     permission_boundary: executor guard; runtime manager; model:chat guarded by PermissionEngine
     clients: android; windows
     proof: apps/agent-worker/test/live-worker-execution.test.ts; apps/agent-worker/test/worker.test.ts
-    limitation: generic tasks execute one bounded model step per run; planner output is recorded as evidence, not dispatched step-by-step; payload.mode is forwarded to the router but only 'coding' changes observable behaviour (selectedRuntimeId)
+    limitation: |
+      Generic tasks execute one bounded model step per run; planner output is recorded as evidence, not dispatched step-by-step; `payload.mode` is forwarded to the router but only `coding` changes observable behaviour (`selectedRuntimeId`).
+      Completion evidence is not independent on every path. `executeRegisteredTool` writes `completed` without invoking any evaluator (`apps/agent-worker/src/task-executor.ts:624`), which is the path used by every `generic_task` carrying `payload.toolName` (browser and MCP smoke included). On the coding path the evidence is fabricated: `createDefaultEnvironment()` returns `{passed: true}` for lint/typecheck/tests/build (`packages/agent-core/src/coding/coding-agent.ts:414-438`) and the worker always uses that default (`apps/agent-worker/src/task-executor.ts:134`), so no lint, typecheck, test, or build command runs in production. Research has no search path: `web_search` targets `https://example.com/search?q=…` (`packages/tools/src/builtin/web-search.ts:64`) and is not registered anywhere, so `ResearchAgent` falls back to hardcoded MDN/nodejs.org sources. Acceptance criteria are never persisted before execution: `TaskCheckpoint` has no criteria field (`packages/shared/src/tasks/types.ts:13-24`).
   model_gateway:
     status: implemented
     code: packages/model-gateway; apps/api/src/routes/models.ts
@@ -68,14 +71,19 @@ capabilities:
     permission_boundary: authenticated device WSS; local capability registry; server REST calls reuse the same bearer token
     clients: windows
     proof: apps/windows/test/server-api-and-events.test.ts; apps/windows/test/agent-connection.test.ts; pnpm exec tauri build --no-bundle
-    limitation: the Tauri release binary builds on Linux aarch64 and was driven under Xvfb against the production API (server tasks, live events, approvals approve/deny, artifact preview, live model catalog); the nsis installer cross-builds on this aarch64 host with cargo-xwin and produces Personal AI OS - Windows Agent_0.1.0_x64-setup.exe, unsigned and not yet executed on Windows
+    limitation: |
+      The Tauri release binary builds on Linux aarch64 and was driven under Xvfb against the production API (server tasks, live events, approvals approve/deny, artifact preview, live model catalog); the nsis installer cross-builds on this aarch64 host with cargo-xwin and produces `Personal AI OS - Windows Agent_0.1.0_x64-setup.exe`, unsigned and not yet executed on Windows.
+      The device channel is not wired end to end. `dispatchCommand` (`apps/api/src/services/device-connection-manager.ts:154`) has zero callers in `apps/`, so no production path sends a command from a task to a device; the worker only checks `hasOnlineDeviceForUser('windows')` (`apps/agent-worker/src/task-executor.ts:169`). Device identity is not cryptographic: `devices.public_key` (`apps/api/src/db/schema.ts:30`) is never populated or verified, `fetchDeviceIdentity` falls back to the literal `'win-dev-local'` (`apps/windows/src/connection/device-identity.ts:26`), and `deviceId` comes from the `/v1/agent/ws` query string (`apps/api/src/routes/agent-ws.ts:44`). Device sessions live in memory, so an API restart drops every session until devices reconnect. There is no text-command or binary allowlist: enforcement covers capability, action, and `cwd` only. There is also no mapping from Windows capabilities to Personal AI OS capabilities, and `runtimes/{pi,omp,hermes,openhands}-adapter` do not exist in the repository — Hermes and OpenHands are `UnverifiedRuntimeAdapter` only (`packages/agent-core/src/runtimes/unverified-adapter.ts`).
   memory_artifacts_observability:
     status: partial
-    code: packages/memory; apps/api/src/db; apps/api/src/routes
+    code: packages/memory; apps/api/src/db/memory-repository.ts; apps/api/src/routes/memory.ts; apps/api/src/db
     permission_boundary: project/user ownership; audit redaction; artifact quotas
     clients: android artifacts
-    proof: pnpm test
-    limitation: deployment backup/restore and physical client proofs environment-dependent
+    proof: packages/memory/test/memory.test.ts; packages/tools/test/artifacts.test.ts
+    limitation: |
+      Memory does not persist. The `memories` table exists in Drizzle (`apps/api/src/db/schema.ts:265`, including `vector('embedding', {dimensions:1536})` at `:279`) but no migration creates it, so `to_regclass('public.memories')` is null in production. `DrizzleMemoryRepository` swallows the failure (`if (!this.db)` plus try/catch) and silently falls back to a per-process `InMemoryMemoryStore`, so `POST /v1/memories` returns 201 and the row disappears on the next API restart (verified live: count=1 before restart, count=0 after). `InactiveEmbeddingProvider.embed()` throws and `isAvailable=false`, so semantic search is never active and no vector index exists. `GET /v1/memories/search` returns 404 because the `/:id` route shadows it. There is no retention sweeper and no automatic memory extraction (the worker does not import `@personal-ai-os/memory`).
+      Artifacts: checksum sha256 is computed and stored, path traversal is rejected, and quota is enforced cross-process. Gaps: the `artifacts` table in `schema.ts:293` also has no migration and no repository; upload is not streaming (JSON string body, effective 1 MiB Fastify `bodyLimit` rather than 25 MB); MIME is client-declared with no magic-byte check; `retention` is a stored field with no sweeper; `accessPolicy: 'project_members'` is ignored; and the quota check-then-put is not atomic (TOCTOU).
+      Observability: `audit_logs` in production holds only 10 rows, all approval decisions; tool calls, MCP calls, browser actions, and artifact writes are not recorded. MCP audit goes to `console.log` only. The worker healthcheck touches `/tmp/healthy` on a timer instead of probing database/Redis. Deployment backup/restore and physical client proofs remain environment-dependent.
   deployment:
     status: partial
     code: docker-compose.yml; infrastructure/docker; docs/runbooks/deployment.md
@@ -89,3 +97,5 @@ simulation:
   code: apps/agent-worker/src/task-executor.ts:47
   production_claim: forbidden until real generic orchestration exists
   proof: apps/agent-worker/test/worker.test.ts; apps/agent-worker/test/live-worker-execution.test.ts
+  limitation: |
+    Additional unwired code that must not be presented as a capability: `AiCouncil` (`packages/agent-core/src/council/ai-council.ts`) and `SelfHealingEngine` (`packages/agent-core/src/healing/self-healing-engine.ts`) have tests but zero call sites in `apps/`, so neither runs in production.
