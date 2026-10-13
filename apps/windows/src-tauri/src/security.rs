@@ -10,12 +10,8 @@ pub enum SecurityError {
     PathTraversal(String),
     #[error("Invalid path format: alternate data streams or device namespaces rejected ('{0}')")]
     InvalidPathFormat(String),
-    #[error("Capability '{0}' is disabled by user policy")]
-    CapabilityDisabled(String),
     #[error("Command execution timed out after {0} ms")]
     ExecutionTimeout(u64),
-    #[error("Output exceeded max buffer size ({0} bytes)")]
-    OutputBufferExceeded(usize),
 }
 
 pub struct PathAllowlistManager {
@@ -26,12 +22,6 @@ impl PathAllowlistManager {
     pub fn new() -> Self {
         Self {
             allowed_roots: RwLock::new(Vec::new()),
-        }
-    }
-
-    pub fn with_roots(roots: Vec<PathBuf>) -> Self {
-        Self {
-            allowed_roots: RwLock::new(roots),
         }
     }
 

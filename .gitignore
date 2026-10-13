@@ -9,3 +9,4 @@ coverage/
 *.tsbuildinfo
 apps/android/personal-ai-os.apk
 apps/windows/src-tauri/target/
+apps/windows/src-tauri/gen/schemas/

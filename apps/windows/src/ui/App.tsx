@@ -5,6 +5,16 @@ import './Theme.css';
 
 interface FileTreeEntry { path: string; name: string; kind: 'directory' | 'file'; size: number; }
 
+/** Keeps the token field responsive while avoiding one API call per keystroke. */
+const useDebounced = (value: string, delayMs = 400): string => {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+};
+
 const ProjectPanel: React.FC = () => {
   const { allowedRoots, capabilities } = useAgentStore();
   const [root, setRoot] = useState(allowedRoots[0] ?? '');
@@ -275,6 +285,15 @@ export const App: React.FC = () => {
   const [newPathInput, setNewPathInput] = useState('');
   const [testPathInput, setTestPathInput] = useState('');
   const [testResult, setTestResult] = useState<{ allowed: boolean; message: string } | null>(null);
+
+  // Settings drafts: commit to the store only after typing settles, otherwise every
+  // keystroke refetches the model catalog, tasks, approvals, and artifacts.
+  const [serverUrlDraft, setServerUrlDraft] = useState(serverUrl);
+  const [authTokenDraft, setAuthTokenDraft] = useState(authToken);
+  const debouncedServerUrl = useDebounced(serverUrlDraft);
+  const debouncedAuthToken = useDebounced(authTokenDraft);
+  useEffect(() => { setServerUrl(debouncedServerUrl); }, [debouncedServerUrl, setServerUrl]);
+  useEffect(() => { setAuthToken(debouncedAuthToken); }, [debouncedAuthToken, setAuthToken]);
 
   const activeCapsCount = Object.values(capabilities).filter(Boolean).length;
 
@@ -821,8 +840,8 @@ export const App: React.FC = () => {
                   type="text"
                   className="text-input"
                   style={{ width: '100%', marginTop: 4 }}
-                  value={serverUrl}
-                  onChange={(e) => setServerUrl(e.target.value)}
+                  value={serverUrlDraft}
+                  onChange={(e) => setServerUrlDraft(e.target.value)}
                 />
               </div>
 
@@ -835,8 +854,8 @@ export const App: React.FC = () => {
                   className="text-input"
                   style={{ width: '100%', marginTop: 4 }}
                   placeholder="Masukkan access token user..."
-                  value={authToken}
-                  onChange={(e) => setAuthToken(e.target.value)}
+                  value={authTokenDraft}
+                  onChange={(e) => setAuthTokenDraft(e.target.value)}
                 />
               </div>
 

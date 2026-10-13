@@ -64,11 +64,11 @@ capabilities:
     limitation: attachment upload unavailable; task creation surface is coding-runtime-specific
   windows:
     status: partial
-    code: apps/windows/src/ui; apps/windows/src/api; apps/windows/src/connection; apps/windows/src/security
+    code: apps/windows/src/ui; apps/windows/src/api; apps/windows/src/connection; apps/windows/src/security; apps/windows/src-tauri
     permission_boundary: authenticated device WSS; local capability registry; server REST calls reuse the same bearer token
     clients: windows
-    proof: apps/windows/test/server-api-and-events.test.ts; apps/windows/test/agent-connection.test.ts
-    limitation: server task list/detail/events/pause/resume/cancel, approval decisions, artifact preview and live model catalog are implemented and production-smoked from the Vite-served UI; Tauri packaging and the packaged webview origin remain unverified because rustc is absent
+    proof: apps/windows/test/server-api-and-events.test.ts; apps/windows/test/agent-connection.test.ts; pnpm exec tauri build --no-bundle
+    limitation: the Tauri release binary builds on Linux aarch64 and was driven under Xvfb against the production API (server tasks, live events, approvals approve/deny, artifact preview, live model catalog); the nsis installer is Windows-only and unbuilt because no Windows host exists
   memory_artifacts_observability:
     status: partial
     code: packages/memory; apps/api/src/db; apps/api/src/routes
@@ -77,12 +77,12 @@ capabilities:
     proof: pnpm test
     limitation: deployment backup/restore and physical client proofs environment-dependent
   deployment:
-    status: unverified
+    status: partial
     code: docker-compose.yml; infrastructure/docker; docs/runbooks/deployment.md
     permission_boundary: private internal network; server secrets
-    clients: VPS
-    proof: docker compose config
-    limitation: live VPS, credentials, and durable process smoke required
+    clients: VPS; windows device channel; android
+    proof: docker compose config; https://ai.ojixx.my.id/health, /ready, /metrics; wss://ai.ojixx.my.id/v1/events/ws; /v1/agent/ws handshake
+    limitation: live VPS TLS, container limits, runtime-bridge completion, public device WSS and daily pg_dump backups are verified; no restore drill and no Windows host for the nsis installer
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

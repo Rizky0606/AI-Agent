@@ -57,21 +57,40 @@ Date: 2026-10-13
   - `Artifacts`: uploaded `launch-risks.md` listed with mime type and size; `Preview` rendered the actual markdown body from `GET /v1/artifacts/:id/download`.
   - `Pause` / `Resume` / `Cancel` from the task detail panel moved the task `waiting_approval → paused → completed` and `→ cancelled` respectively; API-level state confirmed.
   - Model catalog in `Settings` now loads through the shared `ApiClient` instead of a bespoke `fetch`.
-- Browser-context access required a CORS allowlist on the API (`apps/api/src/app.ts`): the Tauri webview and the Vite dev server send an `Origin` header, and Fastify answered `OPTIONS` with 404 before the change. The `onRequest` hook echoes `Access-Control-Allow-Origin` for `CORS_ALLOWED_ORIGINS` (default `tauri://localhost,http://tauri.localhost,https://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420`), sets `Vary: Origin`, and answers preflight with 204. Native clients send no `Origin` and are unaffected. Covered by a regression test in `apps/api/test/api.test.ts`.
+
+## Tauri packaging and packaged-app parity (Task 7)
+
+- Tauri toolchain installed on this Linux aarch64 host (`rustc`/`cargo` 1.99.0 at `~/.cargo/bin`, plus `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`). `pnpm exec tauri build --no-bundle` produces `apps/windows/src-tauri/target/release/personal-ai-os-windows` (ELF aarch64) with a warning-free Rust build.
+- The configured bundle target is `nsis` (`apps/windows/src-tauri/tauri.conf.json`), which is Windows-only, so a full installer cannot be produced off-Windows. The `--no-bundle` release binary is the packaging proof on this host.
+- App identity was preserved by regenerating the Tauri icon set from the PNG already embedded in `icons/icon.ico` (`pnpm exec tauri icon`), not by inventing new artwork. The generated `icons/android` and `icons/ios` subtrees were removed.
+- Two Rust defects surfaced by the first real build and were fixed: a missing `use executor::CommandOutput;` in `src/main.rs` (E0425) and dead `SecurityError::CapabilityDisabled` / `::OutputBufferExceeded` variants plus the unused `PathAllowlistManager::with_roots` constructor in `src/security.rs`.
+- The packaged binary was driven under `Xvfb :99` and exercised through its real webview against the production API on `https://ai.ojixx.my.id`:
+  - `Settings`: entering a real JWT produced `Source: live - 263 models`.
+  - `Server Tasks`: the account's task list rendered; selecting task `47161723-05bc-48b8-98d6-e006a8718e14` showed `COMPLETED`, progress 100, checkpoint `step 4/4 · v3 · complete_task`, `Event stream: connected`, and the 6 real events including the `task.tool_call` payload for `model:chat` with output model `cb/deepseek-v4.1-flash`.
+  - `Artifacts`: `packaged-app-note.md` listed with mime type and size; `Preview` rendered its real markdown body.
+  - `Approvals`: a HIGH-risk `git:push` approval on `repo://github.com/e2e/packaged` rendered with risk, scope, consequence, and task id. Clicking `Approve` with the reason `Disetujui dari aplikasi Tauri terpaket.` persisted `status: approved` with that `decisionReason` (`decidedAt 2026-10-13T09:01:25.015Z`) and moved task `a09a794d-5e91-41f6-a7c2-7749a568c82d` to `completed` / progress 100. Clicking `Deny` on a second approval (`repo://github.com/e2e/deny`) persisted `status: denied` and failed task `d1f49e65-f3ce-4896-8886-314057cf8eaa` at progress 50 with `Ditolak oleh pengguna`.
+- Defect found and fixed during packaged-app testing: the Settings token field committed to the store on every keystroke, so each character triggered a `/v1/models` fetch and the app tripped `@fastify/rate-limit` (HTTP 429). `apps/windows/src/ui/App.tsx` now holds `serverUrlDraft` / `authTokenDraft` locally and commits through a `useDebounced` hook (400 ms); retested with zero 429 responses in the API log while the catalog still resolved to `live - 263 models`.
+
+## Production provider, runtime bridge, VPS, and device evidence (Task 7)
+
+- Live model provider: 9Router still rejects `agentic/space-bunny-free` and `agentic/muse-spark-1.3-free` with `FreeTierError` HTTP 403. `agentic/deepseek-v4.1-flash-free` completes: tasks `a8dce59a-b508-4f18-9926-9abe165f7a70`, `5ac232de-f12b-468b-9742-16492647795e`, `47161723-05bc-48b8-98d6-e006a8718e14` all reached `completed` / 100 with a real `task.tool_call` and `task.completed.payload.evaluationResult = {score: 1, passed: true, category: 'generic', confidence: 0.9, remainingIssues: [], selfClaimRejected: false}`.
+- Runtime bridge: `POST /v1/tasks {kind: 'coding_task', payload: {useRuntime: true, …}}` (task `7cc84506-ec47-427a-a65f-a917b2d1dd82`) reached `completed` / 100. `task.started` carried `runtime: 'fast_model'` / `runtimeFallback: false`, `task.tool_call` recorded `tool: 'runtime:omp'` with real JSONL session output, and `task.completed` produced artifact `runtime-output-<taskId>`. `RUNTIME_PREFERRED=omp`; `personal-ai-os-runtime-bridge.service` is active on `172.20.0.1:9120`.
+- VPS device channel: `POST /v1/devices` followed by a WSS connection to `/v1/agent/ws?token&deviceId&platform=windows` returned `{"type":"device.handshake_ack","status":"online"}` and `GET /v1/devices` then reported `isOnline: true` with a fresh `lastSeenAt`. Repeated over public TLS against `wss://ai.ojixx.my.id/v1/agent/ws` with the same result.
+- Public TLS: `https://ai.ojixx.my.id/health`, `/ready`, and `/metrics` all returned 200. Certificate `CN=ai.ojixx.my.id`, issuer Let's Encrypt `YE2`, valid 2026-10-11 → 2027-01-09. The public event stream `wss://ai.ojixx.my.id/v1/events/ws?token&taskId` delivered `task.tool_call`, `task.progress`, and `task.completed`; the first frame is always `{"type":"auth.ok", …}` rather than an event envelope.
+- Container limits confirmed: api 768Mi/0.5cpu, worker 1.5Gi/0.75cpu, scheduler 384Mi/0.25cpu, postgres 1.5Gi/0.75cpu, redis 384Mi/0.25cpu. The backup service is running and writes daily `pg_dump` archives into volume `personal-ai-os_postgres-backups` (latest `personal_ai_os-20261012T092511Z.dump`).
 
 ## Partial / blocked
 
-- Live API suite against production PostgreSQL/Redis is verified (49 passed) using isolated queue names and the production network. Scheduler live suite verified separately (5 passed). Remaining unverified suites are those needing host/device/provider credentials.
+- Live API suite against production PostgreSQL/Redis is verified (50 passed) using isolated queue names and the production network. Scheduler live suite verified separately (5 passed). Remaining unverified suites are those needing host/device/provider credentials.
 - `pnpm build`: 14 tasks successful. `pnpm lint`: 14 tasks successful.
-- Rust/Tauri proof blocked: `rustc` is not installed.
-- VPS deployment, runtime bridge credentials, physical Android device, Windows host, and live model provider unavailable; no claims made.
-- Worker production registry wiring and approval-gated explicit tool execution are implemented and unit-tested. Production smoke proves LOW-risk `web_fetch` and the generic natural-language path; high-risk approval flow remains unit-tested, not production-smoked.
+- The Windows installer (`nsis`) is not built: the target is Windows-only and no Windows host is available. The Linux release binary is built and exercised instead.
+- No Android SDK/JDK/`adb` on this host, so no APK build and no physical-device run. `apps/android/eas.json` `preview` profile points at `https://ai.ojixx.my.id` / `wss://ai.ojixx.my.id`; Android typecheck is clean and its 19 tests pass.
+- Worker production registry wiring and approval-gated explicit tool execution are implemented and unit-tested. The high-risk approval flow is now production-smoked end-to-end from the packaged Windows app (approve and deny paths above).
 - Multi-step planning for generic tasks still executes as one bounded model step; planner output is recorded as evidence, not dispatched step-by-step.
-- Windows agent server-task parity is implemented and production-smoked from the Vite-served UI (`apps/windows/src/api/client.ts`, `apps/windows/src/connection/events-stream.ts`, store actions, `Server Tasks` / `Approvals` / `Artifacts` / model-catalog panels). Remaining gap: the packaged Tauri webview origin is unverified (`rustc` absent), so only the dev-server origin (`http://127.0.0.1:1420`) was exercised.
-- Android attachment upload remains unavailable by design until authenticated artifact-upload contract exists.
+- Android attachment upload remains unavailable by design until an authenticated artifact-upload contract exists.
 
 ## Next actions
 
-Install Rust toolchain for Tauri proof. Provide physical Android device, Windows host, and live model provider credentials for environment-dependent checks.
+Provide a Windows host to produce and smoke the `nsis` installer, and an Android device with SDK/JDK to build and run the APK. Keep `DEFAULT_CHAT_MODEL` off the 9Router free-tier models that return `FreeTierError` HTTP 403.
 
 Full concept parity: **not claimed**.

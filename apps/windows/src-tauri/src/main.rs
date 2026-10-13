@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
 use capabilities::{Capability, CapabilityConfig, CapabilityRegistry};
+use executor::CommandOutput;
 use security::PathAllowlistManager;
 
 const MAX_TREE_DEPTH: usize = 32;
