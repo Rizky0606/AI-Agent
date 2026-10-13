@@ -31,10 +31,20 @@ Android APK:
 cd apps/android
 npx expo prebuild --platform android --no-install
 cd android
-ANDROID_HOME=<sdk> JAVA_HOME=<jdk17> ./gradlew assembleRelease
+EXPO_PUBLIC_API_URL=https://ai.ojixx.my.id EXPO_PUBLIC_WS_URL=wss://ai.ojixx.my.id \
+  ANDROID_HOME=<sdk> JAVA_HOME=<jdk17> \
+  ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
 ```
 
-Output: `apps/android/android/app/build/outputs/apk/release/app-release.apk`. On an ARM64 host the Android build-tools `aapt2` is an x86-64 binary, so it needs `binfmt_misc` with `qemu-x86_64-static` plus the amd64 loader (`libc6:amd64`); install both before running Gradle. `apps/android/android/` is generated output and is not committed.
+Output: `apps/android/android/app/build/outputs/apk/release/app-release.apk`.
+
+Three things the local path needs that EAS handles for you:
+
+- `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_WS_URL` are inlined at bundle time. Without them the APK falls back to `http://10.0.2.2:3000` (`apps/android/src/api/config.ts`), which only works on an emulator host.
+- `-PreactNativeArchitectures=arm64-v8a` builds one ABI. The default is all four, which is slow enough to matter.
+- The release variant is signed with the generated debug keystore (`apps/android/android/app/build.gradle`), so it installs for sideloading but carries no release identity. EAS supplies a real credential.
+
+On an ARM64 host the Android build-tools `aapt2` and the NDK's `clang++` are x86-64 binaries, so they need `binfmt_misc` with `qemu-x86_64-static` plus the amd64 loader (`libc6:amd64`); install both before running Gradle. `apps/android/android/` is generated output and is not committed.
 
 ## Android
 
