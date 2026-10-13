@@ -34,7 +34,7 @@ capabilities:
     permission_boundary: executor guard; runtime manager; model:chat guarded by PermissionEngine
     clients: android; windows
     proof: apps/agent-worker/test/live-worker-execution.test.ts; apps/agent-worker/test/worker.test.ts
-    limitation: generic tasks execute one bounded model step per run; planner output is recorded as evidence, not dispatched step-by-step
+    limitation: generic tasks execute one bounded model step per run; planner output is recorded as evidence, not dispatched step-by-step; payload.mode is forwarded to the router but only 'coding' changes observable behaviour (selectedRuntimeId)
   model_gateway:
     status: implemented
     code: packages/model-gateway; apps/api/src/routes/models.ts
