@@ -318,10 +318,15 @@ test('Worker restart mid-task resumes from checkpoint and does not duplicate sid
     registry: mockRegistry as never,
   });
 
-  // Recovery identifies dangling running tasks
-  const recovery = await newExecutor.recoverInterruptedTasks();
+  // Recovery identifies dangling running tasks and must re-enqueue them
+  const reEnqueued: string[] = [];
+  const recovery = await newExecutor.recoverInterruptedTasks({
+    enqueue: async (t) => {
+      reEnqueued.push(t.id);
+    },
+  });
   assert.equal(recovery.recoveredCount, 1);
-  assert.equal(recovery.recoveredTasks[0]?.id, task.id);
+  assert.deepEqual(reEnqueued, [task.id], 'Recovered task must be handed to the queue');
 
   // Resume execution on the new worker
   await newExecutor.execute({
@@ -338,6 +343,82 @@ test('Worker restart mid-task resumes from checkpoint and does not duplicate sid
 
   // Verify step 1 was NOT re-executed!
   assert.equal(step1SideEffectCount, 1, 'Step 1 side effect must NOT be duplicated upon restart');
+});
+
+// ============================================================================
+// 3b. Startup recovery must hand the dangling task to the worker's own queue
+// ============================================================================
+test('Startup recovery re-enqueues a dangling task through the worker queue and completes it', async () => {
+  const isRedisUp = await checkRedisAvailable(REDIS_URL);
+  if (!isRedisUp) {
+    // Graceful skip if Redis daemon is offline
+    return;
+  }
+
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const registry = new ToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
+  const probe: ToolDefinition<{ value: string }, { echoed: string }> = {
+    name: 'recovery_probe',
+    description: 'probe',
+    capability: 'tool:test',
+    resourceScope: 'workspace',
+    riskLevel: 'LOW',
+    action: 'tool:read',
+    timeoutMs: 1000,
+    supportsCancellation: true,
+    outputLimitBytes: 4096,
+    inputValidator: (input) => {
+      if (typeof input !== 'object' || input === null || !('value' in input) || typeof input.value !== 'string') {
+        return { valid: false, error: 'value required' };
+      }
+      return { valid: true, data: { value: input.value } };
+    },
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async (input) => ({ echoed: input.value }),
+  };
+  registry.registerTool(probe);
+
+  // A worker that is handed its queue by createAgentWorker. Without that wiring the recovered
+  // task is never enqueued, no task.completed event ever arrives, and this test hangs.
+  const handle = createAgentWorker({
+    redisUrl: REDIS_URL,
+    queueName: `test-recovery-${Date.now()}`,
+    concurrency: 1,
+    taskRepo: repo,
+    broadcaster,
+    executorOptions: { registry },
+  });
+  const queue = handle.queue;
+  assert.ok(queue, 'createAgentWorker must expose the queue used for startup recovery');
+
+  try {
+    const { task } = await repo.createTask({
+      userId: 'user-recovery',
+      projectId: 'proj-recovery',
+      kind: 'generic_task',
+      payload: { toolName: 'recovery_probe', toolInput: { value: 'recovered' } },
+    });
+    // Worker 1 died mid-execution: the task is still 'running' in the store.
+    await repo.updateTaskStatus(task.userId, task.id, 'running');
+
+    const completed = Promise.withResolvers<void>();
+    const unsubscribe = broadcaster.subscribe((event) => {
+      if (event.taskId === task.id && event.eventType === 'task.completed') completed.resolve();
+    });
+
+    const recovered = await handle.executor.recoverInterruptedTasks(queue);
+    assert.equal(recovered.recoveredCount, 1);
+
+    await completed.promise;
+    unsubscribe();
+
+    const finished = await repo.getTask(task.userId, task.id);
+    assert.equal(finished?.status, 'completed', 'Recovered task must be executed by the worker');
+    assert.equal(finished?.progress, 100);
+  } finally {
+    await handle.close();
+  }
 });
 
 test('Worker executes explicit toolName through ToolRegistry and persists result', async () => {

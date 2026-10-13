@@ -1146,8 +1146,13 @@ export class TaskExecutor {
     }
   }
 
+  /**
+   * Re-enqueue tasks left `running` by a previous process. The queue is required: without it
+   * this method only wrote a `task.resumed` event and left the task dangling forever, which
+   * looked like a successful recovery in the logs.
+   */
   async recoverInterruptedTasks(
-    queue?: TaskQueueEnqueuer,
+    queue: TaskQueueEnqueuer,
   ): Promise<{ recoveredCount: number; recoveredTasks: TaskRecord[] }> {
     const dangling = await this.taskRepo.getDanglingRunningTasks();
     const recoveredTasks: TaskRecord[] = [];
@@ -1170,9 +1175,7 @@ export class TaskExecutor {
       );
       this.broadcaster.publish(resumeEvent);
 
-      if (queue) {
-        await queue.enqueue(task);
-      }
+      await queue.enqueue(task);
       recoveredTasks.push(task);
     }
 

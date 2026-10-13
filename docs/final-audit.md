@@ -3,7 +3,7 @@
 **Tanggal Audit**: 2026-10-11, diperbarui 2026-10-13  
 **Auditor**: Principal Software Architect & Security Engineer  
 **Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
-**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi ini menurunkan beberapa butir yang sebelumnya dinyatakan **LULUS** menjadi **SEBAGIAN** atau **GAGAL**, karena bukti live menunjukkan klaim lama tidak benar. Butir yang direvisi: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": ada 4 cacat fungsional terbuka (kehilangan memori saat restart, task pulih yang menggantung permanen, evaluator tanpa bukti, dan tidak adanya jalur dispatch perintah ke Windows Agent).
+**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery) **sudah diperbaiki dan diverifikasi live** pada tanggal yang sama sehingga kembali ke **LULUS**; butir sisanya masih terbuka. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": masih ada 3 cacat fungsional terbuka (kehilangan memori saat restart, evaluator tanpa bukti nyata, dan tidak adanya jalur dispatch perintah ke Windows Agent).
 
 ---
 
@@ -15,8 +15,8 @@ Quality gates dijalankan pada checkout `release/installers` (Linux aarch64), buk
 
 - **Linter (`pnpm lint`)**: 14/14 paket **LULUS** (0 error, 0 warning).
 - **Production Build (`pnpm build`)**: 14/14 paket **LULUS**.
-- **Verifikasi referensi path (`pnpm verify:audit`)**: 87 path unik valid (145 referensi diperiksa).
-- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 29/29, `@personal-ai-os/permissions` 5/5, API in-container 50/50 (0 skipped).
+- **Verifikasi referensi path (`pnpm verify:audit`)**: 88 path unik valid (145 referensi diperiksa).
+- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 30/30 (bertambah 1 test regresi pemulihan), `@personal-ai-os/permissions` 5/5, API in-container 50/50 (0 skipped).
 - **Catatan penting tentang Skenario 4**: test `apps/api/test/e2e-scenarios.test.ts:868-914` yang diklaim membuktikan pemulihan task **tidak memanggil `recoverInterruptedTasks` sama sekali**. Ia memanggil `executor.execute()` secara langsung dan menaikkan counter yang di-hardcode di dalam test. Test tersebut tidak dapat gagal karena perilaku sistem apa pun, sehingga lulusnya test itu tidak membuktikan apa pun tentang recovery. Lihat Butir 3.
 - **Catatan tentang `pnpm test` di root**: perintah itu tidak dapat dipakai; task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite harus dijalankan per paket.
 
@@ -62,7 +62,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 3: Background Task Pulih setelah Worker Restart
 
-- **Status**: **GAGAL** (sebelumnya dinyatakan LULUS)
+- **Status**: **LULUS** — sebelumnya **GAGAL**, diperbaiki 2026-10-13.
 - **Persyaratan**: Ketika worker mati di tengah eksekusi, task dapat dipulihkan dari checkpoint terakhir tanpa menduplikasi side-effect yang telah selesai.
 - **Bukti File Relatif**:
   - `packages/shared/src/tasks/checkpoint-verifier.ts`: Verifikasi integritas hash checkpoint dan tracking `stepIndex`.
@@ -71,13 +71,21 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 - **Bukti Test & Output**:
   - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 4` — **test ini tidak valid** dan tidak boleh dipakai sebagai bukti (lihat di bawah).
   - Test: `apps/api/test/recovery-drill.test.ts` — menguji `TaskExecutor.execute` langsung, bukan jalur pemulihan produksi.
-- **Bukti live 2026-10-13 (menunjukkan cacat)**:
+- **Cacat yang ditemukan (2026-10-13, sudah diperbaiki)**:
   - Task `774b9bbc-1fa3-459c-aa1e-19dc590cd367` dipaksa ke `status='running'`, `progress=40`, lalu worker di-restart.
-  - Log worker: `{"service":"agent-worker","action":"recovery","recoveredCount":1}` — task memang terdeteksi.
-  - Event `task.resumed` tertulis di `task_events`.
+  - Log worker: `{"service":"agent-worker","action":"recovery","recoveredCount":1}` — task memang terdeteksi, dan event `task.resumed` tertulis di `task_events`.
   - 40 detik setelah restart, task **masih** `running` dengan `progress=40`. Tidak ada job di queue, tidak ada eksekusi lanjutan, tidak ada timeout, tidak ada eskalasi.
-- **Akar masalah**: `apps/agent-worker/src/index.ts:223` memanggil `workerHandle.executor.recoverInterruptedTasks()` **tanpa argumen `queue`**. Di `apps/agent-worker/src/task-executor.ts:1173-1175` enqueue hanya dilakukan `if (queue)`. Jadi task dipulihkan secara kosmetik (status diperiksa, event ditulis) tetapi tidak pernah dijadwalkan ulang untuk dieksekusi.
-- **Mengapa test lama tidak menangkapnya**: `apps/api/test/e2e-scenarios.test.ts:868-914` tidak pernah memanggil `recoverInterruptedTasks`. Ia membuat checkpoint secara manual, memanggil `executor2.execute(...)` langsung, lalu menaikkan `sideEffectStep2Count` di luar alur eksekusi. Kedua assertion tentang side effect karena itu selalu benar.
+  - **Akar masalah**: `apps/agent-worker/src/index.ts` memanggil `workerHandle.executor.recoverInterruptedTasks()` **tanpa argumen `queue`**, dan `TaskExecutor.recoverInterruptedTasks(queue?: TaskQueueEnqueuer)` hanya meng-enqueue `if (queue)`. Task dipulihkan secara kosmetik: status diperiksa dan event ditulis, tetapi tidak pernah dijadwalkan ulang.
+- **Perbaikan**:
+  - `createAgentWorker` sekarang membuat `BullMqTaskQueue` dari koneksi Redis yang sama dan mengembalikannya sebagai `queue`, sehingga worker dan API memakai satu definisi queue (`apps/agent-worker/src/index.ts`).
+  - `startWorkerProcess` melewatkan queue itu ke `recoverInterruptedTasks`, dan melempar error bila queue tidak tersedia — jalur pemulihan tidak dapat lagi berjalan tanpa enqueue.
+  - Parameter `queue` pada `recoverInterruptedTasks` diubah dari opsional menjadi **wajib** (`apps/agent-worker/src/task-executor.ts`), sehingga panggilan tanpa queue tidak lagi dapat dikompilasi. Inilah yang mencegah kekambuhan kelas bug ini.
+- **Bukti live setelah perbaikan (2026-10-13)**:
+  - Worker dihentikan. Task `85cf3ce1-7599-4b8b-9d51-067283af5f11` dibuat, job BullMQ-nya dihapus dari Redis (`DEL bull:personal-ai-os-tasks:<id>` → `exists` = 0), lalu task dipaksa `status='running'`, `progress=40`. Jadi satu-satunya cara task itu dapat berjalan kembali adalah lewat jalur pemulihan.
+  - Worker dijalankan kembali → log `{"action":"recovery","recoveredCount":1}`.
+  - Hasil akhir: `status=completed`, `progress=100`. Event berurutan: `task.created`, `task.resumed`, `task.tool_call`, `task.completed`.
+- **Bukti test regresi**: `apps/agent-worker/test/live-worker-execution.test.ts` — `Startup recovery re-enqueues a dangling task through the worker queue and completes it`. Test ini memakai `createAgentWorker` dengan Redis nyata, memaksa task `running`, memanggil pemulihan, lalu menunggu event `task.completed`. Test **gagal (menggantung) bila `queue` tidak diteruskan** — sudah diverifikasi dengan sengaja mengembalikan `createAgentWorker` ke bentuk lama.
+- **Catatan**: `apps/api/test/e2e-scenarios.test.ts` `Skenario 4` tetap **tidak valid** sebagai bukti dan tidak boleh dipakai: ia tidak pernah memanggil `recoverInterruptedTasks`, membuat checkpoint manual, memanggil `executor.execute(...)` langsung, lalu menaikkan counter di luar alur eksekusi.
 
 ---
 
@@ -314,7 +322,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **Project / Task / Timeline / Artifact**         | **LULUS**    | Terintegrasi penuh dengan event timeline streaming dan artifact storage di `packages/tools/src/artifacts/`.                                                                                    |
 | **Routing berbasis capability**                  | **LULUS**    | `AgentRouter` di `packages/agent-core/src/router/agent-router.ts` memetakan intent ke `RuntimeManager` (OMP, Pi) dan `NineRouterGateway`.                                                      |
 | **Memory & context ber-budget**                  | **GAGAL**    | `ContextManager` dan write policy memang ada dan unit test lulus, tetapi **tidak ada persistensi**: tabel `memories` tidak ada di database (`to_regclass` → null), sehingga memori hilang setiap restart API (bukti: create → `count=1` → restart → `count=0`). `InactiveEmbeddingProvider.embed()` throw. Lihat Butir 5. |
-| **Queue / cancel / checkpoint / recovery**       | **GAGAL**    | Queue, cancel, dan checkpoint bekerja. **Recovery tidak**: `recoverInterruptedTasks()` dipanggil tanpa `queue` (`apps/agent-worker/src/index.ts:223`), sehingga task `running` yang pulih tidak pernah di-enqueue ulang dan menggantung permanen (bukti live: tetap `running/40` 40 detik setelah restart). Lihat Butir 3. |
+| **Queue / cancel / checkpoint / recovery**       | **LULUS**    | Queue, cancel, dan checkpoint bekerja. **Recovery diperbaiki 2026-10-13**: `createAgentWorker` kini membuat `BullMqTaskQueue` dan mengembalikannya sebagai `queue`, `startWorkerProcess` melewatkannya ke `recoverInterruptedTasks`, dan parameter itu menjadi wajib sehingga panggilan tanpa queue tidak lagi dikompilasi. Bukti live: task `running`/40 tanpa job di Redis → restart worker → `recoveredCount: 1` → `completed`/100. Lihat Butir 3. |
 | **Windows device identity + allowlist**          | **SEBAGIAN** | Path allowlist dan capability registry nyata dan ditegakkan. Identitas perangkat **bukan** kriptografis (`devices.public_key` tidak pernah diisi; `deviceId` dari query string), tidak ada allowlist teks-perintah/biner, dan `dispatchCommand` nol pemanggil sehingga tidak ada jalur produksi task → perangkat. Lihat Butir 11. |
 | **MCP / tools / browser ber-permission & audit** | **SEBAGIAN** | Permission **lulus**: semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit tidak lulus**: `audit_logs` produksi hanya 10 baris keputusan approval; tool call, MCP call, browser action, dan artifact write tidak tercatat. MCP audit hanya `console.log`. Lihat Butir 12. |
 | **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada jalur coding/research/standard dan menolak klaim mandiri di jalur itu. Namun `executeRegisteredTool` menulis `completed` **tanpa evaluator** (`apps/agent-worker/src/task-executor.ts:624`), dan bukti coding berasal dari lingkungan mock `{passed:true}` hardcoded. Lihat Butir 7 dan 8. |
@@ -337,7 +345,7 @@ Suite ini dijalankan dengan komponen nyata (Fastify nyata, Redis BullMQ nyata, W
 | 1   | Register/login, chat streaming via WebSocket                                           | LULUS       | **Ya**                       | WebSocket `/v1/chat/ws` menerima token delta streaming dari `LocalFake9RouterServer`.                                                                                   |
 | 2   | Buat task → worker eksekusi → event realtime → Evaluator completed                      | LULUS       | **Tidak sepenuhnya**         | Task coding memang lewat Redis BullMQ dan `task.completed` diterima. Tetapi evaluator menilai bukti dari lingkungan mock yang mengembalikan `{passed:true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`), dan `apps/api/test/e2e-scenarios.test.ts:623` meneruskan opsi `codingEvaluator` yang bukan field `TaskExecutorOptions`. Jadi "7 kriteria nyata" tidak dijalankan. |
 | 3   | Aksi HIGH memicu waiting_approval, approve dilanjutkan, deny dihentikan                | LULUS       | **Ya**                       | Aksi berisiko memicu `waiting_approval`; `/v1/approvals/:id/approve` melanjutkan hingga selesai, `/v1/approvals/:id/deny` menghentikan task. Alur ini juga diverifikasi live di produksi. |
-| 4   | Matikan worker di tengah task, hidupkan lagi, pulih dari checkpoint tanpa duplikasi    | LULUS       | **Tidak**                    | Test ini **tidak memanggil `recoverInterruptedTasks` sama sekali** (`apps/api/test/e2e-scenarios.test.ts:868-914`). Ia membuat checkpoint manual, memanggil `executor2.execute(...)` langsung, lalu menaikkan `sideEffectStep2Count` di luar alur eksekusi. Kedua assertion selalu benar. Bukti live menunjukkan pemulihan produksi **gagal**: task tetap `running/40` permanen. |
+| 4   | Matikan worker di tengah task, hidupkan lagi, pulih dari checkpoint tanpa duplikasi    | LULUS       | **Tidak** (test) / **Ya** (live) | Test ini **tidak memanggil `recoverInterruptedTasks` sama sekali** (`apps/api/test/e2e-scenarios.test.ts:868-914`), jadi lulusnya tidak membuktikan apa pun. Bukti live sebelum perbaikan: task tetap `running/40` permanen. Setelah perbaikan 2026-10-13, bukti live memenuhi klaim: task `running`/40 tanpa job Redis → restart worker → `recoveredCount: 1` → `completed`/100. Test regresi baru ada di `apps/agent-worker/test/live-worker-execution.test.ts`. |
 | 5   | Windows Agent terhubung, allowlist berjalan, luar allowlist ditolak, offline ditangani | LULUS       | **Sebagian**                 | Handshake `/v1/agent/ws`, eksekusi perintah allowlist, penolakan traversal `C:\Windows\System32`, dan transisi offline memang diuji — tetapi semuanya di dalam satu proses test. Tidak ada jalur produksi yang mendispatch perintah ke perangkat (`dispatchCommand` nol pemanggil). |
 | 6   | Jadwal berulang berjalan tepat sekali                                                  | LULUS       | **Ya**                       | `SchedulerEngine` mengeksekusi slot waktu tepat sekali; pemanggilan berulang pada timestamp yang sama diabaikan oleh deduplikasi idempotency key.                                             |
 | 7   | Isolasi: user A tidak bisa membaca project/task/memori user B                          | LULUS       | **Ya, untuk project dan task**| User B mendapat `HTTP 404` dan list kosong. Untuk memori, isolasi diuji pada store in-memory; karena tabel `memories` tidak ada di database, isolasi memori di produksi belum dapat diverifikasi. |
@@ -351,7 +359,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 ### 5.1 Cacat fungsional (tidak memerlukan kredensial eksternal)
 
 1. **Memory tidak persisten** — tabel `memories` tidak ada di database; memori hilang setiap restart API tanpa error. Perbaikan: tambahkan migrasi `CREATE TABLE memories` + kolom `vector(1536)` + index, hentikan fallback diam-diam ke `InMemoryMemoryStore`, dan sambungkan provider embedding nyata.
-2. **Recovery task menggantung** — `recoverInterruptedTasks()` dipanggil tanpa `queue` (`apps/agent-worker/src/index.ts:223`), sehingga task pulih tidak pernah dieksekusi ulang. Perbaikan: teruskan queue, dan ganti Skenario 4 dengan test yang benar-benar memanggil jalur pemulihan produksi.
+2. **Recovery task menggantung — SELESAI (2026-10-13)**. `recoverInterruptedTasks` sekarang menerima `queue` wajib, `createAgentWorker` menyediakan queue, dan test regresi baru gagal bila queue tidak diteruskan. Diverifikasi live: task `running` tanpa job → restart → `completed`.
 3. **Evaluator tidak memverifikasi apa pun pada jalur coding** — `createDefaultEnvironment()` mengembalikan `{passed:true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`) dan `executeRegisteredTool` melewati evaluator sepenuhnya (`apps/agent-worker/src/task-executor.ts:624`).
 4. **Research tanpa jalur pencarian** — `web_search` menembak `example.com` dan tidak terdaftar di registry mana pun; `ResearchAgent` memakai sumber hardcoded.
 5. **Tidak ada jalur dispatch perintah ke Windows Agent** — `dispatchCommand` nol pemanggil produksi.
@@ -388,9 +396,9 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 ### Prioritas P0 (cacat fungsional, tidak memerlukan kredensial eksternal)
 
-Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Empat yang pertama menutup kebohongan paling merusak.
+Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 2 dan seterusnya masih terbuka.
 
-1. **Perbaiki pemulihan task** — teruskan `queue` ke `recoverInterruptedTasks` di `apps/agent-worker/src/index.ts:223`, dan ganti Skenario 4 dengan test yang benar-benar memanggil jalur pemulihan produksi serta gagal bila task tetap `running`.
+1. **Perbaiki pemulihan task — SELESAI (2026-10-13)**. `queue` kini diteruskan dan wajib; test regresi baru (`live-worker-execution.test.ts`) gagal bila queue tidak diteruskan; bukti live task `running` tanpa job → restart → `completed`.
 2. **Buat memory persisten** — tambahkan migrasi `CREATE TABLE memories` beserta kolom `vector(1536)` dan index, hentikan fallback diam-diam ke `InMemoryMemoryStore`, dan sambungkan provider embedding nyata. Perbaiki juga route `GET /v1/memories/search` yang tertelan `/:id`.
 3. **Buat evaluator menilai bukti nyata** — ganti `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dengan lingkungan yang benar-benar menjalankan lint/typecheck/test/build, dan jangan biarkan `executeRegisteredTool` menulis `completed` tanpa evaluator.
 4. **Beri research jalur pencarian nyata** — daftarkan provider search yang sungguh-sungguh (SearXNG self-host atau API pihak ketiga) dan buat `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi.
@@ -444,7 +452,7 @@ Time:     ~28s
 ```text
 @personal-ai-os/tools          30/30
 @personal-ai-os/mcp            17/17
-@personal-ai-os/agent-worker   29/29
+@personal-ai-os/agent-worker   30/30
 @personal-ai-os/permissions     5/5
 API (in-container)             50/50, 0 skipped
 ```

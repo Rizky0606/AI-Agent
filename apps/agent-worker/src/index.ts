@@ -12,7 +12,7 @@ import {
 } from './task-executor.ts';
 import type { TaskRepository } from '@personal-ai-os/shared';
 import { createDatabase, SqlApprovalRepository, SqlTaskRepository } from '@personal-ai-os/api/db';
-import { RedisTaskEventBroadcaster, TASK_QUEUE_NAME } from '@personal-ai-os/api/services';
+import { BullMqTaskQueue, RedisTaskEventBroadcaster, TASK_QUEUE_NAME } from '@personal-ai-os/api/services';
 import {
   MockModelGateway,
   type ModelGateway,
@@ -50,6 +50,7 @@ export const createAgentWorker = (
 ): {
   executor: TaskExecutor;
   worker?: Worker | undefined;
+  queue?: BullMqTaskQueue | undefined;
   close: () => Promise<void>;
 } => {
   const executor = new TaskExecutor(config.taskRepo, config.broadcaster, config.executorOptions);
@@ -63,8 +64,10 @@ export const createAgentWorker = (
   }
 
   const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
+  const queueName = config.queueName ?? TASK_QUEUE_NAME;
+  const queue = new BullMqTaskQueue(redis, { queueName });
   const worker = new Worker(
-    config.queueName ?? TASK_QUEUE_NAME,
+    queueName,
     async (job) => {
       await executor.execute(job.data as TaskJobData);
     },
@@ -77,8 +80,10 @@ export const createAgentWorker = (
   return {
     executor,
     worker,
+    queue,
     close: async () => {
       await worker.close();
+      await queue.close();
       await redis.quit();
     },
   };
@@ -218,9 +223,12 @@ export const startWorkerProcess = async (): Promise<{
     },
   });
 
-  // Recover interrupted / dangling tasks after worker startup
+  // Recover interrupted / dangling tasks after worker startup. The queue is mandatory here:
+  // without it the recovered task is never re-enqueued and hangs in 'running' forever.
+  const workerQueue = workerHandle.queue;
+  if (!workerQueue) throw new Error('Worker queue is required to recover interrupted tasks.');
   try {
-    const recovered = await workerHandle.executor.recoverInterruptedTasks();
+    const recovered = await workerHandle.executor.recoverInterruptedTasks(workerQueue);
     if (recovered.recoveredCount > 0) {
       console.log(
         JSON.stringify({

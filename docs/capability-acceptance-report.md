@@ -6,7 +6,7 @@ Date: 2026-10-13
 
 This report previously overstated several capabilities. The following claims were **wrong** and are corrected here. Evidence: [assessment-2026-10-13.md](assessment-2026-10-13.md).
 
-- **"recover interrupted tasks" — false.** `recoverInterruptedTasks()` is called without a `queue` argument (`apps/agent-worker/src/index.ts:223`), and `apps/agent-worker/src/task-executor.ts:1173-1175` only enqueues `if (queue)`. A task left `running` by a worker restart is recovered cosmetically and then hangs forever. Verified live: forced `running`/`progress=40`, worker restarted, `recoveredCount: 1` logged, `task.resumed` written, still `running`/`progress=40` after 40 seconds.
+- **"recover interrupted tasks" — was false, now fixed (2026-10-13).** `recoverInterruptedTasks()` was called without a `queue` argument, and only enqueued `if (queue)`, so a task left `running` by a worker restart was recovered cosmetically and then hung forever. Verified live before the fix: forced `running`/`progress=40`, worker restarted, `recoveredCount: 1` logged, `task.resumed` written, still `running`/`progress=40` after 40 seconds. Fix: `createAgentWorker` builds and returns the `BullMqTaskQueue`, `startWorkerProcess` passes it through, and the `queue` parameter is now required. Verified live after the fix: task forced `running`/40 with its BullMQ job deleted from Redis, worker restarted, final state `completed`/`progress=100`.
 - **Memory was never mentioned here, and it does not work.** The `memories` table has no migration, so `to_regclass('public.memories')` is null in production. `POST /v1/memories` returns 201 and the row disappears on the next API restart (verified live: count=1 → restart → count=0). `InactiveEmbeddingProvider.embed()` throws. `GET /v1/memories/search` returns 404.
 - **Coding tasks do not run lint/typecheck/test/build.** `createDefaultEnvironment()` returns `{passed: true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`) and the worker always uses that default (`apps/agent-worker/src/task-executor.ts:134`).
 - **Research has no search path.** `web_search` targets `https://example.com/search?q=…` (`packages/tools/src/builtin/web-search.ts:64`) and is not registered in any registry.
@@ -18,7 +18,7 @@ This report previously overstated several capabilities. The following claims wer
 
 ## Implemented
 
-- Worker and scheduler standalone entrypoints remain alive, handle SIGTERM/SIGINT, and close durable clients. (The "recover interrupted tasks" claim is corrected above.)
+- Worker and scheduler standalone entrypoints remain alive, handle SIGTERM/SIGINT, close durable clients, and recover interrupted tasks by re-enqueuing them (fixed 2026-10-13; see the correction above).
 
 - Production worker now constructs one guarded `ToolRegistry`; API constructs the catalog registry with the same built-in registration policy.
 - Explicit generic `payload.toolName` tasks execute through `ToolRegistry.executeTool`, persist `task.tool_call`, checkpoint output, and complete. Approval-required tool calls persist a waiting checkpoint, resume the same task, and revalidate/consume approval before execution; verified by regression test, not production smoke.

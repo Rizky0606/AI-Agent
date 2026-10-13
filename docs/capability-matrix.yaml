@@ -8,12 +8,13 @@ capabilities:
     clients: android; windows
     proof: pnpm --filter @personal-ai-os/api test
   durable_tasks:
-    status: partial
+    status: implemented
     code: apps/api/src/routes/tasks.ts; apps/api/src/db/task-repository.ts; apps/api/src/services/task-queue.ts
     permission_boundary: task ownership; approval repository
     clients: android task timeline
     limitation: |
-      Queue, cancellation, and checkpointing are verified. Recovery is broken: `recoverInterruptedTasks()` is called without a `queue` argument (`apps/agent-worker/src/index.ts:223`), and `apps/agent-worker/src/task-executor.ts:1173-1175` only enqueues `if (queue)`. A task left `running` by a worker restart is recovered cosmetically (status read, `task.resumed` event written) and then hangs forever. Verified live: task forced to `running`/`progress=40`, worker restarted, still `running`/`progress=40` after 40s. The e2e "Skenario 4" test does not call `recoverInterruptedTasks` at all and therefore cannot fail.
+      Startup recovery re-enqueues tasks left `running` by a previous process. `createAgentWorker` builds the `BullMqTaskQueue` and returns it as `queue`; `startWorkerProcess` passes it to `recoverInterruptedTasks`, which takes the queue as a required argument so a queue-less call cannot compile. Verified live: worker stopped, task forced to `running`/`progress=40` with its BullMQ job deleted from Redis, worker restarted, log `{"action":"recovery","recoveredCount":1}`, final state `completed`/`progress=100` with events `task.created, task.resumed, task.tool_call, task.completed`. Regression test `apps/agent-worker/test/live-worker-execution.test.ts` ("Startup recovery re-enqueues a dangling task through the worker queue and completes it") hangs and fails if the queue is not wired.
+      The e2e "Skenario 4" test in `apps/api/test/e2e-scenarios.test.ts` still does not call `recoverInterruptedTasks` and must not be cited as recovery evidence.
   worker_process:
     status: implemented
     code: apps/agent-worker/src/index.ts
