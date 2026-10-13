@@ -3,7 +3,7 @@
 **Tanggal Audit**: 2026-10-11, diperbarui 2026-10-13  
 **Auditor**: Principal Software Architect & Security Engineer  
 **Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
-**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery), persistensi memori pada butir 5, dan eksekusi coding berbasis workspace nyata pada butir 7 **sudah diperbaiki dan diverifikasi live** pada tanggal yang sama. Butir 5 dan 7 tetap **SEBAGIAN**, bukan LULUS: pencarian semantik belum punya provider embedding, retensi belum ditegakkan, dan research masih tanpa jalur pencarian. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": cacat fungsional yang masih terbuka adalah research tanpa jalur pencarian (butir 7) dan tidak adanya jalur dispatch perintah ke Windows Agent (butir 11).
+**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery), persistensi memori pada butir 5, evaluator berbasis bukti nyata (butir 8), dan jalur coding **serta** research pada butir 7 **sudah diperbaiki dan diverifikasi live** pada tanggal yang sama. Butir 5 tetap **SEBAGIAN**: pencarian semantik belum punya provider embedding dan retensi belum ditegakkan. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": cacat fungsional yang masih terbuka adalah tidak adanya jalur dispatch perintah ke Windows Agent (butir 11), notifikasi yang belum pernah terkirim (butir 10), dan audit yang baru mencakup approval (butir 12).
 
 ---
 
@@ -15,8 +15,8 @@ Quality gates dijalankan pada checkout `release/installers` (Linux aarch64), buk
 
 - **Linter (`pnpm lint`)**: 14/14 paket **LULUS** (0 error, 0 warning).
 - **Production Build (`pnpm build`)**: 14/14 paket **LULUS**.
-- **Verifikasi referensi path (`pnpm verify:audit`)**: 88 path unik valid (145 referensi diperiksa).
-- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 33/33, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 5/5, `@personal-ai-os/agent-core` 34/34, `@personal-ai-os/evaluator` 9/9, API in-container 51/51 (0 skipped).
+- **Verifikasi referensi path (`pnpm verify:audit`)**: 90 path unik valid (150 referensi diperiksa).
+- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 33/33, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 34/34, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 5/5, `@personal-ai-os/agent-core` 40/40, `@personal-ai-os/evaluator` 9/9, API in-container 51/51 (0 skipped).
 - **Catatan penting tentang Skenario 4**: test `apps/api/test/e2e-scenarios.test.ts:868-914` yang diklaim membuktikan pemulihan task **tidak memanggil `recoverInterruptedTasks` sama sekali**. Ia memanggil `executor.execute()` secara langsung dan menaikkan counter yang di-hardcode di dalam test. Test tersebut tidak dapat gagal karena perilaku sistem apa pun, sehingga lulusnya test itu tidak membuktikan apa pun tentang recovery. Lihat Butir 3.
 - **Catatan tentang `pnpm test` di root**: perintah itu tidak dapat dipakai; task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite harus dijalankan per paket.
 
@@ -164,7 +164,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 7: Coding dan Research Menghasilkan Bukti, Laporan, Artefak
 
-- **Status**: **SEBAGIAN** (sebelumnya GAGAL; jalur coding kini berjalan nyata, jalur research masih tanpa pencarian)
+- **Status**: **LULUS** (sebelumnya GAGAL; jalur coding dan jalur research kini berjalan nyata)
 - **Persyaratan**: Coding Agent dan Research Agent mengikuti workflow terstruktur dan menghasilkan bukti terverifikasi (diff, test output, sitasi, report artifact).
 - **Bukti File Relatif**:
   - `packages/agent-core/src/coding/coding-agent.ts`: Workflow tahap: understand → inspect → plan → implement → test → debug → review_diff → document → report.
@@ -177,12 +177,18 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - Worker memberi setiap task coding workspace sendiri: `CODING_WORKSPACE_ROOT=/app/data/workspaces` (named volume `coding-workspaces`, dibuat di image dengan owner `node`), dipakai via `prepareCodingWorkspace(this.codingWorkspaceRoot, task.id)` (`apps/agent-worker/src/task-executor.ts:409-415`).
   - Bukti live 2026-10-13 (task `a5776358-f9d2-40f3-be71-13e6ba4f5276`, workspace dengan script lulus): `completed`, progress 100, `artifact-diff-…` memuat diff git nyata `+export const helper = (n) => n + 1;`.
   - Bukti live (task `3f5aeee2-225c-4b4c-ba87-8d31aa5b8c92`, workspace dengan `lint` `exit 1`): `failed`, `evaluationResult.score=0.71`, isu `Lint issue: Command failed: node --run lint`.
-- **Bukti bahwa research tidak punya jalur pencarian**:
-  - `web_search` default menembak `https://example.com/search?q=…` (`packages/tools/src/builtin/web-search.ts:64`) dan **tidak terdaftar di registry mana pun** (`packages/tools/src/registry/create-default-tool-registry.ts:20` hanya mendaftarkan `web_fetch`).
-  - `ResearchAgent` tanpa env memakai sumber hardcoded MDN/nodejs.org (`packages/agent-core/src/research/research-agent.ts:99-115`) dan claim hardcoded (`:135-158`) yang lolos evaluator.
-  - Tahap `browse` dideklarasikan (`packages/agent-core/src/types.ts:172-180`) tetapi tidak pernah diset; `fetchContent` tidak pernah dipanggil.
-  - `ResearchEvaluator` hanya menghitung field (`packages/evaluator/src/research-evaluator.ts`); ia tidak pernah mem-fetch URL untuk memverifikasi sumber.
-- **Yang benar-benar bekerja**: jalur coding kini mengeksekusi perintah nyata di workspace nyata dan menyerahkan hasilnya ke `CodingEvaluator`; `web_fetch` nyata (SSRF guard + HTTP fetch asli); `ArtifactManager` menyimpan hasil dengan checksum sha256. Yang belum ada: jalur pencarian research dan verifikasi URL oleh `ResearchEvaluator`.
+- **Bukti bahwa research kini punya jalur pencarian dan browse nyata (2026-10-13)**:
+  - `packages/tools/src/builtin/web-search.ts` kini mencari sungguhan: `duckDuckGoSearch` menembak `https://html.duckduckgo.com/html/` (tanpa API key), membuka pembungkus redirect `/l/?uddg=…` menjadi URL tujuan, dan menolak melaporkan "0 hasil" palsu — markup tak dikenal atau HTTP non-2xx menghasilkan error, bukan daftar kosong. User agent harus bebas kata `bot`; DuckDuckGo membalas `202` tanpa hasil untuk UA yang menyebut dirinya bot.
+  - `createDefaultToolRegistry` mendaftarkan `web_search` bersama `web_fetch` (`packages/tools/src/registry/create-default-tool-registry.ts:20-21`), jadi pencarian melewati `ToolRegistry` yang sama dan diperiksa `PermissionEngine` (`web:search`, LOW) seperti tool lain.
+  - `packages/agent-core/src/research/local-environment.ts` (baru): `LocalResearchEnvironment` mengambil hasil lewat `web_search` dan membuka setiap halaman lewat `web_fetch` — tidak ada klien HTTP privat yang melewati permission check. Halaman yang hasilnya dipotong registry, halaman non-2xx, halaman tanpa teks terbaca (< 200 karakter setelah `htmlToText`), dan halaman yang gagal di-fetch dibuang dan dicatat sebagai limitation.
+  - `ResearchAgent.execute` tidak lagi punya daftar sumber hardcoded: `mockSources`/`mockEnvironment` hilang dari input produksi, dan tanpa `environment` ia menghasilkan nol sumber sehingga `ResearchEvaluator` menolak (`No valid sources provided`). Tahap `browse` kini benar-benar diset dan `fetchContent` dipanggil untuk setiap sumber; `snippet` berasal dari konten nyata, bukan dari mesin pencari.
+  - Klaim tidak lagi hardcoded: setiap klaim adalah kutipan awal halaman yang benar-benar diambil, dengan `sourceIds` ke sumber itu. `NO_SYNTHESIS_LIMITATION` (`packages/agent-core/src/research/research-agent.ts:15-21`) menyatakan di setiap laporan bahwa tidak ada sintesis lintas sumber.
+  - `packages/tools/src/html-text.ts` (baru): `htmlToText` membuang blok `<script>`/`<style>` sebelum tag, karena halaman SPA yang hanya berisi JavaScript sebelumnya terbaca seperti prosa dan masuk ke laporan sebagai "fakta".
+  - `web_fetch.outputLimitBytes` dinaikkan 64 KiB → 1 MiB (`packages/tools/src/builtin/web-fetch.ts:31-33`): di atas batas itu registry mengganti output dengan amplop JSON terpotong yang tidak bisa dibaca sebagai dokumen.
+  - Bukti live 2026-10-13 (task `46098f3e-4cd6-4958-b94e-b2bf30ea283e`, query "durable execution in PostgreSQL"): `completed`, progress 100, `evaluationResult.passed=true`/`score=1` dengan 5 sumber nyata (temporal.io, learn.microsoft.com ×2, github.com ×2) dan 5 klaim tertaut ke halaman yang benar-benar diambil; artifact `artifact-research-report-…` memuat tabel sitasi.
+  - Bukti live fail-closed (task `c38ae271-1237-4d58-8ff2-6cf27927be00`, query tanpa hasil): `failed`, `score=0`, `completionBlockedReason = "Research completion blocked: No valid sources provided."`, dan limitation mencatat `1 pencarian gagal: … membalas HTTP 200 tanpa markup hasil yang dikenal.` Tidak ada sumber yang dikarang.
+  - Bukti live penolakan sumber tunggal (task `597838e9-304e-4aec-8c0a-ed62f679011e`): `failed`, `score=0.8`, kriteria `cross_check` gagal karena hanya 1 sumber yang bisa dibaca, dan 4 URL yang gagal dibaca disebut namanya di limitation.
+- **Yang benar-benar bekerja**: jalur coding mengeksekusi perintah nyata di workspace nyata dan menyerahkan hasilnya ke `CodingEvaluator`; jalur research mencari, membuka, dan mengutip halaman nyata; `web_fetch` nyata (SSRF guard + HTTP fetch asli); `ArtifactManager` menyimpan hasil dengan checksum sha256. **Yang belum ada**: sintesis lintas sumber oleh model — klaim adalah kutipan awal tiap halaman, sehingga relevansi jawaban terhadap pertanyaan belum dinilai, dan `ResearchEvaluator` tidak mem-fetch URL sendiri untuk memverifikasi isi sitasi.
 
 ---
 
@@ -344,7 +350,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **Queue / cancel / checkpoint / recovery**       | **LULUS**    | Queue, cancel, dan checkpoint bekerja. **Recovery diperbaiki 2026-10-13**: `createAgentWorker` kini membuat `BullMqTaskQueue` dan mengembalikannya sebagai `queue`, `startWorkerProcess` melewatkannya ke `recoverInterruptedTasks`, dan parameter itu menjadi wajib sehingga panggilan tanpa queue tidak lagi dikompilasi. Bukti live: task `running`/40 tanpa job di Redis → restart worker → `recoveredCount: 1` → `completed`/100. Lihat Butir 3. |
 | **Windows device identity + allowlist**          | **SEBAGIAN** | Path allowlist dan capability registry nyata dan ditegakkan. Identitas perangkat **bukan** kriptografis (`devices.public_key` tidak pernah diisi; `deviceId` dari query string), tidak ada allowlist teks-perintah/biner, dan `dispatchCommand` nol pemanggil sehingga tidak ada jalur produksi task → perangkat. Lihat Butir 11. |
 | **MCP / tools / browser ber-permission & audit** | **SEBAGIAN** | Permission **lulus**: semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit tidak lulus**: `audit_logs` produksi hanya 10 baris keputusan approval; tool call, MCP call, browser action, dan artifact write tidak tercatat. MCP audit hanya `console.log`. Lihat Butir 12. |
-| **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada keempat jalur (coding, research, standard, tool). **Jalur tool diperbaiki 2026-10-13**: `executeRegisteredTool` menjalankan `GenericEvaluator` atas hasil tool sebelum menulis `completed`, dan tidak melampirkan bukti palsu bila tool mengembalikan `null`/`undefined` (`apps/agent-worker/src/task-executor.ts:637-674`). **Bukti coding kini nyata**: `LocalCodingEnvironment` menjalankan `node --run lint/typecheck/test/build` di workspace per task; bukti live task `3f5aeee2-…` → `failed` (`score 0.71`, lint keluar 1), task `a5776358-…` → `completed` (`score 1`). Sisa: acceptance criteria belum dipersist sebelum eksekusi. Lihat Butir 7 dan 8. |
+| **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada keempat jalur (coding, research, standard, tool). **Jalur tool diperbaiki 2026-10-13**: `executeRegisteredTool` menjalankan `GenericEvaluator` atas hasil tool sebelum menulis `completed`, dan tidak melampirkan bukti palsu bila tool mengembalikan `null`/`undefined` (`apps/agent-worker/src/task-executor.ts:637-674`). **Bukti coding kini nyata**: `LocalCodingEnvironment` menjalankan `node --run lint/typecheck/test/build` di workspace per task; bukti live task `3f5aeee2-…` → `failed` (`score 0.71`, lint keluar 1), task `a5776358-…` → `completed` (`score 1`). **Bukti research kini nyata**: `ResearchAgent` mencari dan membuka halaman sungguhan; bukti live task `46098f3e-…` → `completed` (`score 1`, 5 sumber nyata), task `c38ae271-…` → `failed` (`score 0`, tanpa sumber). Sisa: acceptance criteria belum dipersist sebelum eksekusi, dan klaim research belum disintesis model. Lihat Butir 7 dan 8. |
 | **Approval terikat aksi spesifik**               | **LULUS**    | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence` di `apps/api/src/routes/approvals.ts`.                                                                                |
 | **Scheduler & Event Deduplication**              | **SEBAGIAN** | Idempotency key dan dedupe window ada, `EventEngine` tidak dapat dispatch tanpa `PermissionEngine`. Namun `NotificationEngine` di API dibuat **tanpa storage** (`apps/api/src/index.ts:211`), `SqlNotificationRepository` tidak pernah diinstansiasi, dan `notifications` produksi berisi **0 baris**. Lihat Butir 10. |
 | **FCM Push Notification Live Kredensial**        | **GAGAL**    | Bukan sekadar menunggu kredensial. `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` hardcoded ketika service account tersedia, sehingga pengiriman akan selalu gagal `401` bahkan setelah kredensial nyata disuntikkan. Tidak ada alur OAuth token dari service account. |
@@ -380,7 +386,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 1. **Memory tidak persisten — SELESAI (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + 5 index + check constraint; `DrizzleMemoryRepository` tidak lagi menelan error DB; `artifacts` yang tak terpakai dihapus dari schema. Bukti live: create → restart API → data tetap ada. Sisa: provider embedding (eksternal) dan sweeper retensi.
 2. **Recovery task menggantung — SELESAI (2026-10-13)**. `recoverInterruptedTasks` sekarang menerima `queue` wajib, `createAgentWorker` menyediakan queue, dan test regresi baru gagal bila queue tidak diteruskan. Diverifikasi live: task `running` tanpa job → restart → `completed`.
 3. **Evaluator tidak memverifikasi apa pun pada jalur coding — SELESAI (2026-10-13)**. `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dihapus dan diganti `LocalCodingEnvironment` yang menjalankan `node --run lint/typecheck/test/build` di workspace per task (`packages/agent-core/src/coding/local-environment.ts`); `executeRegisteredTool` kini menjalankan `GenericEvaluator` sebelum `completed` (`apps/agent-worker/src/task-executor.ts:637-674`). Bukti live: workspace dengan `lint` gagal → `failed` (`score 0.71`); workspace dengan script lulus → `completed` (`score 1`).
-4. **Research tanpa jalur pencarian** — `web_search` menembak `example.com` dan tidak terdaftar di registry mana pun; `ResearchAgent` memakai sumber hardcoded.
+4. **Research tanpa jalur pencarian — SELESAI (2026-10-13)**. `web_search` kini mencari sungguhan lewat DuckDuckGo HTML (`duckDuckGoSearch`) dan terdaftar di `createDefaultToolRegistry`; `LocalResearchEnvironment` (`packages/agent-core/src/research/local-environment.ts`) memakai `web_search` + `web_fetch` melalui `ToolRegistry` yang sama, jadi `web:search`/`web:fetch` diperiksa `PermissionEngine`. Sumber dan claim hardcoded di `ResearchAgent` dihapus: tanpa environment, run berakhir `failed` dengan `No valid sources provided`. Bukti live: query nyata → `completed` (`score 1`, 5 sumber nyata); query tanpa hasil → `failed` (`score 0`). Sisa: sintesis lintas sumber oleh model belum ada, sehingga klaim berupa kutipan awal halaman.
 5. **Tidak ada jalur dispatch perintah ke Windows Agent** — `dispatchCommand` nol pemanggil produksi.
 6. **Notifikasi belum pernah terkirim** — `notifications` 0 baris; `NotificationEngine` di API tanpa storage.
 7. **Token FCM hardcoded `dummy-env-token`** — akan gagal 401 bahkan setelah kredensial nyata disuntikkan.
@@ -407,7 +413,8 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 | **Koneksi Windows Worker Terputus Saat Eksekusi**  | Sedang | Sedang       | Sesi koneksi perangkat disimpan **in-memory** (`apps/api/src/services/device-connection-manager.ts`), sehingga restart API menghapus seluruh sesi dan semua perangkat tampak offline sampai mereka reconnect. Selain itu tidak ada jalur dispatch perintah dari task ke perangkat (lihat Butir 11), jadi mitigasi "task ditahan dan dilanjutkan" belum dapat diverifikasi. |
 | **Exhaustion Disk Akibat Log atau Database**       | Rendah | Rendah       | Rotasi log Docker aktif (`/etc/docker/daemon.json`: `max-size 10m`, `max-file 3`). Retensi backup **14 hari** (`RETENTION_DAYS` default di `scripts/backup-postgres.sh:15`), bukan 7 hari seperti tertulis sebelumnya. Disk terpakai 42G/174G (25%). |
 | **Kehilangan Memori Diam-diam**                    | Tinggi | **Rendah**   | **Dimitigasi 2026-10-13.** Tabel `memories` kini dibuat oleh migrasi `0007_memories.sql`, dan `DrizzleMemoryRepository` tidak lagi menelan kegagalan database, sehingga error terlihat alih-alih menjadi `201` palsu. Bukti live: create → restart API → data tetap ada. Sisa risiko: pencarian semantik tidak aktif (bukan kehilangan data) dan retensi tidak ditegakkan. |
-| **Klaim Completion Palsu**                         | Tinggi | **Rendah**   | **Dimitigasi 2026-10-13.** Lingkungan coding mock `{passed:true}` dihapus dan diganti eksekusi nyata di workspace per task; `executeRegisteredTool` kini menjalankan `GenericEvaluator` sebelum menulis `completed` dan tidak melampirkan bukti bila tool tidak mengembalikan data. Bukti live: check gagal → `failed` (`score 0.71`), check lulus → `completed` (`score 1`). Sisa risiko: `GenericEvaluator` pada jalur tool memakai kriteria default dan belum memeriksa apakah output memenuhi permintaan pengguna; acceptance criteria belum dipersist sebelum eksekusi. |
+| **Klaim Completion Palsu**                         | Tinggi | **Rendah**   | **Dimitigasi 2026-10-13.** Lingkungan coding mock `{passed:true}` dihapus dan diganti eksekusi nyata di workspace per task; `executeRegisteredTool` kini menjalankan `GenericEvaluator` sebelum menulis `completed` dan tidak melampirkan bukti bila tool tidak mengembalikan data; `ResearchAgent` tidak lagi punya daftar sumber/claim hardcoded, sehingga riset tanpa sumber nyata berakhir `failed`. Bukti live: check gagal → `failed` (`score 0.71`), check lulus → `completed` (`score 1`), riset tanpa hasil → `failed` (`score 0`), riset nyata → `completed` (`score 1`, 5 sumber). Sisa risiko: `GenericEvaluator` pada jalur tool memakai kriteria default dan belum memeriksa apakah output memenuhi permintaan pengguna; acceptance criteria belum dipersist sebelum eksekusi; klaim riset belum disintesis model sehingga relevansinya belum dinilai. |
+| **Pencarian web bergantung pada markup pihak ketiga** | Sedang | Sedang       | `web_search` membaca HTML `html.duckduckgo.com` karena tidak ada API key yang tersedia. Selama pengujian live 2026-10-13 endpoint ini membalas `202` tanpa hasil untuk user agent yang memuat kata `bot`; UA kini dijaga bebas kata itu. Markup yang berubah **tidak** menghasilkan "0 hasil" palsu: `duckDuckGoSearch` melempar error, `ResearchAgent` mencatatnya sebagai limitation, dan task berakhir `failed`. `createWebSearchTool(provider)` menerima provider pengganti (mis. SearXNG self-host) tanpa mengubah `ResearchAgent`. |
 
 ---
 
@@ -415,12 +422,12 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 ### Prioritas P0 (cacat fungsional, tidak memerlukan kredensial eksternal)
 
-Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1, 2, dan 3 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 4 dan seterusnya masih terbuka.
+Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sampai 4 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 5 dan seterusnya masih terbuka.
 
 1. **Perbaiki pemulihan task — SELESAI (2026-10-13)**. `queue` kini diteruskan dan wajib; test regresi baru (`live-worker-execution.test.ts`) gagal bila queue tidak diteruskan; bukti live task `running` tanpa job → restart → `completed`.
 2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. `:id` pada route memory kini divalidasi sebagai uuid, sehingga `GET`/`DELETE /v1/memories/search` menjawab `400`, bukan `500`. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi.
 3. **Buat evaluator menilai bukti nyata — SELESAI (2026-10-13)**. `createDefaultEnvironment()` diganti `LocalCodingEnvironment` (perintah nyata, timeout, output terpotong) dan `executeRegisteredTool` digerbangi evaluator. Sisa yang belum selesai dari butir ini: acceptance criteria harus dipersist sebelum eksekusi agar evaluator menilai terhadap kriteria task, bukan kriteria default.
-4. **Beri research jalur pencarian nyata** — daftarkan provider search yang sungguh-sungguh (SearXNG self-host atau API pihak ketiga) dan buat `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi.
+4. **Beri research jalur pencarian nyata — SELESAI (2026-10-13)**. Provider pencarian nyata (DuckDuckGo HTML, tanpa API key) terdaftar di `createDefaultToolRegistry` (`packages/tools/src/builtin/web-search.ts`, `packages/tools/src/registry/create-default-tool-registry.ts:20-21`); `LocalResearchEnvironment` mencari dan membuka halaman lewat `ToolRegistry` ber-permission; sumber dan claim hardcoded dihapus. Sisa yang belum selesai dari butir ini: sintesis klaim lintas sumber oleh `ModelGateway`, dan `ResearchEvaluator` belum mem-fetch URL untuk memverifikasi isi sitasi.
 5. **Sambungkan dispatch perintah ke Windows Agent** — hubungkan `dispatchCommand` ke jalur task dengan approval, dan ganti identitas perangkat menjadi kriptografis (`devices.public_key` diisi dan diverifikasi).
 6. **Perbaiki notifikasi dan FCM** — `NotificationEngine` di API harus memakai storage durable, dan `fcm-provider.ts` harus memperoleh token OAuth nyata dari service account, bukan literal `dummy-env-token`.
 7. **Perluas audit** — tulis tool call, MCP call, browser action, dan artifact write ke `audit_logs`, bukan hanya keputusan approval.
@@ -469,12 +476,12 @@ Time:     ~28s
 `pnpm test` di root **tidak dapat dipakai**: task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite dijalankan per paket:
 
 ```text
-@personal-ai-os/tools          30/30
+@personal-ai-os/tools          33/33
 @personal-ai-os/mcp            17/17
-@personal-ai-os/agent-worker   33/33
+@personal-ai-os/agent-worker   34/34
 @personal-ai-os/memory          7/7
 @personal-ai-os/permissions     5/5
-@personal-ai-os/agent-core     34/34
+@personal-ai-os/agent-core     40/40
 @personal-ai-os/evaluator       9/9
 API (in-container)             51/51, 0 skipped
 ```
@@ -484,7 +491,8 @@ Suite API dijalankan di dalam image `personal-ai-os-api:latest`; image `node:22-
 ### D. Verifikasi Referensi Path Dokumen (`pnpm verify:audit`)
 
 ```text
-[Verify Audit Refs] Berhasil memverifikasi 88 path unik yang valid.
+[Verify Audit Refs] Memeriksa 150 referensi path dari docs/final-audit.md...
+[Verify Audit Refs] Berhasil memverifikasi 90 path unik yang valid.
 [SUKSES] Semua referensi path file dalam docs/final-audit.md 100% valid dan ada di filesystem.
 ```
 
@@ -525,12 +533,27 @@ SSRF 169.254.169.254 -> failed
 # Workspace nyata /app/data/workspaces/m3-pass (semua script -> exit 0):
 #   -> completed, progress 100, evaluationResult.passed=true, score=1
 #      artifact-diff-... memuat diff git nyata: "+export const helper = (n) => n + 1;"
+# Cacat 4 (DIPERBAIKI 2026-10-13): research tanpa jalur pencarian
+# Sebelum: ResearchAgent tanpa env memakai 2 sumber hardcoded (developer.mozilla.org,
+#          nodejs.org) dan 3 claim hardcoded; ResearchEvaluator lulus tanpa satu pun fetch nyata.
+# Sesudah, query nyata (task 46098f3e-4cd6-4958-b94e-b2bf30ea283e, "durable execution in PostgreSQL"):
+#   POST /v1/tasks {kind:"research_task", payload:{query:"durable execution in PostgreSQL"}}
+#   -> completed, progress 100, evaluationResult.passed=true, score=1
+#      "5 sources analyzed. Average credibility score: 0.74."
+#      "5 factual claims mapped to 5 sources without unlinked claims."
+#      artifact-research-report-... memuat 5 URL nyata (temporal.io, learn.microsoft.com x2, github.com x2)
+#      limitation: "Klaim fakta adalah kutipan awal halaman yang benar-benar diambil dan tidak disintesis lintas sumber."
+# Sesudah, query tanpa hasil (task c38ae271-1237-4d58-8ff2-6cf27927be00):
+#   -> failed, score=0, "Research completion blocked: No valid sources provided."
+#      limitation mencatat: "1 pencarian gagal: ... membalas HTTP 200 tanpa markup hasil yang dikenal."
+# Sumber tunggal ditolak (task 597838e9-304e-4aec-8c0a-ed62f679011e): failed, score=0.8,
+#   cross_check gagal karena hanya 1 sumber dapat dibaca; 4 URL yang gagal dibaca disebut namanya.
 
-# Cacat 4 (BELUM DIPERBAIKI): audit hanya approval
+# Cacat 5 (BELUM DIPERBAIKI): audit hanya approval
 SELECT action, count(*) FROM audit_logs GROUP BY action;
  approval:denied   | 5
  approval:approved | 5
 
-# Cacat 5: notifikasi belum pernah terkirim
+# Cacat 6: notifikasi belum pernah terkirim
 SELECT count(*) FROM notifications; -> 0
 ```

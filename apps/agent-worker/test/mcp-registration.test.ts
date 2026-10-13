@@ -119,7 +119,7 @@ test('registerMcpServers skips a server that fails to launch and still returns a
     assert.deepEqual(adapters, []);
     assert.deepEqual(
       registry.listTools().map((tool) => tool.name),
-      ['web_fetch'],
+      ['web_fetch', 'web_search'],
     );
   } finally {
     if (previous === undefined) delete process.env.MCP_SERVERS;
@@ -139,7 +139,7 @@ test('registerMcpServers registers nothing when MCP_SERVERS is unset', async () 
     assert.deepEqual(adapters, []);
     assert.deepEqual(
       registry.listTools().map((tool) => tool.name),
-      ['web_fetch'],
+      ['web_fetch', 'web_search'],
     );
   } finally {
     if (previous !== undefined) process.env.MCP_SERVERS = previous;

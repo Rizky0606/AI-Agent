@@ -34,7 +34,7 @@ test('ResearchAgent: executes 9-step workflow with multi-source metadata, scorin
     taskId: 'task-research-01',
     userId: 'user-researcher',
     query: 'Keunggulan native test runner Node.js dibanding framework eksternal',
-    mockEnvironment: mockEnv,
+    environment: mockEnv,
     mockClaims: [
       {
         id: 'claim-1',
@@ -146,4 +146,108 @@ test('ResearchAgent: Evaluator strictly BLOCKS completed status if no valid sour
   assert.equal(report.status, 'failed');
   assert.equal(report.evaluationResult.passed, false);
   assert.match(report.evaluationResult.completionBlockedReason ?? '', /No valid sources provided/i);
+});
+
+test('ResearchAgent: without an environment it produces no sources and no fabricated claims', async () => {
+  const agent = new ResearchAgent();
+
+  const report = await agent.execute({
+    taskId: 'task-no-environment',
+    userId: 'user-researcher',
+    query: 'Riset tanpa jalur pencarian',
+  });
+
+  assert.equal(report.status, 'failed');
+  assert.deepEqual(report.sources, []);
+  assert.deepEqual(report.claims, []);
+  assert.equal(report.evaluationResult.passed, false);
+});
+
+test('ResearchAgent: fetches every searched source and cites the page it came from', async () => {
+  const agent = new ResearchAgent();
+  const fetched: string[] = [];
+
+  const report = await agent.execute({
+    taskId: 'task-browse',
+    userId: 'user-researcher',
+    query: 'durable execution',
+    environment: {
+      async search() {
+        return [
+          {
+            url: 'https://example.org/durable',
+            title: 'Durable execution explained',
+            domain: 'example.org',
+            snippet: 'search-engine snippet that must be replaced',
+          },
+          {
+            url: 'https://example.com/checkpoints',
+            title: 'Checkpointing workflows',
+            domain: 'example.com',
+            snippet: 'another search-engine snippet',
+          },
+          {
+            url: 'https://example.net/broken',
+            title: 'Broken page',
+            domain: 'example.net',
+            snippet: 'this source never resolves',
+          },
+        ];
+      },
+      async fetchContent(url: string) {
+        fetched.push(url);
+        if (url.endsWith('/broken')) throw new Error('HTTP 403');
+        return {
+          url,
+          title: 'Fetched page title',
+          content:
+            'Durable execution persists each step of a workflow so a crash resumes from the last checkpoint instead of restarting the whole run.',
+        };
+      },
+    },
+  });
+
+  assert.deepEqual(fetched, [
+    'https://example.org/durable',
+    'https://example.com/checkpoints',
+    'https://example.net/broken',
+  ]);
+  assert.equal(report.status, 'completed');
+  assert.equal(report.workflowStage, 'report');
+  assert.deepEqual(
+    report.sources.map((s) => s.url),
+    ['https://example.org/durable', 'https://example.com/checkpoints'],
+  );
+  assert.match(report.sources[0]?.snippet ?? '', /Durable execution persists each step/);
+  assert.doesNotMatch(report.sources[0]?.snippet ?? '', /search-engine snippet/);
+  assert.equal(report.claims.length, 2);
+  assert.ok(report.claims.every((claim) => claim.type === 'sourced_fact'));
+  assert.deepEqual(report.claims[0]?.sourceIds, ['src-1']);
+  assert.deepEqual(report.claims[1]?.sourceIds, ['src-2']);
+  assert.ok(report.limitations.some((line) => line.includes('https://example.net/broken')));
+  assert.ok(
+    report.limitations.some((line) => line.includes('tidak disintesis lintas sumber')),
+    'auto-derived facts must state that no model synthesized them',
+  );
+});
+
+test('ResearchAgent: a search provider outage ends as a failed report, not a thrown error', async () => {
+  const agent = new ResearchAgent();
+
+  const report = await agent.execute({
+    taskId: 'task-search-outage',
+    userId: 'user-researcher',
+    query: 'durable execution in PostgreSQL',
+    environment: {
+      async search() {
+        throw new Error('Pencarian web tidak dapat diparsing: endpoint membalas HTTP 202.');
+      },
+    },
+  });
+
+  assert.equal(report.status, 'failed');
+  assert.equal(report.evaluationResult.passed, false);
+  assert.equal(report.sources.length, 0);
+  assert.match(report.summary, /HTTP 202/);
+  assert.ok(report.limitations.some((line) => line.includes('HTTP 202')));
 });

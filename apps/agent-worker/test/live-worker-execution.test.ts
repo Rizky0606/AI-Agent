@@ -24,8 +24,23 @@ import {
   InMemoryTaskEventBroadcaster,
   RedisTaskEventBroadcaster,
 } from '@personal-ai-os/api/services';
-import { ToolRegistry, type ToolDefinition } from '@personal-ai-os/tools';
+import {
+  SsrfGuard,
+  ToolRegistry,
+  createWebFetchTool,
+  createWebSearchTool,
+  type ToolDefinition,
+} from '@personal-ai-os/tools';
 import { MockModelGateway } from '@personal-ai-os/model-gateway';
+
+/** Reads one field of `payload.evaluationResult` after a real runtime shape check. */
+function evaluationField(payload: Record<string, unknown>, field: string): unknown {
+  const evaluation = payload['evaluationResult'];
+  if (typeof evaluation !== 'object' || evaluation === null || !(field in evaluation)) {
+    return undefined;
+  }
+  return evaluation[field];
+}
 
 // In-memory test repository with event replay support
 class TestTaskRepo implements TaskRepository {
@@ -757,7 +772,7 @@ test('Coding task gets its own git workspace when the payload names none', async
   assert.equal((await repo.getTask(task.userId, task.id))?.status, 'failed');
 });
 
-test('Real research task executes with ResearchAgent & ResearchEvaluator without placeholder label', async () => {
+test('Research task without a tool registry fails closed instead of inventing sources', async () => {
   const repo = new TestTaskRepo();
   const broadcaster = new InMemoryTaskEventBroadcaster();
   const executor = new TaskExecutor(repo, broadcaster);
@@ -766,10 +781,7 @@ test('Real research task executes with ResearchAgent & ResearchEvaluator without
     userId: 'user-researcher',
     projectId: 'proj-researcher',
     kind: 'research_task',
-    payload: {
-      query: 'Arsitektur micro-agent durable execution',
-      topics: ['durable execution', 'state machines'],
-    },
+    payload: { query: 'Arsitektur micro-agent durable execution' },
   });
 
   await executor.execute({
@@ -781,16 +793,100 @@ test('Real research task executes with ResearchAgent & ResearchEvaluator without
     maxAttempts: 3,
   });
 
+  const failedTask = await repo.getTask(task.userId, task.id);
+  assert.equal(failedTask?.status, 'failed');
+
+  const events = repo.events.filter((e) => e.taskId === task.id);
+  const failedEvent = events.find((e) => e.eventType === 'task.failed');
+  assert.ok(failedEvent, 'a research task with no search backend must fail, not complete');
+  assert.equal(events.some((e) => e.eventType === 'task.completed'), false);
+  assert.match(
+    String(evaluationField(failedEvent.payload, 'completionBlockedReason')),
+    /No valid sources provided/,
+  );
+
+  // The removed hardcoded fallback used to inject these two sources with no network call at all.
+  const serialized = JSON.stringify(events);
+  assert.doesNotMatch(serialized, /developer\.mozilla\.org/);
+  assert.doesNotMatch(serialized, /nodejs\.org/);
+  assert.doesNotMatch(serialized, /PLACEHOLDER_WORKER_LABEL/);
+});
+
+test('Research task searches, browses, and cites through the guarded tool registry', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const guard = new SecuredCapabilityGuard(new PermissionEngine());
+  const registry = new ToolRegistry(guard);
+  const searched: string[] = [];
+  const fetched: string[] = [];
+
+  registry.registerTool(
+    createWebSearchTool(async (query) => {
+      searched.push(query);
+      return [
+        {
+          url: 'https://example.org/durable',
+          title: 'Durable execution explained',
+          snippet: 'search-engine snippet that must not survive browse',
+        },
+        {
+          url: 'https://example.com/checkpoints',
+          title: 'Checkpointing workflows',
+          snippet: 'second search-engine snippet',
+        },
+      ];
+    }),
+  );
+  registry.registerTool(
+    createWebFetchTool(
+      // The test network has no DNS resolver, so skip the resolve step; SSRF blocking itself is
+      // covered by packages/tools/test/tools.test.ts.
+      new SsrfGuard({ resolveDns: false }),
+      async (input: RequestInfo | URL) => {
+        fetched.push(String(input));
+        return new Response(
+          `<html><head><title>Page for ${String(input)}</title></head><body><p>Durable execution persists each workflow step so a crash resumes from the last checkpoint instead of restarting the whole run. Engines that implement it keep the workflow history in a store the application can query, and they replay completed steps from that history after a failure.</p></body></html>`,
+          { status: 200, headers: { 'content-type': 'text/html' } },
+        );
+      },
+    ),
+  );
+
+  const executor = new TaskExecutor(repo, broadcaster, { registry });
+
+  const { task } = await repo.createTask({
+    userId: 'user-researcher',
+    projectId: 'proj-researcher',
+    kind: 'research_task',
+    payload: { query: 'durable execution', topics: ['durable execution'] },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 3,
+  });
+
+  assert.deepEqual(searched, ['durable execution']);
+  assert.deepEqual(fetched, ['https://example.org/durable', 'https://example.com/checkpoints']);
+
   const completedTask = await repo.getTask(task.userId, task.id);
   assert.equal(completedTask?.status, 'completed');
   assert.ok(completedTask?.artifacts && completedTask.artifacts.length > 0);
 
-  // Must NOT carry PLACEHOLDER_WORKER_LABEL
-  const artifactNote = (completedTask.artifacts[0] as { note?: string })?.note;
-  assert.notEqual(artifactNote, PLACEHOLDER_WORKER_LABEL);
+  const report = String(completedTask.artifacts[0]?.content ?? '');
+  assert.match(report, /https:\/\/example\.org\/durable/);
+  assert.match(report, /Durable execution persists each workflow step/);
+  assert.doesNotMatch(report, /search-engine snippet/);
 
-  const completedEvents = repo.events.filter((e) => e.taskId === task.id);
-  for (const evt of completedEvents) {
+  const events = repo.events.filter((e) => e.taskId === task.id);
+  const completedEvent = events.find((e) => e.eventType === 'task.completed');
+  assert.ok(completedEvent);
+  assert.equal(evaluationField(completedEvent.payload, 'passed'), true);
+  for (const evt of events) {
     assert.equal(evt.payload?.placeholder, undefined);
     assert.notEqual(evt.payload?.note, PLACEHOLDER_WORKER_LABEL);
   }

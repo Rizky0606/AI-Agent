@@ -12,9 +12,12 @@ export interface WebFetchOutput {
   content: string;
 }
 
+/** `typeof fetch` carries a `preconnect` namespace member, so tests cannot supply a plain function. */
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 export function createWebFetchTool(
   ssrfGuard: SsrfGuard = defaultSsrfGuard,
-  customFetch: typeof fetch = fetch,
+  customFetch: FetchLike = fetch,
 ): ToolDefinition<WebFetchInput, WebFetchOutput> {
   return {
     name: 'web_fetch',
@@ -25,7 +28,9 @@ export function createWebFetchTool(
     action: 'web:fetch',
     timeoutMs: 15000,
     supportsCancellation: true,
-    outputLimitBytes: 65536, // 64KB
+    // 1 MiB: real documentation pages run past 64 KiB, and the registry replaces oversized output
+    // with a partial-JSON envelope that no caller can read a document out of.
+    outputLimitBytes: 1048576,
     inputValidator: (input: unknown) => {
       if (typeof input !== 'object' || input === null) {
         return { valid: false, error: 'Input harus berupa objek { url: string }.' };

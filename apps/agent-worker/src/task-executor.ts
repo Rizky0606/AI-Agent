@@ -22,10 +22,7 @@ import {
   type AcceptanceCriterion,
   type CodingEvidence,
   type EvaluationResult,
-  type ResearchClaim,
-  type ResearchContradiction,
   type ResearchEvidence,
-  type ResearchSource,
 } from '@personal-ai-os/evaluator';
 import {
   AgentRouter,
@@ -35,8 +32,8 @@ import {
   IntentAnalyzer,
   Planner,
   ResearchAgent,
+  LocalResearchEnvironment,
   prepareCodingWorkspace,
-  type ResearchEnvironment,
   type ResearchTaskInput,
   type RuntimeManager,
   type RuntimeExecuteResult,
@@ -292,10 +289,7 @@ export class TaskExecutor {
       // ========================================================
       // PATH B: REAL RESEARCH AGENT TRACK
       // ========================================================
-      if (
-        isResearchTask &&
-        (task.payload?.query || task.payload?.mockSources || task.payload?.mockEnvironment)
-      ) {
+      if (isResearchTask) {
         await this.executeResearchTrack(task, startStep, currentCheckpointVersion, prompt, span);
         return;
       }
@@ -565,17 +559,23 @@ export class TaskExecutor {
     if (startStep <= 2) {
       if (await this.isHalted(task.userId, task.id)) return;
 
+      // The environment is built here, not read from the payload: a client must never be able
+      // to inject sources, claims, or a mock backend and have the evaluator accept them.
       const researchInput: ResearchTaskInput = {
         taskId: task.id,
         userId: task.userId,
         query: (task.payload?.query as string) ?? prompt,
         topics: (task.payload?.topics as string[]) ?? undefined,
-        mockSources: (task.payload?.mockSources as ResearchSource[]) ?? undefined,
-        mockClaims: (task.payload?.mockClaims as ResearchClaim[]) ?? undefined,
-        mockContradictions:
-          (task.payload?.mockContradictions as ResearchContradiction[]) ?? undefined,
-        mockEnvironment: (task.payload?.mockEnvironment as ResearchEnvironment) ?? undefined,
-        simulateFabricatedCitation: task.payload?.simulateFabricatedCitation === true,
+        environment: this.registry
+          ? new LocalResearchEnvironment({
+              registry: this.registry,
+              context: {
+                actor: { id: task.userId, role: 'user' },
+                taskId: task.id,
+                projectId: task.projectId,
+              },
+            })
+          : undefined,
       };
 
       const report = await this.researchAgent.execute(researchInput);

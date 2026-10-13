@@ -77,13 +77,21 @@ Konsekuensi: **setiap keputusan arsitektur berikutnya tidak boleh dibangun di at
 - `ResearchEvaluator` hanya menghitung field (`packages/evaluator/src/research-evaluator.ts`).
 - Acceptance criteria tidak dipersist sebelum eksekusi: `TaskCheckpoint` tidak punya field kriteria (`packages/shared/src/tasks/types.ts:13-24`). `planner.ts:31-116,150-216` menulis `acceptanceCriteria` sebagai string plan yang tidak pernah dikonsumsi evaluator.
 
-### 3.4 Research — placeholder
+### 3.4 Research — DIPERBAIKI 2026-10-13 (jalur pencarian dan browse nyata)
 
-- `web_search` default menembak `https://example.com/search?q=…` (`packages/tools/src/builtin/web-search.ts:64`), dan **tidak terdaftar di registry mana pun** (`packages/tools/src/registry/create-default-tool-registry.ts:20` hanya `web_fetch`).
-- `ResearchAgent` tanpa env memakai sumber hardcoded MDN/nodejs.org (`packages/agent-core/src/research/research-agent.ts:99-115`) dan claim hardcoded (`:135-158`) yang lolos evaluator.
-- Tahap `browse` dideklarasikan (`packages/agent-core/src/types.ts:172-180`) tetapi tidak pernah diset; `fetchContent` tidak pernah dipanggil.
+Kondisi sebelum perbaikan: `web_search` default menembak `https://example.com/search?q=…` dan tidak terdaftar di registry mana pun; `ResearchAgent` tanpa env memakai sumber hardcoded MDN/nodejs.org dan tiga claim hardcoded yang lolos evaluator tanpa satu pun fetch; tahap `browse` dideklarasikan tetapi tidak pernah diset; `fetchContent` tidak pernah dipanggil.
+
+Kondisi sekarang:
+- `duckDuckGoSearch` (`packages/tools/src/builtin/web-search.ts`) menembak `https://html.duckduckgo.com/html/` tanpa API key, membuka pembungkus `/l/?uddg=…`, dan melempar error — bukan mengembalikan 0 hasil — bila markup tak dikenal atau status non-2xx. User agent harus bebas kata `bot` (DuckDuckGo membalas `202` tanpa hasil untuk UA yang menyebut dirinya bot).
+- `createDefaultToolRegistry` mendaftarkan `web_search` bersama `web_fetch` (`packages/tools/src/registry/create-default-tool-registry.ts:20-21`), sehingga pencarian diperiksa `PermissionEngine` sebagai `web:search` (LOW).
+- `LocalResearchEnvironment` (`packages/agent-core/src/research/local-environment.ts`) mencari lewat `web_search` dan membuka setiap hasil lewat `web_fetch` — keduanya melalui `ToolRegistry` yang sama, bukan klien HTTP privat. Halaman yang outputnya dipotong registry, non-2xx, atau teksnya < 200 karakter setelah `htmlToText` dibuang dan dicatat sebagai limitation.
+- `ResearchAgent` tidak lagi punya daftar sumber/claim hardcoded. Tanpa `environment` ia menghasilkan nol sumber dan `ResearchEvaluator` menolak (`No valid sources provided`); tahap `browse` benar-benar diset dan `fetchContent` dipanggil untuk setiap sumber; `snippet` berasal dari konten nyata.
+- `htmlToText` (`packages/tools/src/html-text.ts`) membuang blok `<script>`/`<style>` sebelum tag, karena halaman SPA sebelumnya terbaca seperti prosa. `web_fetch.outputLimitBytes` naik 64 KiB → 1 MiB.
+
+Masih terbuka: klaim adalah kutipan awal tiap halaman, bukan sintesis model, sehingga relevansi terhadap pertanyaan belum dinilai; `ResearchEvaluator` tidak mem-fetch URL sendiri.
+
+Sisa temuan lain di bagian ini yang belum diperbaiki:
 - `POST /v1/tasks` menerima `kind` string bebas 1-80 karakter (`apps/api/src/routes/tasks.ts:38`) tanpa whitelist. `TaskRecord.kind` bertipe `string` (`packages/shared/src/tasks/types.ts:31`).
-- `web_fetch` nyata: SSRF guard + HTTP fetch asli.
 
 ### 3.5 Windows Agent — tidak tersambung ke eksekusi
 
@@ -184,10 +192,10 @@ Setiap milestone harus menghasilkan bukti yang dapat diulang. Tidak ada mileston
 | **M3. Evaluator berbasis bukti** | **SELESAI (2026-10-13).** `LocalCodingEnvironment` (`packages/agent-core/src/coding/local-environment.ts`) menjalankan `node --run lint/typecheck/test/build` di workspace per task; `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dihapus. Worker memberi setiap task coding workspace git sendiri di `CODING_WORKSPACE_ROOT=/app/data/workspaces` (named volume `coding-workspaces`). `executeRegisteredTool` menjalankan `GenericEvaluator` sebelum `completed`. Bukti live: workspace dengan `lint` keluar 1 → `failed` (`score 0.71`); workspace dengan script lulus → `completed` (`score 1`, artifact diff nyata). **Belum**: acceptance criteria belum dipersist sebelum eksekusi, sehingga `GenericEvaluator` pada jalur tool masih memakai kriteria default. |
 | **M4. Windows dispatch** | Task dengan `payload.targetDevice` mengirim `command.execute` melalui WSS ke device yang online, menerima hasil, menyimpannya sebagai artifact, dan melewati approval untuk aksi berisiko. Test: device offline → task masuk state transparan, bukan sukses palsu. |
 | **M5. Notifikasi + scheduler** | `NotificationEngine` memakai storage durable; task selesai/gagal menghasilkan baris `notifications` dengan delivery state. Scheduler tick jalan di salah satu proses dengan bukti slot idempoten di DB. FCM memakai token OAuth nyata dari service account, bukan literal. |
-| **M6. Research** | Satu provider search nyata terdaftar (keputusan pemilik: SearXNG self-host tanpa kredensial, atau API key pihak ketiga). Klaim riset terikat ke URL yang benar-benar di-fetch. `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi. |
+| **M6. Research** | **SELESAI (2026-10-13).** Provider pencarian nyata terdaftar: `duckDuckGoSearch` (`packages/tools/src/builtin/web-search.ts`) di `createDefaultToolRegistry` (`packages/tools/src/registry/create-default-tool-registry.ts:20-21`), tanpa API key. `LocalResearchEnvironment` (`packages/agent-core/src/research/local-environment.ts`) mencari lewat `web_search` dan membuka setiap hasil lewat `web_fetch`, keduanya melalui `ToolRegistry` ber-permission (`web:search`/`web:fetch`). Sumber dan claim hardcoded dihapus; klaim terikat ke URL yang benar-benar di-fetch. Bukti live: query nyata → `completed` (`score 1`, 5 sumber nyata, 5 klaim tertaut); query tanpa hasil → `failed` (`score 0`, `No valid sources provided`). **Belum**: sintesis klaim lintas sumber oleh `ModelGateway` — klaim masih kutipan awal halaman, sehingga relevansi terhadap pertanyaan belum dinilai; `ResearchEvaluator` juga belum mem-fetch URL sendiri. |
 | **M7. Audit menyeluruh** | Setiap tool call, MCP call, browser action, dan artifact write menulis baris `audit_logs` dengan aktor, action, resource, hasil. Bukan `console.log`. |
 
-Ketergantungan: M1 dan M2 berdiri sendiri. M3 kini membawa workspace eksekusinya sendiri (per task, di dalam volume worker), jadi ia tidak lagi menunggu M4. M5 membutuhkan M1 agar event task dapat dipercaya. M7 sebaiknya menyertai M3–M6.
+Ketergantungan: M1 dan M2 berdiri sendiri. M3 membawa workspace eksekusinya sendiri (per task, di dalam volume worker) dan M6 membawa jalur pencariannya sendiri, jadi keduanya tidak menunggu M4. M5 membutuhkan M1 agar event task dapat dipercaya. M7 sebaiknya menyertai M3–M6.
 
 ---
 
@@ -216,7 +224,7 @@ docker exec personal-ai-os-postgres-1 psql -U personal_ai_os -d personal_ai_os \
   -c "SELECT count(*) FROM notifications;"
 
 # 6. Katalog tool produksi
-#    GET /v1/catalog -> {"tools":[{"name":"web_fetch"}]}
+#    GET /v1/catalog -> {"tools":[{"name":"web_fetch"},{"name":"web_search"}]}
 
 # 7. Evaluator menilai bukti nyata (M3)
 docker exec -u node personal-ai-os-worker-1 sh -c '
@@ -226,4 +234,12 @@ docker exec -u node personal-ai-os-worker-1 sh -c '
   git init --quiet && git add -A && git -c user.email=p@x -c user.name=p commit -qm init'
 # POST /v1/tasks {kind:"coding_task", payload:{workspaceDir:"/app/data/workspaces/m3-fail"}}
 #   -> status failed, evaluationResult.score=0.71, issue "Lint issue: Command failed: node --run lint"
-```
+
+# 8. Research mencari, membuka, dan mengutip halaman nyata (M4)
+# POST /v1/tasks {kind:"research_task", payload:{query:"durable execution in PostgreSQL"}}
+#   -> completed, progress 100, evaluationResult.passed=true, score=1,
+#      "5 sources analyzed. Average credibility score: 0.74."
+#      artifact-research-report-<taskId> memuat 5 URL nyata yang benar-benar diambil
+# POST /v1/tasks {kind:"research_task", payload:{query:"site:nonexistent-domain-9f8c1e2a.invalid xyzzyqwerty"}}
+#   -> failed, score=0, "Research completion blocked: No valid sources provided."
+#   (sebelum perbaikan: kedua query di atas sama-sama "completed" dengan sumber hardcoded)

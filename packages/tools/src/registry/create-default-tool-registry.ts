@@ -1,6 +1,7 @@
 import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
 import { createBrowserNavigateTool } from '../builtin/browser-navigate.ts';
 import { createWebFetchTool } from '../builtin/web-fetch.ts';
+import { createWebSearchTool } from '../builtin/web-search.ts';
 import type { BrowserController } from '../browser/browser-controller.ts';
 import { ToolRegistry } from './tool-registry.ts';
 
@@ -18,6 +19,7 @@ export function createDefaultToolRegistry(
 ): ToolRegistry {
   const registry = new ToolRegistry(options.guard ?? new SecuredCapabilityGuard(new PermissionEngine()));
   registry.registerTool(createWebFetchTool());
+  registry.registerTool(createWebSearchTool());
   if (options.browserController) {
     registry.registerTool(createBrowserNavigateTool(options.browserController));
   }

@@ -1,6 +1,9 @@
 // Core Types
 export * from './types.ts';
 
+// HTML text extraction
+export * from './html-text.ts';
+
 // SSRF Guard
 export * from './ssrf/ssrf-guard.ts';
 
