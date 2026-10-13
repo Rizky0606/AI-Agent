@@ -178,6 +178,13 @@ curl -f http://localhost:3000/ready
    docker compose build api worker scheduler
    docker image inspect personal-ai-os-api:latest --format '{{.Os}}/{{.Architecture}}'  # harapkan linux/arm64
    ```
+
+   Kedua container berjalan sebagai uid 1000 (`node`). Buat direktori bind mount artifact sebelum start, jika tidak Docker akan membuatnya sebagai root dan worker tidak dapat menulis screenshot:
+
+   ```sh
+   mkdir -p ~/apps/personal-ai-os/data/artifacts
+   sudo chown -R 1000:1000 ~/apps/personal-ai-os/data
+   ```
 4. **Jalankan Migrasi Database** (service one-shot `migrate`, idempoten via tabel `schema_migrations`):
    ```sh
    docker compose run --rm migrate
