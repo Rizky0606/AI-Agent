@@ -93,9 +93,19 @@ export const conversations = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
     title: varchar('title', { length: 200 }),
+    mode: varchar('mode', { length: 16 }).default('auto').notNull(),
+    model: varchar('model', { length: 200 }),
+    workspaceId: text('workspace_id'),
+    parentConversationId: uuid('parent_conversation_id'),
+    compactedSummary: text('compacted_summary'),
+    lastEventId: text('last_event_id'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...created,
   },
-  (table) => [index('conversations_scope_idx').on(table.userId, table.projectId)],
+  (table) => [
+    index('conversations_scope_idx').on(table.userId, table.projectId),
+    index('conversations_parent_idx').on(table.parentConversationId),
+  ],
 );
 
 export const messages = pgTable(

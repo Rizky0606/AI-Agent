@@ -4,14 +4,24 @@ import type { WebSocket } from '@fastify/websocket';
 import type { AuthService, AuthUser } from '../auth/service.ts';
 import { AuthError } from '../auth/service.ts';
 import type { ChatRepository } from '../db/chat-repository.ts';
+import type { ModelConfigRepository } from '../db/model-config-repository.ts';
 import type { ModelRouter } from '../services/model-router.ts';
+import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import { ModelGatewayError } from '@personal-ai-os/model-gateway';
 
 export type ChatRouteDependencies = {
   auth: AuthService;
   chatRepo: ChatRepository;
   router: ModelRouter;
+  modelConfigs: ModelConfigRepository;
+  gateway: ModelGateway;
 };
+
+type ChatMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+
+const taskTypeForMode = (mode: ChatMode | undefined): 'chat' | 'coding' | 'research' | undefined =>
+  mode === 'coding' ? 'coding' : mode === 'research' ? 'research' : 'chat';
+
 
 type IncomingWsMessage =
   | { type: 'auth'; token: string }
@@ -19,6 +29,9 @@ type IncomingWsMessage =
       type: 'chat.send';
       conversationId?: string;
       projectId?: string;
+      workspaceId?: string;
+      model?: string;
+      mode?: ChatMode;
       content: string;
       attachments?: Array<{ type: 'image'; url: string }>;
     }
@@ -26,6 +39,7 @@ type IncomingWsMessage =
   | { type: 'ping' };
 
 export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependencies): void => {
+
   // HTTP REST chat completion endpoint
   app.post(
     '/v1/chat',
@@ -37,6 +51,9 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
           properties: {
             conversationId: { type: 'string', format: 'uuid' },
             projectId: { type: 'string', format: 'uuid' },
+            workspaceId: { type: 'string', format: 'uuid' },
+            model: { type: 'string', minLength: 1, maxLength: 200 },
+            mode: { type: 'string', enum: ['auto', 'fast', 'coding', 'complex', 'research'] },
             content: { type: 'string', minLength: 1, maxLength: 30000 },
             attachments: {
               type: 'array',
@@ -63,24 +80,36 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
       const body = request.body as {
         conversationId?: string;
         projectId?: string;
+        workspaceId?: string;
+        model?: string;
+        mode?: ChatMode;
         content: string;
         attachments?: Array<{ type: 'image'; url: string }>;
       };
-
       const hasVisionAttachments = Boolean(body.attachments && body.attachments.length > 0);
-
       const projectId = body.projectId ?? (await deps.chatRepo.getOrCreateDefaultProject(user.id));
+      const sessionMetadata = {
+        mode: body.mode ?? 'auto',
+        model: body.model ?? null,
+        workspaceId: body.workspaceId ?? null,
+      };
       const conversationId = await deps.chatRepo.getOrCreateConversation(
         user.id,
         projectId,
         body.conversationId,
+        undefined,
+        sessionMetadata,
       );
+      if (body.conversationId && (body.mode || body.model || body.workspaceId)) {
+        await deps.chatRepo.updateConversation(user.id, conversationId, sessionMetadata);
+      }
 
-      // Save user message
       await deps.chatRepo.appendMessage(user.id, conversationId, 'user', body.content, {
         attachments: body.attachments,
+        mode: body.mode ?? 'auto',
+        model: body.model ?? null,
+        workspaceId: body.workspaceId ?? null,
       });
-
       // Fetch history for context
       const history = await deps.chatRepo.getMessages(user.id, conversationId);
       const messages = history.map((m) => ({
@@ -88,7 +117,8 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         content: m.content,
       }));
 
-      const resolution = await deps.router.resolveModel({ requiresVision: hasVisionAttachments });
+      const requirements = { requiresVision: hasVisionAttachments, preferredModel: body.model, taskType: taskTypeForMode(body.mode) };
+      const resolution = await deps.router.resolveModel(requirements);
       if (!resolution.ok) {
         return reply.code(400).send({
           error: {
@@ -101,7 +131,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
 
       const response = await deps.router.chat(
         { messages },
-        { requiresVision: hasVisionAttachments },
+        requirements,
       );
 
       // Persist assistant message
@@ -114,6 +144,9 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
           usage: response.usage,
           resolvedModel: response.resolvedModel,
           fallbackUsed: response.fallbackUsed,
+          mode: body.mode ?? 'auto',
+          model: body.model ?? null,
+          workspaceId: body.workspaceId ?? null,
         },
       );
 
@@ -127,6 +160,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         },
         usage: response.usage,
         resolvedModel: response.resolvedModel,
+        mode: body.mode ?? 'auto',
       });
     },
   );
@@ -215,16 +249,16 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
       if (data.type === 'chat.send') {
         const hasVisionAttachments = Boolean(data.attachments && data.attachments.length > 0);
 
-        if (hasVisionAttachments) {
-          const resolution = await deps.router.resolveModel({ requiresVision: true });
-          if (!resolution.ok) {
-            send({
-              type: 'error',
-              code: resolution.error,
-              message: resolution.message,
-            });
-            return;
-          }
+        const requirements = {
+          requiresVision: hasVisionAttachments,
+          requiresStreaming: true,
+          preferredModel: data.model,
+          taskType: taskTypeForMode(data.mode),
+        };
+        const resolution = await deps.router.resolveModel(requirements);
+        if (!resolution.ok) {
+          send({ type: 'error', code: resolution.error, message: resolution.message });
+          return;
         }
 
         const user = currentUser;
@@ -236,11 +270,21 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         try {
           const projectId =
             data.projectId ?? (await deps.chatRepo.getOrCreateDefaultProject(user.id));
+          const sessionMetadata = {
+            mode: data.mode ?? 'auto',
+            model: data.model ?? null,
+            workspaceId: data.workspaceId ?? null,
+          };
           conversationId = await deps.chatRepo.getOrCreateConversation(
             user.id,
             projectId,
             data.conversationId,
+            undefined,
+            sessionMetadata,
           );
+          if (data.conversationId && (data.mode || data.model || data.workspaceId)) {
+            await deps.chatRepo.updateConversation(user.id, conversationId, sessionMetadata);
+          }
 
           if (!data.conversationId) {
             send({ type: 'conversation.created', conversationId });
@@ -249,6 +293,9 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
           // Persist user prompt
           await deps.chatRepo.appendMessage(user.id, conversationId, 'user', data.content, {
             attachments: data.attachments,
+            mode: data.mode ?? 'auto',
+            model: data.model ?? null,
+            workspaceId: data.workspaceId ?? null,
           });
 
           // Fetch context messages
@@ -264,7 +311,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
 
           const stream = deps.router.stream(
             { messages, signal: controller.signal },
-            { requiresVision: hasVisionAttachments, requiresStreaming: true },
+            requirements,
           );
 
           for await (const chunk of stream) {
@@ -285,11 +332,13 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
               lastUsage = chunk.usage;
             }
           }
-
           if (controller.signal.aborted) {
             await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
               cancelled: true,
               resolvedModel,
+              mode: data.mode ?? 'auto',
+              model: data.model ?? null,
+              workspaceId: data.workspaceId ?? null,
             });
             send({
               type: 'message.cancelled',
@@ -300,12 +349,17 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
               usage: lastUsage,
               resolvedModel,
+              mode: data.mode ?? 'auto',
+              model: data.model ?? null,
+              workspaceId: data.workspaceId ?? null,
             });
             send({
               type: 'message.completed',
               messageId: assistantMessageId,
               content: accumulated,
               usage: lastUsage,
+              resolvedModel,
+              mode: data.mode ?? 'auto',
             });
           }
         } catch (err) {
@@ -313,6 +367,9 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             if (conversationId) {
               await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', '', {
                 cancelled: true,
+                mode: data.mode ?? 'auto',
+                model: data.model ?? null,
+                workspaceId: data.workspaceId ?? null,
               });
             }
             send({

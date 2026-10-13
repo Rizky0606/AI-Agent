@@ -1,3 +1,4 @@
+import type { ToolRegistry } from '@personal-ai-os/tools';
 import { fileURLToPath } from 'node:url';
 import { ApprovalRequiredError, PermissionDeniedError } from '@personal-ai-os/permissions';
 import {
@@ -28,6 +29,7 @@ export function registerSkillRoutes(
     executor?: SkillExecutor | undefined;
     validator?: ManifestValidator | undefined;
     skillsDir?: string | undefined;
+    toolRegistry?: ToolRegistry | undefined;
   },
 ): void {
   const { skillRepo, auth } = options;
@@ -78,6 +80,34 @@ export function registerSkillRoutes(
       return reply.code(200).send({ skills });
     },
   );
+  // Catalog exposes manifest policy fields without creating a parallel tool registry.
+  app.get('/v1/catalog', async (req: FastifyRequest, reply: FastifyReply) => {
+    await getUser(req);
+    const skills = await skillRepo.listSkills();
+    const tools = (options.toolRegistry?.listTools() ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      capability: tool.capability,
+      resourceScope: tool.resourceScope,
+      riskLevel: tool.riskLevel,
+      action: tool.action,
+      timeoutMs: tool.timeoutMs,
+      supportsCancellation: tool.supportsCancellation,
+      outputLimitBytes: tool.outputLimitBytes,
+      platform: 'backend',
+      approvalRequired: tool.riskLevel === 'HIGH' || tool.riskLevel === 'CRITICAL',
+    }));
+    return reply.code(200).send({
+      skills: skills.map((skill) => ({
+        ...skill,
+        risk: skill.manifest.metadata?.['risk'] ?? 'unknown',
+        capabilities: skill.manifest.toolRequirements,
+        approvalRequired: skill.manifest.permissions.length > 0,
+        platforms: skill.manifest.compatibility.platforms,
+      })),
+      tools,
+    });
+  });
 
   // 2. Get Skill Detail
   app.get(

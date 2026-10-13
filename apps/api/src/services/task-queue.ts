@@ -22,8 +22,8 @@ export interface TaskQueue {
 export class BullMqTaskQueue implements TaskQueue {
   private readonly queue: Queue;
 
-  constructor(redis: Redis) {
-    this.queue = new Queue(TASK_QUEUE_NAME, {
+  constructor(redis: Redis, options?: { queueName?: string | undefined }) {
+    this.queue = new Queue(options?.queueName ?? TASK_QUEUE_NAME, {
       connection: redis as never,
     });
   }

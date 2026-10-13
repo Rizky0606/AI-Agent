@@ -159,7 +159,7 @@ test('E2E Platform 2: Durable task creation with idempotency key deduplication a
     userId: 'user-e2e',
     projectId: 'proj-e2e',
     kind: 'generic.workflow',
-    payload: { action: 'process_dataset' },
+    payload: { action: 'process_dataset', isSimulation: true },
     idempotencyKey: 'idem-key-unique-123',
   });
   assert.equal(res1.isDuplicate, false);
@@ -169,7 +169,7 @@ test('E2E Platform 2: Durable task creation with idempotency key deduplication a
     userId: 'user-e2e',
     projectId: 'proj-e2e',
     kind: 'generic.workflow',
-    payload: { action: 'process_dataset' },
+    payload: { action: 'process_dataset', isSimulation: true },
     idempotencyKey: 'idem-key-unique-123',
   });
   assert.equal(res2.isDuplicate, true);

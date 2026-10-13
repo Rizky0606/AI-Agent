@@ -24,7 +24,7 @@ export type ModelResolutionResult =
     }
   | {
       ok: false;
-      error: 'VISION_NOT_VERIFIED' | 'NO_COMPATIBLE_MODEL';
+      error: 'VISION_NOT_VERIFIED' | 'NO_COMPATIBLE_MODEL' | 'MODEL_NOT_AVAILABLE';
       message: string;
     };
 
@@ -52,6 +52,9 @@ export class ModelRouter {
       }
     }
 
+    if (requirements.preferredModel && !activeModels.some((m) => m.model === requirements.preferredModel)) {
+      return { ok: false, error: 'MODEL_NOT_AVAILABLE', message: 'The selected model is not active.' };
+    }
     const compatible = activeModels.filter((m) => {
       if (requirements.requiresStreaming && !m.capabilities.includes('streaming')) return false;
       if (requirements.requiresToolCalling && !m.capabilities.includes('tool_calling'))

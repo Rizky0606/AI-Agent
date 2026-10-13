@@ -54,7 +54,19 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
         priority?: number;
         maxAttempts?: number;
       };
-
+      const requestedMode = body.payload.mode;
+      if (
+        requestedMode !== undefined &&
+        requestedMode !== 'auto' &&
+        requestedMode !== 'fast' &&
+        requestedMode !== 'coding' &&
+        requestedMode !== 'complex' &&
+        requestedMode !== 'research'
+      ) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_MODE', message: 'payload.mode must be auto, fast, coding, complex, or research', requestId: request.id },
+        });
+      }
       // Ensure project exists and belongs to user
       const project = await deps.projectRepo.getProject(user.id, body.projectId);
       if (!project) {

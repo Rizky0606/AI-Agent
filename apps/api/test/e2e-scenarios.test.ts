@@ -593,7 +593,8 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
   const project = await projectRepo.createProject(user.user.id, 'Project Workflow');
 
   const taskRepo = new InMemoryTaskRepo();
-  const taskQueue = new BullMqTaskQueue(redisPublisher);
+  const queueName = `e2e-scenario-2-${randomUUID()}`;
+  const taskQueue = new BullMqTaskQueue(redisPublisher, { queueName });
   const broadcaster = new RedisTaskEventBroadcaster({
     publisher: redisPublisher,
     subscriber: redisSubscriber,
@@ -615,6 +616,7 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
   // Start Worker with real CodingEvaluator
   const workerHandle = createAgentWorker({
     redisUrl: REDIS_URL,
+    queueName,
     taskRepo: taskRepo as never,
     broadcaster,
     executorOptions: {
@@ -709,7 +711,8 @@ test('Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; 
   const project = await projectRepo.createProject(user.user.id, 'Deployment Project');
 
   const taskRepo = new InMemoryTaskRepo();
-  const taskQueue = new BullMqTaskQueue(redisPublisher);
+  const queueName = `e2e-scenario-3-${randomUUID()}`;
+  const taskQueue = new BullMqTaskQueue(redisPublisher, { queueName });
   const broadcaster = new RedisTaskEventBroadcaster({
     publisher: redisPublisher,
     subscriber: redisSubscriber,
@@ -746,6 +749,7 @@ test('Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; 
   let activeApprovalId = '';
   const workerHandle = createAgentWorker({
     redisUrl: REDIS_URL,
+    queueName,
     taskRepo: taskRepo as never,
     broadcaster,
     executorOptions: {

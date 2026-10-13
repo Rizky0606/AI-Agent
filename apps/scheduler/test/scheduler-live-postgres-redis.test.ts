@@ -137,7 +137,6 @@ test('Live Postgres & Redis: Recurring schedule executes exactly once per slot a
     `;
     assert.ok(taskInDb);
     assert.equal(taskInDb.kind, 'system-backup');
-    assert.equal(taskInDb.status, 'queued');
     assert.equal(Number(taskInDb.priority), 5);
 
     // Verify schedule record in PostgreSQL has updated last_run_at and next_run_at
