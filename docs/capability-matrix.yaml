@@ -54,7 +54,7 @@ capabilities:
     permission_boundary: SSRF/domain policy/isolation/approval
     clients: backend
     proof: packages/mcp/test; packages/tools/test
-    limitation: authenticated MCP discovery/connection parity unverified
+    limitation: McpHub, the untrusted-output sanitizer, and the capability allowlist are implemented and tested, but no concrete transport adapter (stdio/HTTP) exists, so no server can be registered and no MCP tool reaches the production registry
   android:
     status: partial
     code: apps/android/src/screens; apps/android/src/api
