@@ -233,6 +233,7 @@ export const startWorkerProcess = async (): Promise<{
     if (isClosing) return;
     isClosing = true;
     await workerHandle.close();
+    await browserController?.close();
     await broadcaster.close(true);
     await sqlClient.end({ timeout: 5 });
   };
