@@ -21,6 +21,7 @@ import {
   ResearchEvaluator,
   type AcceptanceCriterion,
   type CodingEvidence,
+  type EvaluationResult,
   type ResearchClaim,
   type ResearchContradiction,
   type ResearchEvidence,
@@ -91,6 +92,7 @@ export interface TaskExecutorOptions {
   codingAgent?: CodingAgent | undefined;
   researchAgent?: ResearchAgent | undefined;
   modelGateway?: ModelGateway | undefined;
+  defaultModel?: string | undefined;
 }
 
 export class TaskExecutor {
@@ -110,6 +112,7 @@ export class TaskExecutor {
   private readonly codingAgent: CodingAgent;
   private readonly researchAgent: ResearchAgent;
   private readonly modelGateway?: ModelGateway | undefined;
+  private readonly defaultModel?: string | undefined;
 
   constructor(
     taskRepo: TaskRepository,
@@ -131,6 +134,7 @@ export class TaskExecutor {
     this.codingAgent = options?.codingAgent ?? new CodingAgent(undefined, undefined, this.guard);
     this.researchAgent = options?.researchAgent ?? new ResearchAgent();
     this.modelGateway = options?.modelGateway;
+    this.defaultModel = options?.defaultModel;
   }
 
   async execute(job: TaskJobData): Promise<void> {
@@ -185,9 +189,8 @@ export class TaskExecutor {
     const startStep = lastCheckpoint ? lastCheckpoint.stepIndex + 1 : 1;
     const currentCheckpointVersion = task.checkpoint?.version ?? 0;
 
-    // Check if this execution is explicit simulation / placeholder
+    // Synthetic execution is test-only and must be explicit.
     const isSimulation =
-      task.kind.startsWith('generic') ||
       task.payload?.isSimulation === true ||
       task.payload?.placeholder === true ||
       Boolean(task.payload?.simulateStep);
@@ -195,8 +198,13 @@ export class TaskExecutor {
     const prompt =
       (task.payload?.instructions as string) ??
       (task.payload?.prompt as string) ??
-      (task.payload?.query as string) ??
+      (task.payload?.goal as string) ??
       task.kind;
+    const requestedMode = task.payload?.mode;
+    const mode =
+      requestedMode === 'auto' || requestedMode === 'fast' || requestedMode === 'coding' || requestedMode === 'complex' || requestedMode === 'research'
+        ? requestedMode
+        : undefined;
     let selectedRuntimeId: string | undefined;
     try {
       // 1. Move to planning if in queued
@@ -207,6 +215,7 @@ export class TaskExecutor {
 
         const routeResult = await this.router.routeWithHealth(prompt, {
           userId: task.userId,
+          mode,
           isWindowsOnline:
             this.deviceManager?.hasOnlineDeviceForUser(task.userId, 'windows') ?? false,
           preferredRuntimeId: (task.payload?.runtime as string) ?? this.preferredRuntimeId,
@@ -295,6 +304,7 @@ export class TaskExecutor {
         isSimulation,
         isCodingTask,
         isResearchTask,
+        prompt,
         span,
       );
     } catch (err) {
@@ -600,6 +610,79 @@ export class TaskExecutor {
     }
   }
 
+  private async executeRegisteredTool(task: TaskRecord, toolName: string, approvalId: string | undefined, span: TelemetrySpan): Promise<void> {
+    const result = await this.registry!.executeTool({
+      toolName,
+      input: task.payload?.toolInput ?? {},
+      context: { actor: { id: task.userId, role: 'user' }, taskId: task.id, projectId: task.projectId, traceId: task.id },
+      approvalId,
+    });
+    const event = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', { tool: toolName, input: task.payload?.toolInput ?? {}, output: result.data, truncated: result.truncated });
+    this.broadcaster.publish(event);
+    const checkpoint = createVersionedCheckpoint({ version: (task.checkpoint?.version ?? 0) + 1, stepIndex: 2, totalSteps: 2, lastExecutedAction: `tool_call:${toolName}`, actionType: 'external_tool', verified: true, actionState: { output: result.data } });
+    await this.taskRepo.updateTaskProgress(task.userId, task.id, 100, checkpoint);
+    await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed');
+    const completeEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { result: result.data, tool: toolName });
+    this.broadcaster.publish(completeEvent);
+    defaultTracer.endSpan(span, { status: 'ok' });
+  }
+
+
+  /**
+   * Real generic path: registered tool when named, otherwise a bounded model call through the
+   * configured ModelGateway. Fails closed — never fabricates evidence.
+   */
+  private async executeGenericOrchestration(
+    task: TaskRecord,
+    prompt: string,
+  ): Promise<Record<string, unknown>> {
+    if (typeof task.payload?.toolName === 'string') {
+      if (!this.registry) throw new Error('Task names a registered tool but no ToolRegistry is configured.');
+      const res = await this.registry.executeTool({
+        toolName: task.payload.toolName,
+        input: task.payload.toolInput ?? {},
+        context: { actor: { id: task.userId, role: 'user' }, taskId: task.id, projectId: task.projectId },
+      });
+      return { tool: task.payload.toolName, content: JSON.stringify(res.data), toolOutput: res.data };
+    }
+
+    if (!this.modelGateway) {
+      throw new Error(
+        'Generic task requires a ModelGateway (set NINEROUTER_API_KEY or DEFAULT_CHAT_MODEL); refusing to fabricate evidence.',
+      );
+    }
+    const model = (task.payload?.model as string) ?? this.defaultModel;
+    if (!model) {
+      throw new Error('Generic task requires payload.model or DEFAULT_CHAT_MODEL to select a verified model.');
+    }
+
+    const analysis = this.analyzer.analyze(prompt);
+    const plan = this.planner.createPlan(analysis, prompt);
+    const response = await this.modelGateway.chat({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Anda mengeksekusi satu langkah task otonom untuk pengguna berbahasa Indonesia. ' +
+            'Jawab langsung dalam Bahasa Indonesia dengan hasil kerja yang konkret dan dapat diverifikasi. ' +
+            'Rujuk kembali istilah kunci dari permintaan pengguna. Jangan mengklaim hal yang tidak Anda kerjakan.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0,
+    });
+
+    return {
+      content: response.content,
+      model: response.model,
+      intent: analysis.intent,
+      planId: plan.planId,
+      plannedSteps: plan.steps.map((s) => s.name),
+      usage: response.usage ?? null,
+    };
+  }
+
   // =========================================================================
   // STANDARD / TOOL / EVALUATOR-GATED TRACK
   // =========================================================================
@@ -610,9 +693,48 @@ export class TaskExecutor {
     isSimulation: boolean,
     isCodingTask: boolean,
     isResearchTask: boolean,
-    span: ReturnType<typeof defaultTracer.startSpan>,
+    prompt: string,
+    span: TelemetrySpan,
   ): Promise<void> {
     // Step 1: Plan Analysis
+    const registeredToolApprovalId =
+      (task.checkpoint?.actionState?.approvalId as string) ?? (task.payload?.approvalId as string) ?? undefined;
+    // Resume after an approved step-2 action: replay the guarded action with the approval id so the
+    // approved capability executes exactly once instead of being skipped on resume.
+    const replayApprovedStepTwo =
+      task.checkpoint?.stepIndex === 2 &&
+      task.checkpoint?.lastExecutedAction === 'waiting_approval' &&
+      task.checkpoint?.actionState?.approved === true &&
+      typeof task.checkpoint?.actionState?.approvalId === 'string';
+    if (!isSimulation && this.registry && typeof task.payload?.toolName === 'string' && (startStep <= 2 || registeredToolApprovalId)) {
+      try {
+        await this.executeRegisteredTool(task, task.payload.toolName, registeredToolApprovalId, span);
+      } catch (toolErr) {
+        if (!(toolErr instanceof ApprovalRequiredError)) throw toolErr;
+        const created = this.approvalCreator ? await this.approvalCreator({
+          userId: task.userId, taskId: task.id, projectId: task.projectId,
+          action: toolErr.requiredApproval.action, resource: toolErr.requiredApproval.resource,
+          scope: toolErr.requiredApproval.scope, riskLevel: toolErr.requiredApproval.riskLevel,
+          consequence: toolErr.requiredApproval.consequence, fingerprint: toolErr.requiredApproval.fingerprint,
+          expiresInSeconds: 3600,
+        }) : { id: 'appr-pending' };
+        currentCheckpointVersion++;
+        const checkpoint = createVersionedCheckpoint({
+          version: currentCheckpointVersion, stepIndex: 2, totalSteps: 4,
+          lastExecutedAction: 'waiting_approval', actionType: 'approval',
+          actionState: { approvalId: created.id, action: toolErr.requiredApproval.action }, verified: true,
+        });
+        await this.taskRepo.updateTaskProgress(task.userId, task.id, 50, checkpoint);
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'waiting_approval');
+        const approvalEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.waiting_approval', {
+          approvalId: created.id, action: toolErr.requiredApproval.action,
+          riskLevel: toolErr.requiredApproval.riskLevel, consequence: toolErr.requiredApproval.consequence,
+          fingerprint: toolErr.requiredApproval.fingerprint,
+        });
+        this.broadcaster.publish(approvalEvent);
+      }
+      return;
+    }
     if (startStep <= 1) {
       if (await this.isHalted(task.userId, task.id)) return;
 
@@ -640,18 +762,28 @@ export class TaskExecutor {
       );
       this.broadcaster.publish(progEvent1);
     }
-
-    // Step 2: Tool Call Execution (Secured via Permission Engine)
-    if (startStep <= 2) {
+    let stepTwoOutput: unknown;
+    let stepTwoAction = 'none';
+    let completionContent: string | undefined;
+    if (startStep <= 2 || replayApprovedStepTwo) {
       if (await this.isHalted(task.userId, task.id)) return;
 
-      const actionName = (task.payload?.action as string) ?? 'tool:search_knowledge';
-      const resourceName = (task.payload?.resource as string) ?? 'knowledge://personal-ai-os';
+      const isGenericOrchestration =
+        !isSimulation && task.payload?.toolName === undefined && task.kind.startsWith('generic');
+      const actionName =
+        (task.payload?.action as string) ??
+        (isGenericOrchestration ? 'model:chat' : 'tool:search_knowledge');
+      const resourceName =
+        (task.payload?.resource as string) ??
+        (isGenericOrchestration
+          ? `model://${(task.payload?.model as string) ?? this.defaultModel ?? 'unconfigured'}`
+          : 'knowledge://personal-ai-os');
       const scopeName = (task.payload?.scope as string) ?? 'workspace';
       const approvedApprovalId =
         (task.checkpoint?.actionState?.approvalId as string) ??
         (task.payload?.approvalId as string) ??
         undefined;
+      stepTwoAction = actionName;
 
       const isExternal = actionName.startsWith('tool:') || actionName.startsWith('external:');
       const verification = verifyStepBeforeExternalAction(task.checkpoint, {
@@ -672,109 +804,98 @@ export class TaskExecutor {
         this.broadcaster.publish(verifyNotice);
       }
 
-      if (this.guard) {
-        try {
-          await this.guard.executeProtected(
+      const executeStepTwo = async (): Promise<unknown> => {
+        if (isSimulation) return { matchCount: 3, summary: 'Found relevant specifications' };
+        if (task.kind.startsWith('generic')) return this.executeGenericOrchestration(task, prompt);
+        return { result: 'controlled task step completed' };
+      };
+
+      try {
+        stepTwoOutput = this.guard
+          ? await this.guard.executeProtected(
+              {
+                actor: { id: task.userId, isAutomated: true },
+                action: actionName,
+                resource: resourceName,
+                scope: scopeName,
+                context: task.payload,
+              },
+              executeStepTwo,
+              { approvalId: approvedApprovalId },
+            )
+          : await executeStepTwo();
+      } catch (guardErr) {
+        if (guardErr instanceof ApprovalRequiredError) {
+          let approvalId = 'appr-pending';
+          if (this.approvalCreator) {
+            const createdApproval = await this.approvalCreator({
+              userId: task.userId,
+              taskId: task.id,
+              projectId: task.projectId,
+              action: guardErr.requiredApproval.action,
+              resource: guardErr.requiredApproval.resource,
+              scope: guardErr.requiredApproval.scope,
+              riskLevel: guardErr.requiredApproval.riskLevel,
+              consequence: guardErr.requiredApproval.consequence,
+              fingerprint: guardErr.requiredApproval.fingerprint,
+              expiresInSeconds: 3600,
+            });
+            approvalId = createdApproval.id;
+          }
+
+          currentCheckpointVersion++;
+          const cpWait = createVersionedCheckpoint({
+            version: currentCheckpointVersion,
+            stepIndex: 2,
+            totalSteps: 4,
+            lastExecutedAction: 'waiting_approval',
+            actionType: 'approval',
+            actionState: { approvalId, action: guardErr.requiredApproval.action },
+            verified: true,
+          });
+          await this.taskRepo.updateTaskProgress(task.userId, task.id, 50, cpWait);
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'waiting_approval');
+
+          const approvalEvent = await this.taskRepo.createTaskEvent(
+            task.userId,
+            task.id,
+            'task.waiting_approval',
             {
-              actor: { id: task.userId, isAutomated: true },
-              action: actionName,
-              resource: resourceName,
-              scope: scopeName,
-              context: task.payload,
+              approvalId,
+              action: guardErr.requiredApproval.action,
+              riskLevel: guardErr.requiredApproval.riskLevel,
+              consequence: guardErr.requiredApproval.consequence,
+              fingerprint: guardErr.requiredApproval.fingerprint,
+              ...(isSimulation ? { placeholder: true, note: PLACEHOLDER_WORKER_LABEL } : {}),
             },
-            async () => {
-              return { matchCount: 3, summary: 'Found relevant specifications' };
-            },
-            { approvalId: approvedApprovalId },
           );
-        } catch (guardErr) {
-          if (guardErr instanceof ApprovalRequiredError) {
-            let approvalId = 'appr-pending';
-            if (this.approvalCreator) {
-              const createdApproval = await this.approvalCreator({
-                userId: task.userId,
-                taskId: task.id,
-                projectId: task.projectId,
-                action: guardErr.requiredApproval.action,
-                resource: guardErr.requiredApproval.resource,
-                scope: guardErr.requiredApproval.scope,
-                riskLevel: guardErr.requiredApproval.riskLevel,
-                consequence: guardErr.requiredApproval.consequence,
-                fingerprint: guardErr.requiredApproval.fingerprint,
-                expiresInSeconds: 3600,
-              });
-              approvalId = createdApproval.id;
-            }
-
-            currentCheckpointVersion++;
-            const cpWait = createVersionedCheckpoint({
-              version: currentCheckpointVersion,
-              stepIndex: 2,
-              totalSteps: 4,
-              lastExecutedAction: 'waiting_approval',
-              actionType: 'approval',
-              actionState: { approvalId, action: guardErr.requiredApproval.action },
-              verified: true,
-            });
-            await this.taskRepo.updateTaskProgress(task.userId, task.id, 50, cpWait);
-            await this.taskRepo.updateTaskStatus(task.userId, task.id, 'waiting_approval');
-
-            const approvalEvent = await this.taskRepo.createTaskEvent(
-              task.userId,
-              task.id,
-              'task.waiting_approval',
-              {
-                approvalId,
-                action: guardErr.requiredApproval.action,
-                riskLevel: guardErr.requiredApproval.riskLevel,
-                consequence: guardErr.requiredApproval.consequence,
-                fingerprint: guardErr.requiredApproval.fingerprint,
-                ...(isSimulation ? { placeholder: true, note: PLACEHOLDER_WORKER_LABEL } : {}),
-              },
-            );
-            this.broadcaster.publish(approvalEvent);
-            return; // Halt until approved
-          }
-
-          if (guardErr instanceof PermissionDeniedError) {
-            await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
-              error: guardErr.message,
-            });
-            const failEvent = await this.taskRepo.createTaskEvent(
-              task.userId,
-              task.id,
-              'task.failed',
-              {
-                error: guardErr.message,
-                riskLevel: guardErr.riskLevel,
-                retryable: false,
-              },
-            );
-            this.broadcaster.publish(failEvent);
-            return;
-          }
-
-          throw guardErr;
+          this.broadcaster.publish(approvalEvent);
+          return; // Halt until approved
         }
+
+        if (guardErr instanceof PermissionDeniedError) {
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+            error: guardErr.message,
+          });
+          const failEvent = await this.taskRepo.createTaskEvent(
+            task.userId,
+            task.id,
+            'task.failed',
+            {
+              error: guardErr.message,
+              riskLevel: guardErr.riskLevel,
+              retryable: false,
+            },
+          );
+          this.broadcaster.publish(failEvent);
+          return;
+        }
+
+        throw guardErr;
       }
 
-      let toolOutput: unknown = { matchCount: 3, summary: 'Found relevant specifications' };
-      let toolIsPlaceholder = isSimulation;
-
-      if (this.registry && typeof task.payload?.toolName === 'string') {
-        const res = await this.registry.executeTool({
-          toolName: task.payload.toolName,
-          input: task.payload.toolInput ?? {},
-          context: {
-            actor: { id: task.userId, role: 'user' },
-            taskId: task.id,
-            projectId: task.projectId,
-          },
-          approvalId: approvedApprovalId,
-        });
-        toolOutput = res.data;
-        toolIsPlaceholder = false;
-      }
+      const toolOutput = stepTwoOutput;
+      const toolIsPlaceholder = isSimulation;
 
       const toolEvent = await this.taskRepo.createTaskEvent(
         task.userId,
@@ -782,7 +903,7 @@ export class TaskExecutor {
         'task.tool_call',
         {
           tool: (task.payload?.toolName as string) ?? actionName,
-          input: task.payload?.toolInput ?? { query: 'runtime architecture specs' },
+          input: task.payload?.toolInput ?? { prompt },
           output: toolOutput,
           ...(toolIsPlaceholder ? { placeholder: true, note: PLACEHOLDER_WORKER_LABEL } : {}),
         },
@@ -848,6 +969,7 @@ export class TaskExecutor {
     }
 
     // Step 4: Finalize Artifacts & Complete (STRICT EVALUATOR GATING)
+    let completionEvaluation: EvaluationResult | undefined;
     if (startStep <= 4) {
       if (await this.isHalted(task.userId, task.id)) return;
 
@@ -924,18 +1046,40 @@ export class TaskExecutor {
         ];
 
         const isSelfClaimOnly = task.payload?.selfClaimOnly === true;
+        let executedOutput: Record<string, unknown> | undefined = isSimulation
+          ? { result: 'ok', matchCount: 3 }
+          : ((stepTwoOutput as Record<string, unknown> | undefined) ??
+            (task.checkpoint?.actionState?.toolResult as Record<string, unknown> | undefined) ??
+            (task.checkpoint
+              ? {
+                  resumedFromCheckpoint: true,
+                  lastExecutedAction: task.checkpoint.lastExecutedAction,
+                  verifiedStepIndex: task.checkpoint.stepIndex,
+                  checkpointVersion: task.checkpoint.version,
+                }
+              : undefined));
+        if (!isSimulation && !executedOutput && task.kind.startsWith('generic')) {
+          executedOutput = await this.executeGenericOrchestration(task, prompt);
+        }
+        const executedAction =
+          stepTwoAction !== 'none' ? stepTwoAction : (task.checkpoint?.lastExecutedAction ?? 'none');
+        const evidenceContent =
+          typeof executedOutput?.['content'] === 'string'
+            ? (executedOutput['content'] as string)
+            : JSON.stringify(executedOutput ?? null);
+        completionContent = evidenceContent;
         const evalResult = genericEvaluator.evaluate(criteria, {
-          artifacts: isSelfClaimOnly
-            ? []
-            : [
-                {
-                  title: 'Task Output',
-                  content: 'Task output berhasil diselesaikan dan diverifikasi.',
-                },
-              ],
-          outputs: isSelfClaimOnly ? {} : { result: 'ok', matchCount: 3 },
-          logs: isSelfClaimOnly ? [] : ['Task execution finished successfully'],
+          artifacts:
+            isSelfClaimOnly || !executedOutput
+              ? []
+              : [{ title: `Task Output (${executedAction})`, content: evidenceContent }],
+          outputs: isSelfClaimOnly || !executedOutput ? {} : executedOutput,
+          logs:
+            isSelfClaimOnly || !executedOutput
+              ? []
+              : [`Executed ${executedAction}`, 'Task execution finished successfully'],
         });
+        completionEvaluation = evalResult;
 
         if (!evalResult.passed) {
           const reason =
@@ -976,7 +1120,8 @@ export class TaskExecutor {
           id: 'artifact-summary',
           type: 'summary',
           title: 'Task Output',
-          content: 'Task berhasil diselesaikan dan diverifikasi oleh Evaluator.',
+          content:
+            completionContent ?? 'Task berhasil diselesaikan dan diverifikasi oleh Evaluator.',
           ...(isSimulation ? { placeholder: true, note: PLACEHOLDER_WORKER_LABEL } : {}),
         },
       ];
@@ -992,6 +1137,7 @@ export class TaskExecutor {
         {
           result: 'Task completed successfully and verified by Evaluator',
           artifacts,
+          ...(completionEvaluation ? { evaluationResult: completionEvaluation } : {}),
           ...(isSimulation ? { placeholder: true, note: PLACEHOLDER_WORKER_LABEL } : {}),
         },
       );

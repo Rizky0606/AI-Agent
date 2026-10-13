@@ -12,7 +12,7 @@ import {
 } from './task-executor.ts';
 import type { TaskRepository } from '@personal-ai-os/shared';
 import { createDatabase, SqlApprovalRepository, SqlTaskRepository } from '@personal-ai-os/api/db';
-import { RedisTaskEventBroadcaster } from '@personal-ai-os/api/services';
+import { RedisTaskEventBroadcaster, TASK_QUEUE_NAME } from '@personal-ai-os/api/services';
 import {
   MockModelGateway,
   type ModelGateway,
@@ -20,12 +20,14 @@ import {
 } from '@personal-ai-os/model-gateway';
 import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
 import { RemoteRuntimeAdapter, RuntimeManager } from '@personal-ai-os/agent-core';
+import { createDefaultToolRegistry } from '@personal-ai-os/tools';
 
 export * from './task-executor.ts';
 
 export interface WorkerConfig {
   redisUrl?: string | undefined;
   concurrency?: number | undefined;
+  queueName?: string | undefined;
   taskRepo: TaskRepository;
   broadcaster: EventPublisher;
   executorOptions?: TaskExecutorOptions | undefined;
@@ -50,7 +52,7 @@ export const createAgentWorker = (
 
   const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
   const worker = new Worker(
-    'personal-ai-os-tasks',
+    config.queueName ?? TASK_QUEUE_NAME,
     async (job) => {
       await executor.execute(job.data as TaskJobData);
     },
@@ -72,15 +74,14 @@ export const createAgentWorker = (
 
 export const resolveDatabaseUrl = (): string | undefined => {
   const url = process.env.DATABASE_URL;
-  if (!url) {
-    const user = process.env.POSTGRES_USER ?? 'personal_ai_os';
-    const password = process.env.POSTGRES_PASSWORD ?? '';
-    const db = process.env.POSTGRES_DB ?? 'personal_ai_os';
-    const host = process.env.POSTGRES_HOST ?? 'postgres';
-    const port = process.env.POSTGRES_PORT ?? '5432';
-    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
-  }
-  return url;
+  if (url) return url;
+  const password = process.env.POSTGRES_PASSWORD;
+  if (!password) return undefined;
+  const user = process.env.POSTGRES_USER ?? 'personal_ai_os';
+  const db = process.env.POSTGRES_DB ?? 'personal_ai_os';
+  const host = process.env.POSTGRES_HOST ?? 'postgres';
+  const port = process.env.POSTGRES_PORT ?? '5432';
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
 };
 
 export const startWorkerProcess = async (): Promise<{
@@ -165,6 +166,7 @@ export const startWorkerProcess = async (): Promise<{
   }
 
   const workerConcurrency = Number(process.env.WORKER_CONCURRENCY ?? 2);
+  const guard = new SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo });
   const workerHandle = createAgentWorker({
     redisUrl,
     concurrency: workerConcurrency,
@@ -173,11 +175,11 @@ export const startWorkerProcess = async (): Promise<{
     executorOptions: {
       approvalCreator,
       modelGateway,
+      defaultModel: process.env.DEFAULT_CHAT_MODEL,
       runtimeManager,
       preferredRuntimeId: runtimePreferred,
-      guard: new SecuredCapabilityGuard(new PermissionEngine(), {
-        approvalValidator: approvalRepo,
-      }),
+      guard,
+      registry: createDefaultToolRegistry(guard),
     },
   });
 

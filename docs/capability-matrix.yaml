@@ -1,0 +1,91 @@
+version: 1
+updated: 2026-10-13
+capabilities:
+  control_plane:
+    status: implemented
+    code: apps/api/src/index.ts; apps/api/src/app.ts
+    permission_boundary: authenticated Fastify routes; repository ownership checks
+    clients: android; windows
+    proof: pnpm --filter @personal-ai-os/api test
+  durable_tasks:
+    status: implemented
+    code: apps/api/src/routes/tasks.ts; apps/api/src/db/task-repository.ts; apps/api/src/services/task-queue.ts
+    permission_boundary: task ownership; approval repository
+    clients: android task timeline
+    proof: apps/api/test/recovery-drill.test.ts; apps/api/test/e2e-scenarios.test.ts
+    limitation: live suites share one Redis instance; tests isolate via unique queue names
+  worker_process:
+    status: implemented
+    code: apps/agent-worker/src/index.ts
+    permission_boundary: SecuredCapabilityGuard; approval repository
+    clients: none
+    proof: apps/agent-worker/test/worker.test.ts; apps/agent-worker/test/live-worker-execution.test.ts
+    limitation: health file is touched on a timer rather than probing database/Redis
+  scheduler:
+    status: partial
+    code: apps/scheduler/src/index.ts; apps/scheduler/src/scheduler-engine.ts
+    permission_boundary: PermissionEngine; schedule ownership
+    clients: android notifications
+    proof: apps/scheduler/test/scheduler.test.ts
+    limitation: live PostgreSQL/Redis process proof environment-dependent
+  universal_agent_execution:
+    status: implemented
+    code: apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts
+    permission_boundary: executor guard; runtime manager; model:chat guarded by PermissionEngine
+    clients: android; windows
+    proof: apps/agent-worker/test/live-worker-execution.test.ts; apps/agent-worker/test/worker.test.ts
+    limitation: generic tasks execute one bounded model step per run; planner output is recorded as evidence, not dispatched step-by-step
+  model_gateway:
+    status: implemented
+    code: packages/model-gateway; apps/api/src/routes/models.ts
+    permission_boundary: server-side provider credentials
+    clients: android model settings; windows model settings
+    proof: apps/api/test/gateway-config.test.ts
+  tools:
+    status: implemented
+    code: packages/tools/src/registry/tool-registry.ts; packages/tools/src/registry/create-default-tool-registry.ts; packages/tools/src/types.ts
+    permission_boundary: PermissionEngine; capability guard; bounded outputs
+    clients: backend; /v1/catalog
+    proof: packages/tools/test; apps/agent-worker/test/live-worker-execution.test.ts
+    limitation: production registry intentionally registers only web_fetch until workspace/browser/artifact dependencies are wired
+  browser_mcp:
+    status: partial
+    code: packages/mcp; packages/tools
+    permission_boundary: SSRF/domain policy/isolation/approval
+    clients: backend
+    proof: packages/mcp/test; packages/tools/test
+    limitation: authenticated MCP discovery/connection parity unverified
+  android:
+    status: partial
+    code: apps/android/src/screens; apps/android/src/api
+    permission_boundary: authenticated API/WebSocket
+    clients: android
+    proof: pnpm --filter @personal-ai-os/android test
+    limitation: attachment upload unavailable; task creation surface is coding-runtime-specific
+  windows:
+    status: partial
+    code: apps/windows/src/ui; apps/windows/src/connection; apps/windows/src/security
+    permission_boundary: authenticated device WSS; local capability registry
+    clients: windows
+    proof: pnpm --filter @personal-ai-os/windows test
+    limitation: no server task replay/approval/artifact/catalog parity
+  memory_artifacts_observability:
+    status: partial
+    code: packages/memory; apps/api/src/db; apps/api/src/routes
+    permission_boundary: project/user ownership; audit redaction; artifact quotas
+    clients: android artifacts
+    proof: pnpm test
+    limitation: deployment backup/restore and physical client proofs environment-dependent
+  deployment:
+    status: unverified
+    code: docker-compose.yml; infrastructure/docker; docs/runbooks/deployment.md
+    permission_boundary: private internal network; server secrets
+    clients: VPS
+    proof: docker compose config
+    limitation: live VPS, credentials, and durable process smoke required
+simulation:
+  status: test_or_explicit_placeholder_only
+  marker: '[PLACEHOLDER_GENERIC_WORKER]'
+  code: apps/agent-worker/src/task-executor.ts:189
+  production_claim: forbidden until real generic orchestration exists
+  proof: apps/agent-worker/test/worker.test.ts; apps/agent-worker/test/live-worker-execution.test.ts

@@ -7,8 +7,9 @@ import {
 } from '@personal-ai-os/model-gateway';
 import { ManifestValidator, SkillLoader } from '@personal-ai-os/agent-core';
 import { InactiveEmbeddingProvider } from '@personal-ai-os/memory';
-import { ArtifactManager, DiskArtifactStorage } from '@personal-ai-os/tools';
+import { ArtifactManager, DiskArtifactStorage, createDefaultToolRegistry } from '@personal-ai-os/tools';
 import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
+import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
 
 import { buildApp } from './app.ts';
 import { createAuthService } from './auth/service.ts';
@@ -85,6 +86,7 @@ const broadcaster = new RedisTaskEventBroadcaster({
   subscriber: redisSubscriber,
 });
 const approvalRepository = new SqlApprovalRepository(db);
+const toolRegistry = createDefaultToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
 const auditRepository = new SqlAuditRepository(db);
 
 // Model Gateway Setup with explicit security checks
@@ -207,8 +209,9 @@ const eventEngine = new EventEngine();
 const notificationEngine = new NotificationEngine();
 
 // Assemble and build Fastify application with all modules wired
+const auth = createAuthService(new SqlAuthRepository(db), jwtSecret);
 const app = await buildApp({
-  auth: createAuthService(new SqlAuthRepository(db), jwtSecret),
+  auth,
   health: {
     database: async () => {
       await sql`select 1`;
@@ -223,6 +226,14 @@ const app = await buildApp({
   chat: {
     chatRepo: chatRepository,
     router: modelRouter,
+    modelConfigs: modelConfigRepository,
+    gateway,
+  },
+  models: {
+    auth,
+    modelConfigs: modelConfigRepository,
+    gateway,
+    providerBaseUrl: process.env.NINEROUTER_BASE_URL ?? 'https://9router.ojixx.my.id/v1',
   },
   project: {
     projectRepo: projectRepository,
@@ -250,6 +261,7 @@ const app = await buildApp({
   skills: {
     skillRepo: skillRepository,
     skillsDir,
+    toolRegistry,
   },
   schedules: {
     schedulerEngine,

@@ -1,14 +1,17 @@
+import type { ToolRegistry } from '@personal-ai-os/tools';
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import { AuthError, type AuthService, type AuthUser } from './auth/service.ts';
 import type { ChatRepository } from './db/chat-repository.ts';
+import type { ModelConfigRepository } from './db/model-config-repository.ts';
 import type { ProjectRepository } from './db/project-repository.ts';
 import type { TaskRepository } from './db/task-repository.ts';
+import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import type { TaskEventBroadcaster } from './services/event-broadcaster.ts';
-import type { ModelRouter } from './services/model-router.ts';
 import type { TaskQueue } from './services/task-queue.ts';
+import type { ModelRouter } from './services/model-router.ts';
 import { defaultTracer, IllegalTaskStateTransitionError } from '@personal-ai-os/shared';
 import { registerChatRoutes } from './routes/chat.ts';
 import { registerProjectRoutes } from './routes/projects.ts';
@@ -27,7 +30,7 @@ import type { SkillRepository } from './db/skill-repository.ts';
 import { registerSkillRoutes } from './routes/skills.ts';
 import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
 import { registerSchedulesRoutes } from './routes/schedules.ts';
-
+import { registerModelRoutes } from './routes/models.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
@@ -52,6 +55,8 @@ export type AppDependencies = {
     | {
         chatRepo: ChatRepository;
         router: ModelRouter;
+        modelConfigs: ModelConfigRepository;
+        gateway: ModelGateway;
       }
     | undefined;
   project?:
@@ -87,12 +92,11 @@ export type AppDependencies = {
         artifactManager: ArtifactManager;
       }
     | undefined;
-  skills?:
-    | {
-        skillRepo: SkillRepository;
-        skillsDir?: string | undefined;
-      }
-    | undefined;
+  skills?: {
+    skillRepo: SkillRepository;
+    skillsDir?: string | undefined;
+    toolRegistry?: ToolRegistry | undefined;
+  } | undefined;
   schedules?:
     | {
         schedulerEngine?: SchedulerEngine | undefined;
@@ -100,6 +104,12 @@ export type AppDependencies = {
         notificationEngine?: NotificationEngine | undefined;
       }
     | undefined;
+  models?: {
+    auth: AuthService;
+    modelConfigs: ModelConfigRepository;
+    gateway: ModelGateway;
+    providerBaseUrl: string;
+  } | undefined;
 };
 
 const requestId = (request: { headers: Record<string, string | string[] | undefined> }): string => {
@@ -342,12 +352,17 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       updateDeviceLastSeen: dependencies.updateDeviceLastSeen,
     });
   }
+  if (dependencies.models) {
+    registerModelRoutes(app, { ...dependencies.models, auth: dependencies.auth });
+  }
 
   if (dependencies.chat) {
     registerChatRoutes(app, {
       auth: dependencies.auth,
       chatRepo: dependencies.chat.chatRepo,
       router: dependencies.chat.router,
+      modelConfigs: dependencies.chat.modelConfigs,
+      gateway: dependencies.chat.gateway,
     });
   }
 
@@ -404,6 +419,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       skillRepo: dependencies.skills.skillRepo,
       auth: dependencies.auth,
       skillsDir: dependencies.skills.skillsDir,
+      toolRegistry: dependencies.skills.toolRegistry,
     });
   }
 

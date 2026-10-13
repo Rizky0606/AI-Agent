@@ -134,7 +134,7 @@ test('Agent Worker executes generic task with explicit placeholder labels, check
     userId: 'user-1',
     projectId: 'proj-1',
     kind: 'generic_task',
-    payload: { goal: 'Execute sample OS task' },
+    payload: { goal: 'Execute sample OS task', isSimulation: true },
   });
 
   await executor.execute({
@@ -543,6 +543,7 @@ test('Task resume from versioned checkpoint verifies last step before executing 
     kind: 'generic_task',
     payload: {
       action: 'tool:call_external_service',
+      isSimulation: true,
     },
   });
 

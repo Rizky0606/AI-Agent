@@ -20,6 +20,8 @@ import {
   InMemoryTaskEventBroadcaster,
   RedisTaskEventBroadcaster,
 } from '@personal-ai-os/api/services';
+import { ToolRegistry, type ToolDefinition } from '@personal-ai-os/tools';
+import { MockModelGateway } from '@personal-ai-os/model-gateway';
 
 // In-memory test repository with event replay support
 class TestTaskRepo implements TaskRepository {
@@ -338,6 +340,81 @@ test('Worker restart mid-task resumes from checkpoint and does not duplicate sid
   assert.equal(step1SideEffectCount, 1, 'Step 1 side effect must NOT be duplicated upon restart');
 });
 
+test('Worker executes explicit toolName through ToolRegistry and persists result', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const registry = new ToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
+  const tool: ToolDefinition<{ value: string }, { echoed: string }> = {
+    name: 'test_echo', description: 'test', capability: 'tool:test', resourceScope: 'workspace',
+    riskLevel: 'LOW', action: 'tool:read', timeoutMs: 1000, supportsCancellation: true, outputLimitBytes: 4096,
+    inputValidator: (input) => {
+      if (typeof input !== 'object' || input === null || !('value' in input) || typeof input.value !== 'string') {
+        return { valid: false, error: 'value required' };
+      }
+      return { valid: true, data: { value: input.value } };
+    },
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async (input) => ({ echoed: input.value }),
+  };
+  registry.registerTool(tool);
+  const { task } = await repo.createTask({ userId: 'user-tool', projectId: 'proj-tool', kind: 'generic_task', payload: { toolName: 'test_echo', toolInput: { value: 'ok' } } });
+  const executor = new TaskExecutor(repo, broadcaster, { registry });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+  const completed = await repo.getTask(task.userId, task.id);
+  assert.equal(completed?.status, 'completed');
+  assert.deepEqual(repo.events.find((event) => event.eventType === 'task.tool_call')?.payload.output, { echoed: 'ok' });
+});
+
+test('Registered tool waits for approval then resumes through validator exactly once', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  let approvalValid = false;
+  let executionCount = 0;
+  const guard = new SecuredCapabilityGuard(new PermissionEngine(), {
+    approvalValidator: {
+      async validateAndConsume(id) {
+        if (id === 'approved-tool-call' && approvalValid) {
+          approvalValid = false;
+          return { valid: true };
+        }
+        return { valid: false, reason: 'approval invalid or consumed' };
+      },
+    },
+  });
+  const registry = new ToolRegistry(guard);
+  const tool: ToolDefinition<{ value: string }, string> = {
+    name: 'approval_test_tool', description: 'approval test', capability: 'test:push', resourceScope: 'global',
+    riskLevel: 'HIGH', action: 'git:push', timeoutMs: 1000, supportsCancellation: true, outputLimitBytes: 1024,
+    inputValidator: (input) => typeof input === 'object' && input !== null && 'value' in input && typeof input.value === 'string'
+      ? { valid: true, data: { value: input.value } } : { valid: false, error: 'value required' },
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async (input) => { executionCount++; return input.value; },
+  };
+  registry.registerTool(tool);
+  const { task } = await repo.createTask({ userId: 'user-tool-approval', projectId: 'proj-tool-approval', kind: 'generic_task', payload: { toolName: tool.name, toolInput: { value: 'approved' } } });
+  const executor = new TaskExecutor(repo, broadcaster, {
+    registry,
+    approvalCreator: async () => ({ id: 'approved-tool-call' }),
+  });
+  const job = { taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 };
+  await executor.execute(job);
+  const waiting = await repo.getTask(task.userId, task.id);
+  assert.equal(waiting?.status, 'waiting_approval');
+  assert.equal(waiting?.checkpoint?.actionState?.approvalId, 'approved-tool-call');
+  assert.equal(executionCount, 0);
+
+  approvalValid = true;
+  const checkpoint = createVersionedCheckpoint({
+    version: (waiting?.checkpoint?.version ?? 0) + 1, stepIndex: 2, totalSteps: 4,
+    lastExecutedAction: 'waiting_approval', actionType: 'approval',
+    actionState: { approvalId: 'approved-tool-call', approved: true }, verified: true,
+  });
+  await repo.updateTaskStatus(task.userId, task.id, 'running', { checkpoint });
+  await executor.execute({ ...job, attempt: 1 });
+  assert.equal((await repo.getTask(task.userId, task.id))?.status, 'completed');
+  assert.equal(executionCount, 1);
+});
+
 // ============================================================================
 // 4. Approval halts HIGH/CRITICAL action and resumes same task to completion
 // ============================================================================
@@ -515,4 +592,128 @@ test('Real research task executes with ResearchAgent & ResearchEvaluator without
     assert.equal(evt.payload?.placeholder, undefined);
     assert.notEqual(evt.payload?.note, PLACEHOLDER_WORKER_LABEL);
   }
+});
+
+// ============================================================================
+// 6. Generic natural-language orchestration through the real ModelGateway
+// ============================================================================
+test('Generic natural-language task executes through ModelGateway; evaluator sees real output', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const gateway = new MockModelGateway({ chatResponse: 'Analisis data penjualan: margin naik 12%.' });
+  const executor = new TaskExecutor(repo, broadcaster, {
+    modelGateway: gateway,
+    defaultModel: 'test/verified-model',
+  });
+
+  const { task } = await repo.createTask({
+    userId: 'user-generic',
+    projectId: 'proj-generic',
+    kind: 'generic_task',
+    payload: {
+      prompt: 'Analisis data penjualan kuartal ini',
+      acceptanceCriteria: [
+        {
+          id: 'analisis',
+          description: 'analisis data penjualan',
+          category: 'generic',
+          required: true,
+        },
+      ],
+    },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 3,
+  });
+
+  const completed = await repo.getTask(task.userId, task.id);
+  assert.equal(completed?.status, 'completed');
+  assert.equal(gateway.callCount, 1);
+
+  const toolCall = repo.events.find((e) => e.eventType === 'task.tool_call');
+  const output = toolCall?.payload.output as { content?: string } | undefined;
+  assert.equal(output?.content, 'Analisis data penjualan: margin naik 12%.');
+
+  const artifact = completed?.artifacts?.[0] as { content?: string; note?: string } | undefined;
+  assert.match(String(artifact?.content), /margin naik 12%/);
+  assert.notEqual(artifact?.note, PLACEHOLDER_WORKER_LABEL);
+});
+
+test('Generic task fails evaluation when model output does not support acceptance criteria', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const gateway = new MockModelGateway({ chatResponse: 'Cuaca hari ini cerah.' });
+  const executor = new TaskExecutor(repo, broadcaster, {
+    modelGateway: gateway,
+    defaultModel: 'test/verified-model',
+  });
+
+  const { task } = await repo.createTask({
+    userId: 'user-generic-reject',
+    projectId: 'proj-generic-reject',
+    kind: 'generic_task',
+    payload: {
+      prompt: 'Analisis data penjualan kuartal ini',
+      acceptanceCriteria: [
+        {
+          id: 'analisis',
+          description: 'analisis data penjualan',
+          category: 'generic',
+          required: true,
+        },
+      ],
+    },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 1,
+  });
+
+  const rejected = await repo.getTask(task.userId, task.id);
+  assert.equal(rejected?.status, 'failed');
+  assert.match(String(rejected?.error), /Evaluasi generik belum lulus/);
+  const failEvent = repo.events.find((e) => e.eventType === 'task.failed');
+  const remainingIssues = (failEvent?.payload.evaluationResult as { remainingIssues?: string[] })
+    ?.remainingIssues;
+  assert.ok(remainingIssues?.some((issue) => issue.includes('analisis data penjualan')));
+});
+
+test('Generic task fails closed when no ModelGateway is configured', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const executor = new TaskExecutor(repo, broadcaster);
+
+  const { task } = await repo.createTask({
+    userId: 'user-generic-nogw',
+    projectId: 'proj-generic-nogw',
+    kind: 'generic_task',
+    payload: { prompt: 'Ringkas catatan rapat mingguan' },
+  });
+
+  await assert.rejects(
+    executor.execute({
+      taskId: task.id,
+      userId: task.userId,
+      projectId: task.projectId,
+      kind: task.kind,
+      attempt: 0,
+      maxAttempts: 1,
+    }),
+    /requires a ModelGateway/,
+  );
+
+  const failed = await repo.getTask(task.userId, task.id);
+  assert.equal(failed?.status, 'failed');
+  assert.match(String(failed?.error), /requires a ModelGateway/);
 });
