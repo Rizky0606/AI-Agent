@@ -277,7 +277,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **FCM Push Notification Live Kredensial**        | **SEBAGIAN** | Logika provider siap di `apps/scheduler/src/fcm-provider.ts`; menunggu suntikan berkas `FCM_SERVICE_ACCOUNT_JSON` di server VPS.                                                               |
 | **Tidak ada secret di client / log / repo**      | **LULUS**    | Bebas credential hardcoded, Fastify logger di `apps/api/src/app.ts` meredaksi header authorization dan token.                                                                                  |
 | **PostgreSQL & Redis terisolasi internal**       | **LULUS**    | `docker-compose.yml` melampirkan DB dan Redis ke `internal: true` network tanpa port mapping publik.                                                                                           |
-| **Backup / Restore / Observability**             | **LULUS**    | Script backup di `scripts/backup-postgres.sh`, restore di `scripts/restore-postgres.sh`, dan metrik Prometheus di `apps/api/src/app.ts`.                                                       |
+| **Backup / Restore / Observability**             | **LULUS**    | Script backup di `scripts/backup-postgres.sh`, restore di `scripts/restore-postgres.sh`, dan metrik Prometheus di `apps/api/src/app.ts`. Restore drill dijalankan terhadap arsip nyata `personal_ai_os-20261013T092512Z.dump`: exit 0, ekstensi `pgcrypto`+`vector` ada, 11 tabel inti ada, `users` 40 baris sama dengan produksi. Drill menemukan bug `pg_restore` tanpa `-d` yang membuat restore selalu gagal; sudah diperbaiki. |
 | **Live VPS Physical Verification (ARM64)**       | **SEBAGIAN** | Konfigurasi Docker compose dan profiling siap; menunggu eksekusi live via SSH di Oracle Cloud VPS target.                                                                                      |
 
 ---
@@ -308,8 +308,8 @@ Terdapat 3 gap operasional eksternal yang memerlukan tindakan di lingkungan targ
 2. **Gap 2: Penyediaan Kredensial Produksi Google FCM (Service Account JSON)**
    - _Status_: `apps/scheduler/src/fcm-provider.ts` menonaktifkan pengiriman secara transparan jika path `FCM_SERVICE_ACCOUNT_JSON` belum tersedia.
    - _Rencana_: Menyuntikkan berkas JSON kredensial Google Cloud FCM ke server VPS saat konfigurasi environment live.
-3. **Gap 3: Live Build Image Playwright Chromium pada Arsitektur Linux ARM64**
-   - _Status_: Container worker telah dikonfigurasi dengan Chromium dan batas RAM 1.5 GB; verifikasi library native ARM64 (`libgbm`, `libnss3`) perlu dipastikan saat image ditarik di VPS.
+3. **Gap 3: Live Build Image Playwright Chromium pada Arsitektur Linux ARM64** — **SELESAI**
+   - _Status_: Chromium linux-arm64 (Chrome for Testing 156.0.8078.4, playwright chromium v1248) terpasang di image worker melalui `pnpm exec playwright install --with-deps chromium`, `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`. Tool `browser_navigate` terdaftar di registry worker dan terbukti end-to-end: task `cf10a984-5b7b-4d6e-a9a0-65b445d460f0` mengembalikan judul dan konten nyata `https://example.com/`, task `73d1d19a-7cd0-4f8e-8837-75d9186e75e0` menulis screenshot PNG 71 KB ke bind mount `./data/artifacts`.
 
 ---
 
@@ -317,7 +317,7 @@ Terdapat 3 gap operasional eksternal yang memerlukan tindakan di lingkungan targ
 
 | Risiko                                             | Dampak | Probabilitas | Mitigasi yang Telah Diterapkan                                                                                                                            |
 | :------------------------------------------------- | :----- | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Lonjakan Memori Chromium Headless**              | Tinggi | Sedang       | Concurrency browser dibatasi maksimal 1-2 sesi bersamaan dengan timeout 60 detik. Batas RAM container worker diatur ke 1536 MB di `docker-compose.yml`.   |
+| **Lonjakan Memori Chromium Headless**              | Tinggi | Sedang       | Concurrency browser dibatasi maksimal 1 sesi bersamaan (`BROWSER_MAX_CONCURRENCY=1`) dengan timeout 15 detik dan flag `--disable-dev-shm-usage`. Batas RAM container worker diatur ke 2048 MB di `docker-compose.yml`. |
 | **Gangguan Model Gateway 9Router (Timeout / 503)** | Sedang | Rendah       | Retry loop dengan batas maksimal 3 kali dan exponential backoff di `packages/model-gateway/src/nine-router.ts`. Error ditangani tanpa korupsi state task. |
 | **Koneksi Windows Worker Terputus Saat Eksekusi**  | Sedang | Sedang       | Fail-fast timeout pada backend dengan event `task.waiting_device`. Task ditahan dengan aman dan dilanjutkan saat worker terhubung kembali.                |
 | **Exhaustion Disk Akibat Log atau Database**       | Rendah | Rendah       | Fastify logger menggunakan log-level pino, rotasi backup PostgreSQL otomatis menghapus dump yang lebih lama dari 7 hari di `scripts/backup-postgres.sh`.  |

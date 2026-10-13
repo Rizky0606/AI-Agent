@@ -9,6 +9,33 @@ GitHub Actions → **Build installable apps** → **Run workflow**. Workflow req
 
 No installer is committed to the repository. No signing secret is required. Windows may show SmartScreen warnings because the installer is not signed by a trusted code-signing certificate.
 
+### Building without GitHub Actions
+
+Both installers can also be produced from the repository checkout, which avoids the `EXPO_TOKEN` secret and the `windows-latest` runner.
+
+Windows NSIS installer, cross-built from Linux aarch64 (no Windows host required):
+
+```bash
+cargo install cargo-xwin
+rustup target add x86_64-pc-windows-msvc
+cd apps/windows
+XWIN_CACHE_DIR=/tmp/xwin-cache pnpm exec tauri build --runner cargo-xwin \
+  --target x86_64-pc-windows-msvc --bundles nsis
+```
+
+Output: `apps/windows/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe`. The bundler skips signing off-Windows.
+
+Android APK:
+
+```bash
+cd apps/android
+npx expo prebuild --platform android --no-install
+cd android
+ANDROID_HOME=<sdk> JAVA_HOME=<jdk17> ./gradlew assembleRelease
+```
+
+Output: `apps/android/android/app/build/outputs/apk/release/app-release.apk`. On an ARM64 host the Android build-tools `aapt2` is an x86-64 binary, so it needs `binfmt_misc` with `qemu-x86_64-static` plus the amd64 loader (`libc6:amd64`); install both before running Gradle. `apps/android/android/` is generated output and is not committed.
+
 ## Android
 
 Transfer APK to device, allow installation from the source used to open it, install. Sign in or create an account. Server defaults to `https://ai.ojixx.my.id`. Updates require installing a later APK. APK sideloading is not Google Play distribution.

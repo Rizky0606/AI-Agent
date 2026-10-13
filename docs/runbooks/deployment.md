@@ -24,18 +24,18 @@ Dokumen ini mendefinisikan standar operasional prosedur untuk deployment produks
 
 ### 1.2 Resource Budgeting & Batas Container Stack
 
-Total alokasi limit stack container dibatasi ketat ke ~5,056 MiB (~4.94 GiB), menyisakan buffer bebas >1.0 GiB untuk OS host dan perlindungan terhadap OOM:
+Total alokasi limit stack container dibatasi ketat ke ~5,568 MiB (~5.44 GiB), menyisakan buffer bebas >1.0 GiB untuk OS host dan perlindungan terhadap OOM:
 
 | Service         | CPU Limit   | CPU Reserv.  | Memory Limit | Memory Reserv. | OOM Score Adj | Keterangan                                                         |
 | :-------------- | :---------- | :----------- | :----------- | :------------- | :------------ | :----------------------------------------------------------------- |
 | `postgres`      | 0.75        | 0.25         | **1536M**    | 512M           | -500          | Database utama + pgvector; proteksi tinggi dari OOM kill           |
 | `redis`         | 0.25        | 0.10         | **384M**     | 128M           | -500          | Queue BullMQ, cache, realtime pub/sub                              |
 | `api`           | 0.50        | 0.15         | **768M**     | 256M           | 0             | Fastify REST API, JWT auth, WebSocket events                       |
-| `worker`        | 0.75        | 0.25         | **1536M**    | 512M           | 100           | Agent Core, tool execution, LLM routing (buffer Chromium terpisah) |
+| `worker`        | 0.75        | 0.25         | **2048M**    | 512M           | 100           | Agent Core, tool execution, LLM routing, Chromium headless (`BROWSER_MAX_CONCURRENCY=1`) |
 | `scheduler`     | 0.25        | 0.10         | **384M**     | 128M           | 0             | Cron engine, event deduplication, notification engine              |
 | `backup`        | 0.25        | 0.05         | **256M**     | 64M            | 200           | Cron pg_dump berkala setiap 6 jam                                  |
 | `caddy`         | 0.25        | 0.05         | **192M**     | 64M            | -200          | Edge reverse proxy, TLS termination, static security headers       |
-| **Total Stack** | **3.0 CPU** | **0.90 CPU** | **5056 MiB** | **1664 MiB**   | -             | **Bebas: ~1.2 GiB OS + ~1.8 GiB Chromium + ~3.0 GiB Hermes**       |
+| **Total Stack** | **3.0 CPU** | **0.90 CPU** | **5568 MiB** | **1664 MiB**   | -             | **Bebas: ~1.2 GiB OS + ~1.8 GiB Chromium + ~3.0 GiB Hermes**       |
 
 ---
 

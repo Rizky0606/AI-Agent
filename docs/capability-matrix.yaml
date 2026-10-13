@@ -47,7 +47,7 @@ capabilities:
     permission_boundary: PermissionEngine; capability guard; bounded outputs
     clients: backend; /v1/catalog
     proof: packages/tools/test; apps/agent-worker/test/live-worker-execution.test.ts
-    limitation: production registry intentionally registers only web_fetch until workspace/browser/artifact dependencies are wired
+    limitation: the API catalog registers web_fetch only; the worker additionally registers browser_navigate because it owns the Playwright Chromium runner. save_artifact and web_search stay unregistered (artifact dependency; mock search provider)
   browser_mcp:
     status: partial
     code: packages/mcp; packages/tools
@@ -68,7 +68,7 @@ capabilities:
     permission_boundary: authenticated device WSS; local capability registry; server REST calls reuse the same bearer token
     clients: windows
     proof: apps/windows/test/server-api-and-events.test.ts; apps/windows/test/agent-connection.test.ts; pnpm exec tauri build --no-bundle
-    limitation: the Tauri release binary builds on Linux aarch64 and was driven under Xvfb against the production API (server tasks, live events, approvals approve/deny, artifact preview, live model catalog); the nsis installer is Windows-only and unbuilt because no Windows host exists
+    limitation: the Tauri release binary builds on Linux aarch64 and was driven under Xvfb against the production API (server tasks, live events, approvals approve/deny, artifact preview, live model catalog); the nsis installer cross-builds on this aarch64 host with cargo-xwin and produces Personal AI OS - Windows Agent_0.1.0_x64-setup.exe, unsigned and not yet executed on Windows
   memory_artifacts_observability:
     status: partial
     code: packages/memory; apps/api/src/db; apps/api/src/routes
@@ -82,7 +82,7 @@ capabilities:
     permission_boundary: private internal network; server secrets
     clients: VPS; windows device channel; android
     proof: docker compose config; https://ai.ojixx.my.id/health, /ready, /metrics; wss://ai.ojixx.my.id/v1/events/ws; /v1/agent/ws handshake
-    limitation: live VPS TLS, container limits, runtime-bridge completion, public device WSS and daily pg_dump backups are verified; no restore drill and no Windows host for the nsis installer
+    limitation: live VPS TLS, container limits, runtime-bridge completion, public device WSS and daily pg_dump backups are verified; the restore drill passes against the live backup archive; the nsis installer is cross-built but unsigned and not executed on Windows
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

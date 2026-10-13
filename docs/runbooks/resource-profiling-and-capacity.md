@@ -16,11 +16,11 @@ Total CPU cores: **2 OCPU (Ampere Altra ARM64)**
 | **PostgreSQL 17 + pgvector**             | 2.048 MB (2.0 GB)     | 0.75 OCPU    | Shared buffers, vector index (HNSW/IVFFlat), storage engine |
 | **Redis 7 (BullMQ)**                     | 512 MB                | 0.25 OCPU    | Queue broker, event pub/sub, rate limit counter             |
 | **Control Plane API (Fastify)**          | 768 MB                | 0.75 OCPU    | REST API, WebSocket streaming, auth, permission evaluation  |
-| **Agent Worker (BullMQ + Agent Core)**   | 1.536 MB (1.5 GB)     | 0.75 OCPU    | Eksekusi task durable, evaluasi, coding/research loop       |
+| **Agent Worker (BullMQ + Agent Core)**   | 2.048 MB (2.0 GB)     | 0.75 OCPU    | Eksekusi task durable, evaluasi, coding/research loop, Chromium headless (maks 1 sesi) |
 | **Scheduler Engine**                     | 512 MB                | 0.25 OCPU    | Cron scheduling, event engine, notifikasi FCM               |
 | **Caddy 2 Reverse Proxy**                | 256 MB                | 0.25 OCPU    | TLS termination, HTTP/2 & WebSocket reverse proxy           |
-| **Playwright Browser Context (Sandbox)** | 2.048 MB (2.0 GB)     | 0.75 OCPU    | Chromium headless context (dibatasi max 2 concurrent pages) |
-| **Host OS & Linux Page Cache Headroom**  | ~4.608 MB (4.5 GB)    | -            | Kernel, memory buffer, SSH, I/O burst, and safety margin    |
+| **Playwright Chromium (dalam container worker)** | termasuk pada baris worker | 0.75 OCPU    | Chromium headless dijalankan sebagai proses anak container worker, bukan container terpisah; dibatasi `BROWSER_MAX_CONCURRENCY=1` |
+| **Host OS & Linux Page Cache Headroom**  | ~6.656 MB (6.5 GB)    | -            | Kernel, memory buffer, SSH, I/O burst, dan margin keamanan  |
 | **TOTAL TERENCANA**                      | **12.288 MB (12 GB)** | **2.0 OCPU** | **Terjamin tidak memicu Linux OOM Killer**                  |
 
 ---
@@ -35,9 +35,9 @@ Untuk menjaga kestabilan sistem dan mencegah spike pemakaian CPU/RAM:
    - Mencegah kehabisan memori heap Node.js saat parsing AST dan diff file besar.
 
 2. **Browser Automation Concurrency**:
-   - Dibatasi ke **1-2 halaman simultan**.
-   - Setiap navigasi browser context menggunakan isolasi terpisah dengan timeout maksimal 30 detik.
-   - Resource leak dicegah dengan selalu memanggil `context.close()` dalam blok `finally`.
+   - Dibatasi ke **1 sesi browser simultan** (`BROWSER_MAX_CONCURRENCY=1`).
+   - Timeout navigasi dan aksi 15 detik; satu instance Chromium dipakai ulang lintas sesi (`PlaywrightRunner` meluncurkan browser secara lazy).
+   - Resource leak dicegah dengan selalu memanggil `context.close()` dan `browser.close()`.
 
 3. **Model Gateway Request Concurrency**:
    - Maksimal 4 concurrent requests ke 9Router melalui backend model gateway.
