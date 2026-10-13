@@ -3,7 +3,7 @@
 **Tanggal Audit**: 2026-10-11, diperbarui 2026-10-13  
 **Auditor**: Principal Software Architect & Security Engineer  
 **Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
-**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery) **sudah diperbaiki dan diverifikasi live** pada tanggal yang sama sehingga kembali ke **LULUS**; butir sisanya masih terbuka. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": masih ada 3 cacat fungsional terbuka (kehilangan memori saat restart, evaluator tanpa bukti nyata, dan tidak adanya jalur dispatch perintah ke Windows Agent).
+**Catatan Status**: Dokumen ini **direvisi 2026-10-13** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery) dan persistensi memori pada butir 5 **sudah diperbaiki dan diverifikasi live** pada tanggal yang sama. Butir 5 tetap **SEBAGIAN**, bukan LULUS: pencarian semantik belum punya provider embedding dan retensi belum ditegakkan. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": masih ada 2 cacat fungsional terbuka — evaluator tanpa bukti nyata (butir 8) dan tidak adanya jalur dispatch perintah ke Windows Agent (butir 11).
 
 ---
 
@@ -15,8 +15,8 @@ Quality gates dijalankan pada checkout `release/installers` (Linux aarch64), buk
 
 - **Linter (`pnpm lint`)**: 14/14 paket **LULUS** (0 error, 0 warning).
 - **Production Build (`pnpm build`)**: 14/14 paket **LULUS**.
-- **Verifikasi referensi path (`pnpm verify:audit`)**: 88 path unik valid (145 referensi diperiksa).
-- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 30/30 (bertambah 1 test regresi pemulihan), `@personal-ai-os/permissions` 5/5, API in-container 50/50 (0 skipped).
+- **Verifikasi referensi path (`pnpm verify:audit`)**: 88 path unik valid (147 referensi diperiksa).
+- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 30/30, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 30/30, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 5/5, API in-container 51/51 (0 skipped).
 - **Catatan penting tentang Skenario 4**: test `apps/api/test/e2e-scenarios.test.ts:868-914` yang diklaim membuktikan pemulihan task **tidak memanggil `recoverInterruptedTasks` sama sekali**. Ia memanggil `executor.execute()` secara langsung dan menaikkan counter yang di-hardcode di dalam test. Test tersebut tidak dapat gagal karena perilaku sistem apa pun, sehingga lulusnya test itu tidak membuktikan apa pun tentang recovery. Lihat Butir 3.
 - **Catatan tentang `pnpm test` di root**: perintah itu tidak dapat dipakai; task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite harus dijalankan per paket.
 
@@ -106,7 +106,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 5: Memory/Context Relevan dan Punya Scope/Retensi
 
-- **Status**: **GAGAL** (sebelumnya dinyatakan LULUS)
+- **Status**: **SEBAGIAN** — sebelumnya **GAGAL**, diperbaiki sebagian 2026-10-13. Persistensi dan scope kini **LULUS**; pencarian semantik dan penegakan retensi belum.
 - **Persyaratan**: Memori memiliki tipe terstruktur (session, long-term, project, preference, decision) dengan write policy selektif, filter data sensitif, dan token budget context.
 - **Bukti File Relatif**:
   - `packages/memory/src/types.ts`: Definisi 7 scope memori dan retensi TTL.
@@ -118,14 +118,30 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - `docker compose restart api`, lalu `GET /v1/memories` → **`count=0`**. Memori hilang tanpa error, tanpa peringatan, tanpa log.
   - `docker exec personal-ai-os-postgres-1 psql ... -c "SELECT to_regclass('public.memories')"` → **null**. Tabel `memories` tidak ada. Produksi memiliki 18 tabel, dan `memories` bukan salah satunya.
   - `SELECT count(*) FROM memories` → `ERROR: relation "memories" does not exist`.
-  - `GET /v1/memories/search?q=...` → `404 Memory not found` (route `/:id` di `apps/api/src/routes/memory.ts:213` menelan `/search`).
+  - `GET /v1/memories/search?q=...` → `404 Memory not found`, karena route `/v1/memories/:id` menangkapnya. Kontrak pencarian sebenarnya adalah `POST /v1/memories/search` (lihat di bawah).
 - **Akar masalah**:
   - Tabel `memories` dideklarasikan di Drizzle (`apps/api/src/db/schema.ts:265`) termasuk `vector('embedding', {dimensions:1536})` (`:279`), tetapi **tidak ada `CREATE TABLE memories`** di seluruh migrasi `apps/api/src/db/migrations/` (berkas `0000`–`0006`). Schema dan migrasi menyimpang.
-  - `DrizzleMemoryRepository` membungkus setiap operasi DB dengan `if (!this.db)` dan `try/catch`, sehingga kegagalan itu selalu jatuh diam-diam ke `InMemoryMemoryStore` (`apps/api/src/db/memory-repository.ts:46,69-212`).
-  - `InactiveEmbeddingProvider.embed()` **throw** (`packages/memory/src/store/inactive-embedding-provider.ts:16-18`) dan `isAvailable = false`, sehingga `isSemanticSearchActive()` selalu `false` dan `searchSemantic` hanya menyentuh fallback store (`:203-212`). Tidak ada index ivfflat/hnsw.
+  - `DrizzleMemoryRepository` membungkus setiap operasi DB dengan `if (!this.db)` dan `try/catch`, sehingga kegagalan itu selalu jatuh diam-diam ke `InMemoryMemoryStore`. (Referensi baris dihapus karena kode itu sendiri sudah dihapus pada perbaikan di bawah.)
+  - `InactiveEmbeddingProvider.embed()` **throw** (`packages/memory/src/store/inactive-embedding-provider.ts:16-18`) dan `isAvailable = false`, sehingga `isSemanticSearchActive()` selalu `false` dan `searchSemantic` tidak pernah menyentuh database. Tidak ada index ivfflat/hnsw.
   - Tidak ada sweeper TTL/retention; `retention` hanya field tersimpan.
   - Tidak ada ekstraksi memori otomatis: `apps/agent-worker` tidak mengimpor `@personal-ai-os/memory`. Satu-satunya jalur tulis adalah `POST /v1/memories` dari klien.
 - **Yang benar-benar bekerja**: tipe/scope/retensi terdeklarasi (`packages/memory/src/types.ts`), write policy selektif (`policy/memory-write-policy.ts`), filter data sensitif (`policy/sensitive-data-filter.ts`), dan `ContextManager` token budgeting (`context/context-manager.ts`). Unit test `packages/memory/test/memory.test.ts` lulus. Yang gagal adalah **persistensi dan retrieval produksi**, bukan logikanya.
+- **Perbaikan (2026-10-13)**:
+  - Migrasi baru `apps/api/src/db/migrations/0007_memories.sql` membuat tabel `memories` lengkap dengan `vector(1536)`, lima index btree, dua check constraint (`type`, `retention`), dan foreign key ke `users`/`projects`. Sudah diterapkan ke produksi (`schema_migrations` memuat `0007_memories.sql`).
+  - `DrizzleMemoryRepository` **tidak lagi menelan kegagalan database**: seluruh `try/catch` yang jatuh ke `InMemoryMemoryStore` dihapus, sehingga `relation "memories" does not exist` sekarang menjadi error yang terlihat, bukan `201` palsu. Fallback in-memory hanya tersisa untuk `db === null`, yaitu seam unit test route.
+  - Tabel `artifacts` dihapus dari `schema.ts` (dan `ArtifactRow` dihapus). Tabel itu tidak punya migrasi, tidak punya repository, dan tidak ada satu pun referensi di `apps/` maupun `packages/`; artefak nyata disimpan lewat `DiskArtifactStorage` + sidecar metadata.
+- **Bukti live setelah perbaikan (2026-10-13)**:
+  - `POST /v1/memories` → `201` dengan `retention: 'permanent'`, `embedding: null`.
+  - `GET /v1/memories` → `count=1`.
+  - `docker compose restart api` → `GET /v1/memories` → **`count=1`**. Persistensi lintas restart terbukti.
+  - `SELECT count(*) FROM memories` di PostgreSQL → `1`, dan `\d memories` menunjukkan `vector(1536)` serta seluruh index dan constraint.
+  - `POST /v1/memories/search` → `200` `{"data":[],"semanticSearchActive":false,"status":"inactive"}`.
+- **Yang masih terbuka di butir ini**:
+  - **Pencarian semantik tetap tidak aktif, dan itu jujur.** `POST https://9router.ojixx.my.id/v1/embeddings` mengembalikan `{"error":{"message":"No credentials for provider: openai"}}`, jadi tidak ada provider embedding yang dapat menghasilkan vektor. `InactiveEmbeddingProvider` dipertahankan, `isSemanticSearchActive()` mengembalikan `false`, dan API menyatakan statusnya secara eksplisit. Kolom `vector(1536)` sudah siap, tetapi index ANN belum dibuat karena belum ada pencarian yang memakainya.
+  - `GET /v1/memories/search` masih `404`; kontraknya `POST`. Ini perilaku yang benar untuk method yang salah, bukan cacat, tetapi perlu diketahui klien.
+  - **Retensi belum ditegakkan.** `retention` tersimpan dan divalidasi oleh check constraint, tetapi tidak ada sweeper yang menghapus data kedaluwarsa. Karena `permanent` adalah default dan satu-satunya nilai yang dipakai produksi saat ini, dampaknya nihil sampai ada pemanggil yang memakai nilai lain.
+  - Tidak ada ekstraksi memori otomatis: `apps/agent-worker` tidak mengimpor `@personal-ai-os/memory`. Satu-satunya jalur tulis adalah `POST /v1/memories` dari klien.
+- **Bukti test regresi**: `apps/api/test/memory.test.ts` — `Memory API: database failures are not silently swallowed by an in-memory fallback`. Test ini memakai database palsu yang melempar `relation "memories" does not exist` dan menuntut error itu naik ke pemanggil. Sudah diverifikasi **gagal** bila `catch` fallback dikembalikan.
 
 ---
 
@@ -213,11 +229,11 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - Test: `apps/api/test/e2e-scenarios.test.ts` — `Skenario 6: Jadwal berulang berjalan tepat sekali`
   - Output Aktual: `✔ Skenario 6: Jadwal berulang berjalan tepat sekali (957.1265ms)`
 - **Keterbatasan / Mengapa SEBAGIAN**:
-  - **Notifikasi belum pernah terkirim sekali pun.** `SELECT count(*) FROM notifications` di produksi → `0`. `NotificationEngine` di API dibuat **tanpa storage**: `new NotificationEngine()` (`apps/api/src/index.ts:209`), sehingga state pengiriman hanya ada di memori proses. `SqlNotificationRepository` ada tetapi tidak pernah diinstansiasi.
+  - **Notifikasi belum pernah terkirim sekali pun.** `SELECT count(*) FROM notifications` di produksi → `0`. `NotificationEngine` di API dibuat **tanpa storage**: `new NotificationEngine()` (`apps/api/src/index.ts:211`), sehingga state pengiriman hanya ada di memori proses. `SqlNotificationRepository` ada tetapi tidak pernah diinstansiasi.
   - Tidak ada jembatan dari event task ke notifikasi di kode produksi: task selesai atau gagal tidak menghasilkan notifikasi apa pun.
   - **Token FCM hardcoded.** `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` ketika service account tersedia. Begitu kredensial nyata disuntikkan, provider akan mengirim dengan token literal itu dan selalu gagal `401`. Kegagalan itu akan tampak seperti masalah kredensial Google, padahal bug kode.
   - Retry notifikasi 3× bersifat sinkron; setelah habis, state menjadi `failed` tanpa dead-letter.
-  - `SchedulerEngine` di API dibuat dengan `SqlScheduleRepository` (`apps/api/src/index.ts:181-183`) tetapi `tick()` tidak pernah dipanggil di API; dispatcher-nya hanya `taskQueue.enqueue` tanpa `INSERT` ke tabel `tasks` (`:190-191`).
+  - `SchedulerEngine` di API dibuat dengan `SqlScheduleRepository` (`apps/api/src/index.ts:183-185`) tetapi `tick()` tidak pernah dipanggil di API; dispatcher-nya hanya `taskQueue.enqueue` tanpa `INSERT` ke tabel `tasks` (`:192-193`).
 - **Yang benar-benar bekerja**: ketiga missed-run policy (`skip`, `run_once`, `catch_up`) ada; timezone disimpan dan dihitung; idempotency slot `sched:<jobId>:<ISO>` ada di Set in-memory plus unique index DB pada jalur proses scheduler; `EventEngine` **tidak dapat** dispatch tanpa `PermissionEngine` (gate di `apps/scheduler/src/event-engine.ts:137`); tanpa kredensial, FCM memakai `DisabledFcmProvider` dengan pesan log yang jujur.
 - **Keterbatasan tambahan**: tidak ada verifikasi signature pada event masuk, dan `registerRule` tidak pernah dipanggil di produksi.
 
@@ -321,13 +337,13 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **Chat streaming via backend + 9Router**         | **LULUS**    | Route `/v1/chat/*` di `apps/api/src/routes/chat.ts` memanggil `NineRouterGateway` tanpa secret di client.                                                                                      |
 | **Project / Task / Timeline / Artifact**         | **LULUS**    | Terintegrasi penuh dengan event timeline streaming dan artifact storage di `packages/tools/src/artifacts/`.                                                                                    |
 | **Routing berbasis capability**                  | **LULUS**    | `AgentRouter` di `packages/agent-core/src/router/agent-router.ts` memetakan intent ke `RuntimeManager` (OMP, Pi) dan `NineRouterGateway`.                                                      |
-| **Memory & context ber-budget**                  | **GAGAL**    | `ContextManager` dan write policy memang ada dan unit test lulus, tetapi **tidak ada persistensi**: tabel `memories` tidak ada di database (`to_regclass` → null), sehingga memori hilang setiap restart API (bukti: create → `count=1` → restart → `count=0`). `InactiveEmbeddingProvider.embed()` throw. Lihat Butir 5. |
+| **Memory & context ber-budget**                  | **SEBAGIAN** | **Persistensi diperbaiki 2026-10-13**: migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)`, dan fallback senyap ke `InMemoryMemoryStore` dihapus. Bukti live: create → `count=1` → restart API → `count=1`. Sisa: pencarian semantik tidak aktif karena 9Router tidak menyediakan provider embedding (`No credentials for provider: openai`), dan belum ada sweeper retensi. Lihat Butir 5. |
 | **Queue / cancel / checkpoint / recovery**       | **LULUS**    | Queue, cancel, dan checkpoint bekerja. **Recovery diperbaiki 2026-10-13**: `createAgentWorker` kini membuat `BullMqTaskQueue` dan mengembalikannya sebagai `queue`, `startWorkerProcess` melewatkannya ke `recoverInterruptedTasks`, dan parameter itu menjadi wajib sehingga panggilan tanpa queue tidak lagi dikompilasi. Bukti live: task `running`/40 tanpa job di Redis → restart worker → `recoveredCount: 1` → `completed`/100. Lihat Butir 3. |
 | **Windows device identity + allowlist**          | **SEBAGIAN** | Path allowlist dan capability registry nyata dan ditegakkan. Identitas perangkat **bukan** kriptografis (`devices.public_key` tidak pernah diisi; `deviceId` dari query string), tidak ada allowlist teks-perintah/biner, dan `dispatchCommand` nol pemanggil sehingga tidak ada jalur produksi task → perangkat. Lihat Butir 11. |
 | **MCP / tools / browser ber-permission & audit** | **SEBAGIAN** | Permission **lulus**: semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit tidak lulus**: `audit_logs` produksi hanya 10 baris keputusan approval; tool call, MCP call, browser action, dan artifact write tidak tercatat. MCP audit hanya `console.log`. Lihat Butir 12. |
 | **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada jalur coding/research/standard dan menolak klaim mandiri di jalur itu. Namun `executeRegisteredTool` menulis `completed` **tanpa evaluator** (`apps/agent-worker/src/task-executor.ts:624`), dan bukti coding berasal dari lingkungan mock `{passed:true}` hardcoded. Lihat Butir 7 dan 8. |
 | **Approval terikat aksi spesifik**               | **LULUS**    | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence` di `apps/api/src/routes/approvals.ts`.                                                                                |
-| **Scheduler & Event Deduplication**              | **SEBAGIAN** | Idempotency key dan dedupe window ada, `EventEngine` tidak dapat dispatch tanpa `PermissionEngine`. Namun `NotificationEngine` di API dibuat **tanpa storage** (`apps/api/src/index.ts:209`), `SqlNotificationRepository` tidak pernah diinstansiasi, dan `notifications` produksi berisi **0 baris**. Lihat Butir 10. |
+| **Scheduler & Event Deduplication**              | **SEBAGIAN** | Idempotency key dan dedupe window ada, `EventEngine` tidak dapat dispatch tanpa `PermissionEngine`. Namun `NotificationEngine` di API dibuat **tanpa storage** (`apps/api/src/index.ts:211`), `SqlNotificationRepository` tidak pernah diinstansiasi, dan `notifications` produksi berisi **0 baris**. Lihat Butir 10. |
 | **FCM Push Notification Live Kredensial**        | **GAGAL**    | Bukan sekadar menunggu kredensial. `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` hardcoded ketika service account tersedia, sehingga pengiriman akan selalu gagal `401` bahkan setelah kredensial nyata disuntikkan. Tidak ada alur OAuth token dari service account. |
 | **Tidak ada secret di client / log / repo**      | **LULUS**    | Bebas credential hardcoded, Fastify logger di `apps/api/src/app.ts` meredaksi header authorization dan token.                                                                                  |
 | **PostgreSQL & Redis terisolasi internal**       | **LULUS**    | `docker-compose.yml` melampirkan DB dan Redis ke `internal: true` network tanpa port mapping publik.                                                                                           |
@@ -348,7 +364,7 @@ Suite ini dijalankan dengan komponen nyata (Fastify nyata, Redis BullMQ nyata, W
 | 4   | Matikan worker di tengah task, hidupkan lagi, pulih dari checkpoint tanpa duplikasi    | LULUS       | **Tidak** (test) / **Ya** (live) | Test ini **tidak memanggil `recoverInterruptedTasks` sama sekali** (`apps/api/test/e2e-scenarios.test.ts:868-914`), jadi lulusnya tidak membuktikan apa pun. Bukti live sebelum perbaikan: task tetap `running/40` permanen. Setelah perbaikan 2026-10-13, bukti live memenuhi klaim: task `running`/40 tanpa job Redis → restart worker → `recoveredCount: 1` → `completed`/100. Test regresi baru ada di `apps/agent-worker/test/live-worker-execution.test.ts`. |
 | 5   | Windows Agent terhubung, allowlist berjalan, luar allowlist ditolak, offline ditangani | LULUS       | **Sebagian**                 | Handshake `/v1/agent/ws`, eksekusi perintah allowlist, penolakan traversal `C:\Windows\System32`, dan transisi offline memang diuji — tetapi semuanya di dalam satu proses test. Tidak ada jalur produksi yang mendispatch perintah ke perangkat (`dispatchCommand` nol pemanggil). |
 | 6   | Jadwal berulang berjalan tepat sekali                                                  | LULUS       | **Ya**                       | `SchedulerEngine` mengeksekusi slot waktu tepat sekali; pemanggilan berulang pada timestamp yang sama diabaikan oleh deduplikasi idempotency key.                                             |
-| 7   | Isolasi: user A tidak bisa membaca project/task/memori user B                          | LULUS       | **Ya, untuk project dan task**| User B mendapat `HTTP 404` dan list kosong. Untuk memori, isolasi diuji pada store in-memory; karena tabel `memories` tidak ada di database, isolasi memori di produksi belum dapat diverifikasi. |
+| 7   | Isolasi: user A tidak bisa membaca project/task/memori user B                          | LULUS       | **Ya**                       | User B mendapat `HTTP 404` dan list kosong. Isolasi memori kini juga terverifikasi live di produksi (2026-10-13) setelah tabel `memories` ada: user B `GET /v1/memories/<id-milik-A>` → `404 Memory not found`, `GET /v1/memories` → `count=0`, sementara user A `GET` id yang sama → `200`. |
 
 ---
 
@@ -358,7 +374,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 ### 5.1 Cacat fungsional (tidak memerlukan kredensial eksternal)
 
-1. **Memory tidak persisten** — tabel `memories` tidak ada di database; memori hilang setiap restart API tanpa error. Perbaikan: tambahkan migrasi `CREATE TABLE memories` + kolom `vector(1536)` + index, hentikan fallback diam-diam ke `InMemoryMemoryStore`, dan sambungkan provider embedding nyata.
+1. **Memory tidak persisten — SELESAI (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + 5 index + check constraint; `DrizzleMemoryRepository` tidak lagi menelan error DB; `artifacts` yang tak terpakai dihapus dari schema. Bukti live: create → restart API → data tetap ada. Sisa: provider embedding (eksternal) dan sweeper retensi.
 2. **Recovery task menggantung — SELESAI (2026-10-13)**. `recoverInterruptedTasks` sekarang menerima `queue` wajib, `createAgentWorker` menyediakan queue, dan test regresi baru gagal bila queue tidak diteruskan. Diverifikasi live: task `running` tanpa job → restart → `completed`.
 3. **Evaluator tidak memverifikasi apa pun pada jalur coding** — `createDefaultEnvironment()` mengembalikan `{passed:true}` hardcoded (`packages/agent-core/src/coding/coding-agent.ts:414-438`) dan `executeRegisteredTool` melewati evaluator sepenuhnya (`apps/agent-worker/src/task-executor.ts:624`).
 4. **Research tanpa jalur pencarian** — `web_search` menembak `example.com` dan tidak terdaftar di registry mana pun; `ResearchAgent` memakai sumber hardcoded.
@@ -367,7 +383,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 7. **Token FCM hardcoded `dummy-env-token`** — akan gagal 401 bahkan setelah kredensial nyata disuntikkan.
 8. **Audit tidak menyeluruh** — hanya keputusan approval yang masuk `audit_logs`.
 9. **Identitas perangkat tidak kriptografis** — `devices.public_key` tidak pernah diisi; `deviceId` dari query string.
-10. **Skema menyimpang dari migrasi** — tabel `memories` dan `artifacts` ada di `schema.ts` tanpa migrasi; tidak ada pemeriksaan paritas.
+10. **Skema menyimpang dari migrasi — sebagian selesai (2026-10-13)**. `memories` kini punya migrasi; tabel `artifacts` yang tidak terpakai dihapus dari `schema.ts`. Belum ada pemeriksaan paritas otomatis antara `schema.ts` dan `apps/api/src/db/migrations/`, sehingga kelas bug ini masih bisa terulang.
 11. **Dead code produksi** — `AiCouncil` (`packages/agent-core/src/council/`) dan `SelfHealingEngine` (`packages/agent-core/src/healing/`) tidak dipanggil dari `apps/`.
 
 ### 5.2 Gap operasional (menunggu lingkungan atau kredensial)
@@ -387,7 +403,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 | **Gangguan Model Gateway 9Router (Timeout / 503)** | Sedang | Rendah       | Retry maksimal 3 percobaan (2 retry) dengan exponential backoff + jitter, hanya untuk 429/5xx/timeout/network (`packages/model-gateway/src/nine-router.ts`). Fallback model ada dan tetap melewati 9Router. Catatan: error 402 dipetakan ke kelas `UNKNOWN`, sehingga masalah kuota tidak dapat dibedakan dari kegagalan tak terduga. |
 | **Koneksi Windows Worker Terputus Saat Eksekusi**  | Sedang | Sedang       | Sesi koneksi perangkat disimpan **in-memory** (`apps/api/src/services/device-connection-manager.ts`), sehingga restart API menghapus seluruh sesi dan semua perangkat tampak offline sampai mereka reconnect. Selain itu tidak ada jalur dispatch perintah dari task ke perangkat (lihat Butir 11), jadi mitigasi "task ditahan dan dilanjutkan" belum dapat diverifikasi. |
 | **Exhaustion Disk Akibat Log atau Database**       | Rendah | Rendah       | Rotasi log Docker aktif (`/etc/docker/daemon.json`: `max-size 10m`, `max-file 3`). Retensi backup **14 hari** (`RETENTION_DAYS` default di `scripts/backup-postgres.sh:15`), bukan 7 hari seperti tertulis sebelumnya. Disk terpakai 42G/174G (25%). |
-| **Kehilangan Memori Diam-diam**                    | Tinggi | **Tinggi**   | Belum dimitigasi. `POST /v1/memories` mengembalikan `201`, lalu data hilang saat restart tanpa error maupun log. Terdeteksi hanya lewat audit ini. |
+| **Kehilangan Memori Diam-diam**                    | Tinggi | **Rendah**   | **Dimitigasi 2026-10-13.** Tabel `memories` kini dibuat oleh migrasi `0007_memories.sql`, dan `DrizzleMemoryRepository` tidak lagi menelan kegagalan database, sehingga error terlihat alih-alih menjadi `201` palsu. Bukti live: create → restart API → data tetap ada. Sisa risiko: pencarian semantik tidak aktif (bukan kehilangan data) dan retensi tidak ditegakkan. |
 | **Klaim Completion Palsu**                         | Tinggi | Sedang       | Belum dimitigasi. Jalur `executeRegisteredTool` menulis `completed` tanpa evaluator, dan bukti coding berasal dari lingkungan mock. |
 
 ---
@@ -396,16 +412,16 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 ### Prioritas P0 (cacat fungsional, tidak memerlukan kredensial eksternal)
 
-Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 2 dan seterusnya masih terbuka.
+Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 dan 2 sudah selesai pada 2026-10-13 dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 3 dan seterusnya masih terbuka.
 
 1. **Perbaiki pemulihan task — SELESAI (2026-10-13)**. `queue` kini diteruskan dan wajib; test regresi baru (`live-worker-execution.test.ts`) gagal bila queue tidak diteruskan; bukti live task `running` tanpa job → restart → `completed`.
-2. **Buat memory persisten** — tambahkan migrasi `CREATE TABLE memories` beserta kolom `vector(1536)` dan index, hentikan fallback diam-diam ke `InMemoryMemoryStore`, dan sambungkan provider embedding nyata. Perbaiki juga route `GET /v1/memories/search` yang tertelan `/:id`.
+2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi. `GET /v1/memories/search` memang `404` karena kontraknya `POST`, bukan cacat.
 3. **Buat evaluator menilai bukti nyata** — ganti `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dengan lingkungan yang benar-benar menjalankan lint/typecheck/test/build, dan jangan biarkan `executeRegisteredTool` menulis `completed` tanpa evaluator.
 4. **Beri research jalur pencarian nyata** — daftarkan provider search yang sungguh-sungguh (SearXNG self-host atau API pihak ketiga) dan buat `ResearchEvaluator` menolak klaim tanpa sumber terverifikasi.
 5. **Sambungkan dispatch perintah ke Windows Agent** — hubungkan `dispatchCommand` ke jalur task dengan approval, dan ganti identitas perangkat menjadi kriptografis (`devices.public_key` diisi dan diverifikasi).
 6. **Perbaiki notifikasi dan FCM** — `NotificationEngine` di API harus memakai storage durable, dan `fcm-provider.ts` harus memperoleh token OAuth nyata dari service account, bukan literal `dummy-env-token`.
 7. **Perluas audit** — tulis tool call, MCP call, browser action, dan artifact write ke `audit_logs`, bukan hanya keputusan approval.
-8. **Tambahkan pemeriksaan paritas schema ↔ migrasi** — tabel `memories` dan `artifacts` ada di `schema.ts` tanpa migrasi; ini kelas bug yang akan terulang.
+8. **Tambahkan pemeriksaan paritas schema ↔ migrasi** — `memories` sudah punya migrasi dan `artifacts` yang tidak terpakai sudah dihapus, tetapi belum ada pemeriksaan otomatis, sehingga kelas bug ini masih bisa terulang.
 
 ### Prioritas P1 (kebersihan dan pengerasan)
 
@@ -453,8 +469,9 @@ Time:     ~28s
 @personal-ai-os/tools          30/30
 @personal-ai-os/mcp            17/17
 @personal-ai-os/agent-worker   30/30
+@personal-ai-os/memory          7/7
 @personal-ai-os/permissions     5/5
-API (in-container)             50/50, 0 skipped
+API (in-container)             51/51, 0 skipped
 ```
 
 Suite API dijalankan di dalam image `personal-ai-os-api:latest`; image `node:22-bookworm-slim` polos gagal satu test karena tidak memiliki `git`, yang dibutuhkan `prepareWorkspace`.
@@ -462,7 +479,7 @@ Suite API dijalankan di dalam image `personal-ai-os-api:latest`; image `node:22-
 ### D. Verifikasi Referensi Path Dokumen (`pnpm verify:audit`)
 
 ```text
-[Verify Audit Refs] Berhasil memverifikasi 78 path unik yang valid.
+[Verify Audit Refs] Berhasil memverifikasi 88 path unik yang valid.
 [SUKSES] Semua referensi path file dalam docs/final-audit.md 100% valid dan ada di filesystem.
 ```
 
@@ -481,16 +498,18 @@ output: <untrusted_content source="mcp:echo/echo" is_instruction="false">
 browser_navigate -> completed dengan judul dan konten halaman nyata
 SSRF 169.254.169.254 -> failed
 
-# Cacat 1: memori hilang saat restart
-POST /v1/memories -> 201; GET /v1/memories -> count=1
-docker compose restart api
-GET /v1/memories -> count=0
-SELECT to_regclass('public.memories') -> null
-
-# Cacat 2: task pulih menggantung
-task dipaksa running/progress=40; docker compose restart worker
-log: {"action":"recovery","recoveredCount":1}; event task.resumed tertulis
-40 detik kemudian: masih running/progress=40
+# Cacat 1 (DIPERBAIKI 2026-10-13): memori hilang saat restart
+# Sebelum: POST /v1/memories -> 201; GET /v1/memories -> count=1
+#          docker compose restart api; GET /v1/memories -> count=0
+#          SELECT to_regclass('public.memories') -> null
+# Sesudah: migrasi 0007_memories.sql diterapkan; POST -> 201; GET -> count=1;
+#          docker compose restart api; GET -> count=1; SELECT count(*) FROM memories -> 1
+#          POST /v1/memories/search -> 200 {"data":[],"semanticSearchActive":false,"status":"inactive"}
+# Cacat 2 (DIPERBAIKI 2026-10-13): task pulih menggantung
+# Sebelum: task dipaksa running/progress=40; restart worker; log {"action":"recovery","recoveredCount":1};
+#          event task.resumed tertulis; 40 detik kemudian masih running/progress=40
+# Sesudah: job BullMQ dihapus dari Redis; task dipaksa running/progress=40; restart worker;
+#          log {"action":"recovery","recoveredCount":1}; final state completed/progress=100
 
 # Cacat 3: audit hanya approval
 SELECT action, count(*) FROM audit_logs GROUP BY action;

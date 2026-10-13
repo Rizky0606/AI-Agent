@@ -290,38 +290,6 @@ export const memories = pgTable(
   ],
 );
 
-export const artifacts = pgTable(
-  'artifacts',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    ownerId: uuid('owner_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
-    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
-    conversationId: uuid('conversation_id').references(() => conversations.id, {
-      onDelete: 'set null',
-    }),
-    filename: varchar('filename', { length: 255 }).notNull(),
-    mimeType: varchar('mime_type', { length: 128 }).notNull(),
-    size: integer('size').notNull(),
-    checksum: varchar('checksum', { length: 64 }).notNull(),
-    version: integer('version').default(1).notNull(),
-    storageKey: text('storage_key').notNull(),
-    retention: varchar('retention', { length: 32 }).default('project_lifetime').notNull(),
-    accessPolicy: varchar('access_policy', { length: 32 }).default('owner_only').notNull(),
-    metadata: jsonb('metadata'),
-    deletedAt: timestamp('deleted_at', { withTimezone: true }),
-    ...created,
-  },
-  (table) => [
-    index('artifacts_owner_idx').on(table.ownerId),
-    index('artifacts_project_idx').on(table.projectId),
-    index('artifacts_task_idx').on(table.taskId),
-    index('artifacts_created_idx').on(table.createdAt),
-  ],
-);
-
 export const skills = pgTable(
   'skills',
   {
@@ -435,7 +403,6 @@ export type TaskEventRow = typeof taskEvents.$inferSelect;
 export type ApprovalRow = typeof approvals.$inferSelect;
 export type AuditLogRow = typeof auditLogs.$inferSelect;
 export type MemoryRow = typeof memories.$inferSelect;
-export type ArtifactRow = typeof artifacts.$inferSelect;
 export type SkillRow = typeof skills.$inferSelect;
 export type SkillRevisionRow = typeof skillRevisions.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;

@@ -40,6 +40,14 @@ export interface MemoryRepository {
   isSemanticSearchActive?(): boolean;
 }
 
+/**
+ * Durable memory store. Production always constructs this with a real database; the in-memory
+ * store is only reached when a caller explicitly passes no database (route unit tests).
+ *
+ * Database failures are never swallowed. An earlier version wrapped every query in `catch {}`
+ * and fell back to the per-process store, which turned "the `memories` table does not exist"
+ * into a silent 201 followed by total data loss on the next restart.
+ */
 export class DrizzleMemoryRepository implements MemoryRepository {
   private readonly db: Database;
   private readonly policy = new MemoryWritePolicy();
@@ -74,26 +82,22 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       return this.fallbackStore.store(candidate, embedding);
     }
 
-    try {
-      const [inserted] = await this.db
-        .insert(memories)
-        .values({
-          userId: candidate.userId,
-          projectId: candidate.projectId ?? null,
-          type: candidate.type,
-          content: candidate.content,
-          scope: candidate.scope,
-          provenance: candidate.provenance,
-          metadata: candidate.metadata ?? {},
-          retention: candidate.retention ?? 'permanent',
-          embedding: embedding ? Array.from(embedding) : undefined,
-        })
-        .returning();
+    const [inserted] = await this.db
+      .insert(memories)
+      .values({
+        userId: candidate.userId,
+        projectId: candidate.projectId ?? null,
+        type: candidate.type,
+        content: candidate.content,
+        scope: candidate.scope,
+        provenance: candidate.provenance,
+        metadata: candidate.metadata ?? {},
+        retention: candidate.retention ?? 'permanent',
+        embedding: embedding ? Array.from(embedding) : undefined,
+      })
+      .returning();
 
-      return inserted as MemoryRow;
-    } catch {
-      return this.fallbackStore.store(candidate, embedding);
-    }
+    return inserted as MemoryRow;
   }
 
   async getMemory(userId: string, id: string): Promise<MemoryRecord | MemoryRow | null> {
@@ -101,17 +105,13 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       return this.fallbackStore.get(userId, id);
     }
 
-    try {
-      const [found] = await this.db
-        .select()
-        .from(memories)
-        .where(and(eq(memories.id, id), eq(memories.userId, userId), isNull(memories.deletedAt)))
-        .limit(1);
+    const [found] = await this.db
+      .select()
+      .from(memories)
+      .where(and(eq(memories.id, id), eq(memories.userId, userId), isNull(memories.deletedAt)))
+      .limit(1);
 
-      return (found as MemoryRow) ?? null;
-    } catch {
-      return this.fallbackStore.get(userId, id);
-    }
+    return (found as MemoryRow) ?? null;
   }
 
   async listMemories(
@@ -122,32 +122,28 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       return this.fallbackStore.list(userId, filter);
     }
 
-    try {
-      const conditions = [eq(memories.userId, userId)];
-      if (!filter?.includeDeleted) {
-        conditions.push(isNull(memories.deletedAt));
-      }
-      if (filter?.type) {
-        conditions.push(eq(memories.type, filter.type));
-      }
-      if (filter?.scope) {
-        conditions.push(eq(memories.scope, filter.scope));
-      }
-      if (filter?.projectId) {
-        conditions.push(eq(memories.projectId, filter.projectId));
-      }
-
-      const rows = await this.db
-        .select()
-        .from(memories)
-        .where(and(...conditions))
-        .orderBy(desc(memories.createdAt))
-        .limit(filter?.limit ?? 100);
-
-      return rows as MemoryRow[];
-    } catch {
-      return this.fallbackStore.list(userId, filter);
+    const conditions = [eq(memories.userId, userId)];
+    if (!filter?.includeDeleted) {
+      conditions.push(isNull(memories.deletedAt));
     }
+    if (filter?.type) {
+      conditions.push(eq(memories.type, filter.type));
+    }
+    if (filter?.scope) {
+      conditions.push(eq(memories.scope, filter.scope));
+    }
+    if (filter?.projectId) {
+      conditions.push(eq(memories.projectId, filter.projectId));
+    }
+
+    const rows = await this.db
+      .select()
+      .from(memories)
+      .where(and(...conditions))
+      .orderBy(desc(memories.createdAt))
+      .limit(filter?.limit ?? 100);
+
+    return rows as MemoryRow[];
   }
 
   async correctMemory(
@@ -161,25 +157,21 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       return this.fallbackStore.correct(userId, id, newContent, provenance, newEmbedding);
     }
 
-    try {
-      const [updated] = await this.db
-        .update(memories)
-        .set({
-          content: newContent,
-          provenance,
-          embedding: newEmbedding ? Array.from(newEmbedding) : undefined,
-          updatedAt: new Date(),
-        })
-        .where(and(eq(memories.id, id), eq(memories.userId, userId)))
-        .returning();
+    const [updated] = await this.db
+      .update(memories)
+      .set({
+        content: newContent,
+        provenance,
+        embedding: newEmbedding ? Array.from(newEmbedding) : undefined,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(memories.id, id), eq(memories.userId, userId)))
+      .returning();
 
-      if (!updated) {
-        throw new Error(`Memory record '${id}' not found for user '${userId}'.`);
-      }
-      return updated as MemoryRow;
-    } catch {
-      return this.fallbackStore.correct(userId, id, newContent, provenance, newEmbedding);
+    if (!updated) {
+      throw new Error(`Memory record '${id}' not found for user '${userId}'.`);
     }
+    return updated as MemoryRow;
   }
 
   async deleteMemory(userId: string, id: string): Promise<boolean> {
@@ -187,27 +179,29 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       return this.fallbackStore.delete(userId, id);
     }
 
-    try {
-      const [updated] = await this.db
-        .update(memories)
-        .set({ deletedAt: new Date() })
-        .where(and(eq(memories.id, id), eq(memories.userId, userId)))
-        .returning({ id: memories.id });
+    const [updated] = await this.db
+      .update(memories)
+      .set({ deletedAt: new Date() })
+      .where(and(eq(memories.id, id), eq(memories.userId, userId)))
+      .returning({ id: memories.id });
 
-      return Boolean(updated);
-    } catch {
-      return this.fallbackStore.delete(userId, id);
-    }
+    return Boolean(updated);
   }
 
+  /**
+   * Vector search needs a live embedding provider. Without one there is nothing to compare
+   * against, so this returns an empty result rather than scanning the fallback store.
+   */
   async searchSemantic(
     userId: string,
     options: SemanticSearchOptions,
   ): Promise<readonly SemanticSearchResult[]> {
+    if (!this.db) {
+      return this.fallbackStore.searchSemantic(userId, options);
+    }
     if (!this.isSemanticSearchActive()) {
       return [];
     }
-    // Uses fallback store for semantic cosine similarity retrieval when active
     return this.fallbackStore.searchSemantic(userId, options);
   }
 }

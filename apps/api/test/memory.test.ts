@@ -3,15 +3,14 @@ import test from 'node:test';
 import { buildApp } from '../src/app.ts';
 import { InMemoryAuthRepository, createAuthService } from '../src/auth/service.ts';
 import { DrizzleMemoryRepository } from '../src/db/memory-repository.ts';
+import type { Database } from '../src/db/client.ts';
 
 const secret = 'test-secret-at-least-thirty-two-chars-long';
 
 test('Memory API: write policy, creation, correction, deletion, and context assembly', async () => {
   const authRepo = new InMemoryAuthRepository();
   const auth = createAuthService(authRepo, secret);
-  const memoryRepo = new DrizzleMemoryRepository(
-    null as unknown as import('../src/db/client.ts').Database,
-  );
+  const memoryRepo = new DrizzleMemoryRepository(null as unknown as Database);
 
   const user = await auth.register('alice-memory@example.com', 'ValidPassword123!');
   const token = user.accessToken;
@@ -147,4 +146,31 @@ test('Memory API: write policy, creation, correction, deletion, and context asse
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(getDeletedRes.statusCode, 404);
+});
+
+/**
+ * The repository used to wrap every query in `catch {}` and fall back to a per-process store,
+ * so a missing `memories` table produced a 201 and then silently lost the row on restart. The
+ * database error must now propagate instead of being converted into a fake success.
+ */
+test('Memory API: database failures are not silently swallowed by an in-memory fallback', async () => {
+  const brokenDb = {
+    insert: () => {
+      throw new Error('relation "memories" does not exist');
+    },
+  } as unknown as Database;
+
+  const repo = new DrizzleMemoryRepository(brokenDb);
+
+  await assert.rejects(
+    () =>
+      repo.createMemory({
+        userId: 'user-broken-db',
+        content: 'Pengguna lebih suka laporan dalam Bahasa Indonesia.',
+        type: 'preference',
+        scope: 'user',
+        provenance: 'user_explicit',
+      }),
+    /relation "memories" does not exist/,
+  );
 });

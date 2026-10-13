@@ -149,7 +149,9 @@ await modelConfigRepository.upsertModelConfig(
 
 const modelRouter = new ModelRouter(modelConfigRepository, gateway);
 
-// Memory Subsystem with InactiveEmbeddingProvider per docs/assessment.md
+// Durable memory store. Semantic search stays inactive because 9Router exposes no embedding
+// provider (`POST /v1/embeddings` returns "No credentials for provider: openai"), so vectors
+// cannot be generated and `isSemanticSearchActive()` reports false honestly.
 const memoryRepository = new DrizzleMemoryRepository(db, new InactiveEmbeddingProvider());
 
 // Artifacts Subsystem with DiskArtifactStorage and quota

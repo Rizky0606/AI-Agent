@@ -51,16 +51,14 @@ Konsekuensi: **setiap keputusan arsitektur berikutnya tidak boleh dibangun di at
 
 ## 3. Gap per komponen
 
-### 3.1 Memory — fitur hilang, bukan parsial
+### 3.1 Memory — persistensi diperbaiki 2026-10-13; semantik dan retensi masih gap
 
-- Tabel `memories` dideklarasikan di Drizzle (`apps/api/src/db/schema.ts:265`) termasuk `vector('embedding', {dimensions:1536})` (`:279`), tetapi **tidak ada `CREATE TABLE memories`** di `apps/api/src/db/migrations/0000-0006`. `to_regclass('public.memories')` → null.
-- `DrizzleMemoryRepository` membungkus setiap operasi DB dengan `if (!this.db)` + try/catch, sehingga selalu jatuh ke `InMemoryMemoryStore` (`apps/api/src/db/memory-repository.ts:46,69-212`).
-- `searchSemantic` hanya memanggil fallback store (`:203-212`) dan hanya bila `isSemanticSearchActive()`, yang selalu `false` karena `InactiveEmbeddingProvider.isAvailable = false`.
-- `InactiveEmbeddingProvider.embed()` **throw** (`packages/memory/src/store/inactive-embedding-provider.ts:16-18`). Tidak ada call site `.embed(` di `apps/`.
-- Tidak ada index ivfflat/hnsw.
-- Tidak ada sweeper TTL/retention; `retention` hanya field tersimpan.
-- Tidak ada ekstraksi memori otomatis: `apps/agent-worker` tidak mengimpor `@personal-ai-os/memory`. Satu-satunya jalur tulis adalah `POST /v1/memories` dari klien.
-- `GET /v1/memories/search` → `404 Memory not found` (route `apps/api/src/routes/memory.ts:213` mendaftarkan `/:id`, menelan `/search`).
+- **Diperbaiki.** Migrasi `apps/api/src/db/migrations/0007_memories.sql` membuat tabel `memories` (`vector(1536)`, 5 index, 2 check constraint, 2 FK) dan sudah diterapkan di produksi. `DrizzleMemoryRepository` tidak lagi menelan kegagalan DB: seluruh `try/catch` yang jatuh ke `InMemoryMemoryStore` dihapus, dan fallback hanya tersisa untuk `db === null` (seam unit test route). Bukti live: `POST /v1/memories` → 201; `GET /v1/memories` → `count=1`; `docker compose restart api`; `GET /v1/memories` → **`count=1`**. Test regresi: `apps/api/test/memory.test.ts` (gagal bila `catch` dikembalikan).
+- Tabel `artifacts` yang tidak terpakai (tanpa migrasi, tanpa repository, tanpa konsumen) dihapus dari `apps/api/src/db/schema.ts`.
+- **Masih gap.** Tidak ada provider embedding: `POST https://9router.ojixx.my.id/v1/embeddings` → `{"error":{"message":"No credentials for provider: openai"}}`, sehingga `InactiveEmbeddingProvider` tetap dipakai, `isSemanticSearchActive()` tetap `false`, dan tidak ada index ivfflat/hnsw. Kolom `vector(1536)` siap tetapi belum dipakai. `POST /v1/memories/search` menjawab jujur `{"data":[],"semanticSearchActive":false,"status":"inactive"}`.
+- **Masih gap.** Tidak ada sweeper TTL/retention; `retention` hanya field tersimpan yang divalidasi check constraint.
+- **Masih gap.** Tidak ada ekstraksi memori otomatis: `apps/agent-worker` tidak mengimpor `@personal-ai-os/memory`. Satu-satunya jalur tulis adalah `POST /v1/memories` dari klien.
+- `GET /v1/memories/search` → `404`; route `/:id` (`apps/api/src/routes/memory.ts:158`) memang menangkapnya, dan kontrak pencarian yang benar adalah `POST` (`:212`). Bukan cacat.
 
 ### 3.2 Task recovery — bug fungsional
 
@@ -100,18 +98,18 @@ Konsekuensi: **setiap keputusan arsitektur berikutnya tidak boleh dibangun di at
 ### 3.6 Scheduler, event, notifikasi
 
 - Jadwal durable di PostgreSQL (`schedules`, migrasi `0005`), tetapi Map in-memory tetap source-of-truth tick (`apps/scheduler/src/scheduler-engine.ts`); kegagalan write di-swallow.
-- `SchedulerEngine` di API dibuat dengan `SqlScheduleRepository` (`apps/api/src/index.ts:181-183`) tetapi `tick()` tidak pernah dipanggil di API; dispatcher-nya hanya `taskQueue.enqueue` tanpa INSERT ke `tasks` (`:190-191`).
+- `SchedulerEngine` di API dibuat dengan `SqlScheduleRepository` (`apps/api/src/index.ts:183-185`) tetapi `tick()` tidak pernah dipanggil di API; dispatcher-nya hanya `taskQueue.enqueue` tanpa INSERT ke `tasks` (`:192-193`).
 - Idempotency slot = `sched:<jobId>:<ISO>` di Set in-memory + unique index DB hanya di jalur proses scheduler.
 - Ketiga missed-run policy (`skip`/`run_once`/`catch_up`) ada. Timezone hand-rolled via `Intl.DateTimeFormat` (`apps/scheduler/src/cron-parser.ts`), tanpa library cron/tz.
 - EventEngine **tidak bisa** dispatch tanpa PermissionEngine (gate di `apps/scheduler/src/event-engine.ts:137`). Namun tidak ada verifikasi signature, dan `registerRule` tidak pernah dipanggil di produksi.
-- `NotificationEngine` di API dibuat **tanpa storage**: `new NotificationEngine()` (`apps/api/src/index.ts:209`). `SqlNotificationRepository` tidak pernah diinstansiasi.
+- `NotificationEngine` di API dibuat **tanpa storage**: `new NotificationEngine()` (`apps/api/src/index.ts:211`). `SqlNotificationRepository` tidak pernah diinstansiasi.
 - `notifications` = **0 baris** di produksi. Tidak ada jembatan task-event → notification di kode produksi.
 - Retry notifikasi 3× sinkron; habis → state `failed` tanpa dead-letter.
 - `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` hardcoded ketika kredensial ada → akan selalu 401. Tanpa kredensial → `DisabledFcmProvider` dengan log jujur.
 
 ### 3.7 Artifact dan skills
 
-- Tabel `artifacts` (`apps/api/src/db/schema.ts:293-323`) **tanpa migrasi** dan tanpa repository. Schema mati. Artifact sebenarnya disimpan di disk.
+- Tabel `artifacts` (dulu `apps/api/src/db/schema.ts:293-323`) **tanpa migrasi** dan tanpa repository; **sudah dihapus dari schema pada 2026-10-13**. Artifact sebenarnya selalu disimpan di disk.
 - Upload tidak streaming: `POST /v1/artifacts` menerima `content: string` JSON (`apps/api/src/routes/artifacts.ts:44-63`); batas efektif = `bodyLimit` Fastify default 1 MiB (`apps/api/src/app.ts:145-159`), bukan 25 MB.
 - `getArtifactStream` ada tetapi tidak dipakai route.
 - MIME berdasarkan deklarasi klien (allowlist string), tanpa magic bytes.
