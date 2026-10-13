@@ -45,6 +45,16 @@ export interface DeviceCommandResult {
     | undefined;
 }
 
+export class DeviceOfflineError extends Error {
+  readonly deviceId: string;
+
+  constructor(deviceId: string, detail = 'offline or unreachable') {
+    super(`Device "${deviceId}" is ${detail}`);
+    this.name = 'DeviceOfflineError';
+    this.deviceId = deviceId;
+  }
+}
+
 export class DeviceConnectionManager {
   private readonly sessions = new Map<string, ConnectedDeviceSession>();
   private readonly emitter = new EventEmitter();
@@ -99,13 +109,18 @@ export class DeviceConnectionManager {
     return this.sessions.has(deviceId);
   }
 
-  hasOnlineDeviceForUser(userId: string, platform = 'windows'): boolean {
+  /**
+   * Device ids currently connected for the user. The dispatch path is the only thing that can
+   * reach a socket, so presence has to be answered here rather than from the devices table.
+   */
+  listOnlineDeviceIds(userId: string, platform?: string | undefined): string[] {
+    const ids: string[] = [];
     for (const session of this.sessions.values()) {
-      if (session.userId === userId && session.platform === platform) {
-        return true;
-      }
+      if (session.userId !== userId) continue;
+      if (platform !== undefined && session.platform !== platform) continue;
+      ids.push(session.deviceId);
     }
-    return false;
+    return ids;
   }
 
   getOnlineDevices(userId: string): Array<{
@@ -151,14 +166,20 @@ export class DeviceConnectionManager {
     }
   }
 
+  /**
+   * Sends `command.execute` over the device's WSS session and resolves with what the device
+   * reports back. A device owned by somebody else is reported exactly like an absent one, so the
+   * caller cannot use this endpoint to probe which device ids exist.
+   */
   async dispatchCommand(
     deviceId: string,
     command: DeviceCommandPayload,
-    timeoutMs = 60_000,
+    options?: { userId?: string | undefined; timeoutMs?: number | undefined },
   ): Promise<DeviceCommandResult> {
+    const timeoutMs = options?.timeoutMs ?? 60_000;
     const session = this.sessions.get(deviceId);
-    if (!session) {
-      throw new Error(`Device "${deviceId}" is offline or unreachable`);
+    if (!session || (options?.userId !== undefined && session.userId !== options.userId)) {
+      throw new DeviceOfflineError(deviceId);
     }
 
     const payload = {

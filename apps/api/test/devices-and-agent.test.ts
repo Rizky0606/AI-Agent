@@ -14,14 +14,9 @@ test('Devices & Agent WSS: registration, online status, heartbeat, and offline t
   const user = await auth.register('windows-user@example.com', 'ValidPassword123!');
   const token = user.accessToken;
 
-  let lastSeenUpdated = false;
-
   const app = await buildApp({
     auth,
     deviceManager,
-    updateDeviceLastSeen: async () => {
-      lastSeenUpdated = true;
-    },
     listDevices: async () => [
       { id: 'win-dev-99', name: 'Workstation 99', platform: 'windows', lastSeenAt: new Date() },
     ],
@@ -64,7 +59,7 @@ test('Devices & Agent WSS: registration, online status, heartbeat, and offline t
 
     // Device should now be marked online
     assert.equal(deviceManager.isDeviceOnline('win-dev-99'), true);
-    assert.equal(deviceManager.hasOnlineDeviceForUser(user.user.id, 'windows'), true);
+    assert.deepEqual(deviceManager.listOnlineDeviceIds(user.user.id, 'windows'), ['win-dev-99']);
 
     // Check GET /v1/devices reflects online status
     const listRes2 = await app.inject({
@@ -75,19 +70,27 @@ test('Devices & Agent WSS: registration, online status, heartbeat, and offline t
     const body2 = listRes2.json();
     assert.equal(body2.devices[0].isOnline, true);
 
+    const frames: Array<Record<string, unknown>> = [];
+    ws.onmessage = (event) => {
+      frames.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+    };
+
     // 3. Handshake & Heartbeat
     ws.send(JSON.stringify({ type: 'device.handshake', deviceId: 'win-dev-99' }));
     ws.send(JSON.stringify({ type: 'pong' }));
 
     await new Promise((r) => setTimeout(r, 40));
-    assert.equal(lastSeenUpdated, true);
+    assert.ok(
+      frames.some((f) => f['type'] === 'device.handshake_ack' && f['deviceId'] === 'win-dev-99'),
+      'the agent must receive a handshake acknowledgement for its own device id',
+    );
 
     // 4. Disconnect WSS -> device transitions to offline
     ws.close();
     await new Promise((r) => setTimeout(r, 60));
 
     assert.equal(deviceManager.isDeviceOnline('win-dev-99'), false);
-    assert.equal(deviceManager.hasOnlineDeviceForUser(user.user.id, 'windows'), false);
+    assert.deepEqual(deviceManager.listOnlineDeviceIds(user.user.id, 'windows'), []);
 
     const listRes3 = await app.inject({
       method: 'GET',

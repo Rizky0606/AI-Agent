@@ -5,5 +5,8 @@
 
 :80 {
   encode gzip
+  # Service-to-service routes: reachable only from the internal Docker network.
+  @internal path /v1/internal/*
+  respond @internal 404
   reverse_proxy api:3000
 }

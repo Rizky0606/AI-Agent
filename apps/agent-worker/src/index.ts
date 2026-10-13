@@ -33,8 +33,10 @@ import {
   StdioMcpServerAdapter,
 } from '@personal-ai-os/mcp';
 import { PlaywrightRunner } from './browser/playwright-runner.ts';
+import { HttpDeviceDispatcher } from './device-dispatcher.ts';
 
 export * from './task-executor.ts';
+export * from './device-dispatcher.ts';
 
 export interface WorkerConfig {
   redisUrl?: string | undefined;
@@ -207,6 +209,17 @@ export const startWorkerProcess = async (): Promise<{
   });
   const mcpAdapters = await registerMcpServers(mcpHub, registry);
 
+  // The Windows agent dials the API, so the worker reaches a device through the API's internal
+  // routes. Without the shared service token the dispatcher stays unset and device tasks fail
+  // closed instead of pretending a command ran.
+  const internalToken = process.env.RUNTIME_BRIDGE_TOKEN;
+  const deviceDispatcher = internalToken
+    ? new HttpDeviceDispatcher({
+        baseUrl: process.env.API_INTERNAL_URL ?? 'http://api:3000',
+        token: internalToken,
+      })
+    : undefined;
+
   const workerHandle = createAgentWorker({
     redisUrl,
     concurrency: workerConcurrency,
@@ -220,6 +233,7 @@ export const startWorkerProcess = async (): Promise<{
       preferredRuntimeId: runtimePreferred,
       guard,
       registry,
+      deviceDispatcher,
     },
   });
 

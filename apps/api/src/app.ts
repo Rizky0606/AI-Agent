@@ -22,6 +22,7 @@ import { registerEventsWsRoute } from './routes/events-ws.ts';
 import { registerApprovalRoutes } from './routes/approvals.ts';
 import type { DeviceConnectionManager } from './services/device-connection-manager.ts';
 import { registerAgentWsRoute } from './routes/agent-ws.ts';
+import { registerDeviceCommandRoutes } from './routes/device-commands.ts';
 import type { MemoryRepository } from './db/memory-repository.ts';
 import { registerMemoryRoutes } from './routes/memory.ts';
 import type { ArtifactManager } from '@personal-ai-os/tools';
@@ -35,6 +36,12 @@ export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
   deviceManager?: DeviceConnectionManager | undefined;
+  /**
+   * Shared service token for `/v1/internal/*`. The worker dispatches device commands through
+   * those routes because the device sockets only exist in this process. Unset means the routes
+   * are not mounted at all, so dispatch fails closed instead of running unauthenticated.
+   */
+  internalBridgeToken?: string | undefined;
   listDevices?:
     | ((userId: string) => Promise<
         Array<{
@@ -46,7 +53,6 @@ export type AppDependencies = {
         }>
       >)
     | undefined;
-  updateDeviceLastSeen?: ((deviceId: string) => Promise<void>) | undefined;
   registerDevice?: (
     userId: string,
     input: { name: string; platform: string },
@@ -360,24 +366,30 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
 
   app.get('/v1/devices', async (request, reply) => {
     const user = await userFromRequest(request, dependencies.auth);
-    if (!dependencies.listDevices) {
-      const onlineDevices = dependencies.deviceManager?.getOnlineDevices(user.id) ?? [];
-      return reply.send({ devices: onlineDevices });
-    }
-    const dbDevices = await dependencies.listDevices(user.id);
-    const enriched = dbDevices.map((d) => ({
-      ...d,
-      isOnline: dependencies.deviceManager?.isDeviceOnline(d.id) ?? false,
-    }));
-    return reply.send({ devices: enriched });
+    const online = dependencies.deviceManager?.getOnlineDevices(user.id) ?? [];
+    const known = new Set(online.map((device) => device.deviceId));
+    // A connected agent may have no row in `devices` at all, so report both sources instead of
+    // hiding live devices that were never registered over REST.
+    const registered = (await dependencies.listDevices?.(user.id)) ?? [];
+    const offline = registered
+      .filter((device) => !known.has(device.id))
+      .map((device) => ({ ...device, isOnline: false }));
+    return reply.send({
+      devices: [...online.map((device) => ({ ...device, isOnline: true })), ...offline],
+    });
   });
 
   if (dependencies.deviceManager) {
     registerAgentWsRoute(app, {
       auth: dependencies.auth,
       deviceManager: dependencies.deviceManager,
-      updateDeviceLastSeen: dependencies.updateDeviceLastSeen,
     });
+    if (dependencies.internalBridgeToken) {
+      registerDeviceCommandRoutes(app, {
+        deviceManager: dependencies.deviceManager,
+        token: dependencies.internalBridgeToken,
+      });
+    }
   }
   if (dependencies.models) {
     registerModelRoutes(app, { ...dependencies.models, auth: dependencies.auth });

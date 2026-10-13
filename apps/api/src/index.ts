@@ -222,8 +222,8 @@ const app = await buildApp({
     redis: async () => (await redis.ping()) === 'PONG',
   },
   deviceManager,
+  internalBridgeToken: process.env.RUNTIME_BRIDGE_TOKEN,
   listDevices: (userId) => deviceRepository.listByUser(userId),
-  updateDeviceLastSeen: (deviceId) => deviceRepository.updateLastSeen(deviceId),
   registerDevice: (userId, input) => deviceRepository.create(userId, input),
   chat: {
     chatRepo: chatRepository,

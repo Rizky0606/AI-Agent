@@ -203,13 +203,16 @@ test('Recovery Drill 2: Windows agent disconnection fails fast with actionable r
   };
 
   let isWindowsOnline = false;
-  const mockDeviceManager = {
-    hasOnlineDeviceForUser: (_userId: string, platform?: string) =>
-      platform === 'windows' ? isWindowsOnline : true,
+  const deviceDispatcher = {
+    listOnlineDevices: async (_userId: string, platform: string): Promise<string[]> =>
+      platform === 'windows' && isWindowsOnline ? ['win-drill-2'] : [],
+    dispatchCommand: async (): Promise<never> => {
+      throw new Error('this task carries no payload.command, so no dispatch is expected');
+    },
   };
 
   const executor = new TaskExecutor(repo, broadcaster, {
-    deviceManager: mockDeviceManager,
+    deviceDispatcher,
   });
 
   const { task } = await repo.createTask({

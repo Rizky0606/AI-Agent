@@ -6,7 +6,7 @@ import { DeviceIdentityManager } from '../src/connection/device-identity.ts';
 import { CapabilityRegistry } from '../src/security/capability-registry.ts';
 import { PathValidator } from '../src/security/path-validator.ts';
 import { CommandExecutor } from '../src/security/command-executor.ts';
-import { DeviceConnectionManager } from '../../api/src/services/device-connection-manager.ts';
+import type { DeviceCommandResult } from '../../api/src/services/device-connection-manager.ts';
 import { TaskExecutor } from '../../agent-worker/src/task-executor.ts';
 import type { TaskEventEnvelope, TaskModel, TaskRepository } from '@personal-ai-os/shared';
 
@@ -150,10 +150,14 @@ test('AgentConnection: Reconnects upon unexpected socket termination', async () 
 });
 
 test('Offline behavior: Task requiring Windows fails explicitly when agent is offline', async () => {
-  const deviceManager = new DeviceConnectionManager();
-
-  // No devices connected for user 'user-alice'
-  assert.equal(deviceManager.hasOnlineDeviceForUser('user-alice', 'windows'), false);
+  // Presence is answered by the API, which owns the agent sockets. Nothing is connected here, so
+  // the executor must refuse to dispatch at all.
+  const dispatcher = {
+    listOnlineDevices: async (): Promise<string[]> => [],
+    dispatchCommand: async (): Promise<DeviceCommandResult> => {
+      throw new Error('dispatch must not be attempted while the device is offline');
+    },
+  };
 
   const events: TaskEventEnvelope[] = [];
   const fakeBroadcaster = {
@@ -211,7 +215,7 @@ test('Offline behavior: Task requiring Windows fails explicitly when agent is of
   };
 
   const executor = new TaskExecutor(mockTaskRepo as TaskRepository, fakeBroadcaster, {
-    deviceManager,
+    deviceDispatcher: dispatcher,
   });
 
   await executor.execute({

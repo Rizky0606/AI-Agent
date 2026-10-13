@@ -18,6 +18,10 @@ services:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.api
     env_file: .env
+    environment:
+      # Shared service token for the worker's device-dispatch calls to /v1/internal/*. Left
+      # optional: without it the API simply does not mount those routes and dispatch fails closed.
+      RUNTIME_BRIDGE_TOKEN: ${RUNTIME_BRIDGE_TOKEN:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -62,6 +66,8 @@ services:
     environment:
       RUNTIME_BRIDGE_URL: ${RUNTIME_BRIDGE_URL:-http://host.docker.internal:9120}
       RUNTIME_BRIDGE_TOKEN: ${RUNTIME_BRIDGE_TOKEN:?RUNTIME_BRIDGE_TOKEN is required}
+      # Device commands are dispatched by the API, which owns the Windows agent WSS sessions.
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:3000}
       ARTIFACTS_DIR: /app/data/artifacts
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       # Per-task coding workspaces: real git repos the agent runs lint/typecheck/test/build in.

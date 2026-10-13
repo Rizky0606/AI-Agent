@@ -113,7 +113,6 @@ test('Integration: All modules mounted in buildApp are registered and 401-protec
     },
     deviceManager,
     listDevices: async () => registeredDevices.map((d) => ({ ...d, isOnline: true })),
-    updateDeviceLastSeen: async () => {},
     registerDevice: async (_userId, input) => {
       const dev = { id: 'dev-1', name: input.name, platform: input.platform };
       registeredDevices.push(dev);

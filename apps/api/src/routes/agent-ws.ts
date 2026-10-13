@@ -5,7 +5,6 @@ import type { DeviceConnectionManager } from '../services/device-connection-mana
 export interface AgentWsRouteOptions {
   auth: AuthService;
   deviceManager: DeviceConnectionManager;
-  updateDeviceLastSeen?: ((deviceId: string) => Promise<void>) | undefined;
 }
 
 export const registerAgentWsRoute = (app: FastifyInstance, options: AgentWsRouteOptions): void => {
@@ -42,10 +41,6 @@ export const registerAgentWsRoute = (app: FastifyInstance, options: AgentWsRoute
 
     // Register active device connection
     options.deviceManager.registerConnection(deviceId, user.id, platform, socket);
-    if (options.updateDeviceLastSeen) {
-      void options.updateDeviceLastSeen(deviceId);
-    }
-
     // Heartbeat ping interval from server side
     const pingTimer = setInterval(() => {
       try {
@@ -65,9 +60,6 @@ export const registerAgentWsRoute = (app: FastifyInstance, options: AgentWsRoute
         switch (frame.type) {
           case 'pong':
             options.deviceManager.updateHeartbeat(deviceId);
-            if (options.updateDeviceLastSeen) {
-              void options.updateDeviceLastSeen(deviceId);
-            }
             break;
 
           case 'ping':
@@ -103,9 +95,6 @@ export const registerAgentWsRoute = (app: FastifyInstance, options: AgentWsRoute
     socket.on('close', () => {
       clearInterval(pingTimer);
       options.deviceManager.unregisterConnection(deviceId);
-      if (options.updateDeviceLastSeen) {
-        void options.updateDeviceLastSeen(deviceId);
-      }
     });
 
     socket.on('error', () => {

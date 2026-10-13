@@ -33,8 +33,4 @@ export class SqlDeviceRepository {
       .from(devices)
       .where(eq(devices.userId, userId));
   }
-
-  async updateLastSeen(deviceId: string): Promise<void> {
-    await this.db.update(devices).set({ lastSeenAt: new Date() }).where(eq(devices.id, deviceId));
-  }
 }

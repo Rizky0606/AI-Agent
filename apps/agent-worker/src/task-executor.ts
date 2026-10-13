@@ -1,5 +1,6 @@
 import {
   ApprovalRequiredError,
+  InvalidApprovalError,
   PermissionDeniedError,
   type RiskLevel,
   SecuredCapabilityGuard,
@@ -40,6 +41,8 @@ import {
 } from '@personal-ai-os/agent-core';
 import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import type { ToolRegistry } from '@personal-ai-os/tools';
+import { DeviceOfflineError, type DeviceCommandResult } from '@personal-ai-os/api/services';
+import type { DeviceDispatcher } from './device-dispatcher.ts';
 
 export const PLACEHOLDER_WORKER_LABEL =
   '[PLACEHOLDER_GENERIC_WORKER] Eksekusi simulasi langkah task untuk fondasi runtime. Belum memanggil tool sistem sesungguhnya.';
@@ -79,8 +82,8 @@ export interface ApprovalCreatorParams {
 export interface TaskExecutorOptions {
   guard?: SecuredCapabilityGuard | undefined;
   approvalCreator?: ((params: ApprovalCreatorParams) => Promise<{ id: string }>) | undefined;
-  deviceManager?:
-    { hasOnlineDeviceForUser: (userId: string, platform?: string) => boolean } | undefined;
+  /** Presence and command dispatch for the user's devices, routed through the API. */
+  deviceDispatcher?: DeviceDispatcher | undefined;
   registry?: ToolRegistry | undefined;
   analyzer?: IntentAnalyzer | undefined;
   planner?: Planner | undefined;
@@ -101,8 +104,7 @@ export class TaskExecutor {
   private readonly guard?: SecuredCapabilityGuard | undefined;
   private readonly approvalCreator?:
     ((params: ApprovalCreatorParams) => Promise<{ id: string }>) | undefined;
-  private readonly deviceManager?:
-    { hasOnlineDeviceForUser: (userId: string, platform?: string) => boolean } | undefined;
+  private readonly deviceDispatcher?: DeviceDispatcher | undefined;
   private readonly registry?: ToolRegistry | undefined;
   private readonly analyzer: IntentAnalyzer;
   private readonly planner: Planner;
@@ -124,7 +126,7 @@ export class TaskExecutor {
     this.broadcaster = broadcaster;
     this.guard = options?.guard;
     this.approvalCreator = options?.approvalCreator;
-    this.deviceManager = options?.deviceManager;
+    this.deviceDispatcher = options?.deviceDispatcher;
     this.registry = options?.registry;
 
     this.analyzer = options?.analyzer ?? new IntentAnalyzer();
@@ -162,17 +164,39 @@ export class TaskExecutor {
       return;
     }
 
-    // Check offline Windows agent constraint
+    // A task that targets a device must reach a real one. Presence is asked of the API, which
+    // owns the Windows agent sessions; when nothing is connected the task fails transparently
+    // instead of being reported as work the device never performed.
+    const targetDevice =
+      typeof task.payload?.['targetDevice'] === 'string' ? task.payload['targetDevice'] : undefined;
     const isWindowsTarget =
+      targetDevice !== undefined ||
       task.payload?.['target'] === 'windows' ||
       task.payload?.['platform'] === 'windows' ||
       task.kind.startsWith('windows');
 
+    const onlineDeviceIds = isWindowsTarget
+      ? ((await this.deviceDispatcher?.listOnlineDevices(task.userId, 'windows')) ?? [])
+      : [];
+
     if (isWindowsTarget) {
-      const isOnline = this.deviceManager?.hasOnlineDeviceForUser(task.userId, 'windows') ?? false;
+      const isOnline =
+        targetDevice === undefined
+          ? onlineDeviceIds.length > 0
+          : onlineDeviceIds.includes(targetDevice);
       if (!isOnline) {
         const reason =
-          'Windows Agent sedang offline: tidak ada perangkat Windows yang terhubung untuk menjalankan task ini.';
+          targetDevice === undefined
+            ? 'Windows Agent sedang offline: tidak ada perangkat Windows yang terhubung untuk menjalankan task ini.'
+            : `Windows Agent "${targetDevice}" sedang offline: perangkat tidak terhubung untuk menjalankan task ini.`;
+        // A task straight out of the queue is not allowed to jump to `failed`, so record the
+        // planning step first. Without it the transition throws and the task stays `queued`
+        // forever with no visible error.
+        if (task.status === 'queued') {
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'planning', {
+            attempt: task.attempt + 1,
+          });
+        }
         await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
           error: reason,
         });
@@ -180,6 +204,7 @@ export class TaskExecutor {
           error: reason,
           offlineReason: 'device_unreachable',
           platform: 'windows',
+          ...(targetDevice === undefined ? {} : { deviceId: targetDevice }),
           retryable: true,
         });
         this.broadcaster.publish(failEvent);
@@ -219,8 +244,7 @@ export class TaskExecutor {
         const routeResult = await this.router.routeWithHealth(prompt, {
           userId: task.userId,
           mode,
-          isWindowsOnline:
-            this.deviceManager?.hasOnlineDeviceForUser(task.userId, 'windows') ?? false,
+          isWindowsOnline: isWindowsTarget ? onlineDeviceIds.length > 0 : undefined,
           preferredRuntimeId: (task.payload?.runtime as string) ?? this.preferredRuntimeId,
         });
         selectedRuntimeId = routeResult.route.selectedRuntimeId;
@@ -273,6 +297,14 @@ export class TaskExecutor {
 
       if (task.payload?.useRuntime === true) {
         await this.executeRuntimeTrack(task, prompt, selectedRuntimeId ?? (task.payload?.runtime as string) ?? this.preferredRuntimeId, span);
+        return;
+      }
+
+      // ========================================================
+      // PATH D: WINDOWS DEVICE DISPATCH
+      // ========================================================
+      if (targetDevice !== undefined) {
+        await this.executeDeviceTrack(task, targetDevice, startStep, currentCheckpointVersion, span);
         return;
       }
 
@@ -622,6 +654,264 @@ export class TaskExecutor {
       this.broadcaster.publish(completeEvent);
       defaultTracer.endSpan(span, { status: 'ok' });
     }
+  }
+
+  // =========================================================================
+  // DEVICE TRACK (Windows agent)
+  // =========================================================================
+  /**
+   * Dispatches one command to a connected device and records what it actually returned.
+   *
+   * The device's exit code is the verdict — there is no evaluator step to soften it. A non-zero
+   * exit, a transport error, or a device that never answered all fail the task; nothing is
+   * reported as completed that the device did not do. The command is HIGH risk, so it only runs
+   * once the user has approved that exact command (the approval fingerprint covers the command
+   * text and the target device).
+   */
+  private async executeDeviceTrack(
+    task: TaskRecord,
+    targetDevice: string,
+    startStep: number,
+    currentCheckpointVersion: number,
+    span: TelemetrySpan,
+  ): Promise<void> {
+    if (await this.isHalted(task.userId, task.id)) return;
+
+    const command =
+      typeof task.payload?.['command'] === 'string' ? task.payload['command'] : undefined;
+    if (!command) {
+      const reason =
+        'Task perangkat memerlukan payload.command berisi perintah yang akan dijalankan.';
+      await this.failDeviceTask(task, reason, { retryable: false });
+      return;
+    }
+
+    if (startStep <= 1) {
+      currentCheckpointVersion++;
+      const cp1 = createVersionedCheckpoint({
+        version: currentCheckpointVersion,
+        stepIndex: 1,
+        totalSteps: 3,
+        lastExecutedAction: 'device_plan',
+        actionType: 'internal',
+        verified: true,
+      });
+      await this.taskRepo.updateTaskProgress(task.userId, task.id, 25, cp1);
+
+      const progEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+        progress: 25,
+        step: 1,
+        action: 'device_plan',
+        deviceId: targetDevice,
+      });
+      this.broadcaster.publish(progEvent);
+    }
+
+    const approvedApprovalId =
+      typeof task.checkpoint?.actionState?.approvalId === 'string'
+        ? task.checkpoint.actionState.approvalId
+        : typeof task.payload?.['approvalId'] === 'string'
+          ? task.payload['approvalId']
+          : undefined;
+    // An approved device command is replayed on resume: the approval route rewrites the
+    // checkpoint to step 3, so a step-number check alone would silently skip the dispatch.
+    const isApprovedResume =
+      task.checkpoint?.actionState?.approved === true && approvedApprovalId !== undefined;
+    if (startStep > 2 && !isApprovedResume) return;
+
+    const dispatcher = this.deviceDispatcher;
+    const guard = this.guard;
+    if (!dispatcher || !guard) {
+      await this.failDeviceTask(
+        task,
+        'Dispatch perangkat tidak tersedia: worker tidak dikonfigurasi dengan DeviceDispatcher dan SecuredCapabilityGuard.',
+        { retryable: false },
+      );
+      return;
+    }
+
+    const timeoutMs =
+      typeof task.payload?.['timeoutMs'] === 'number' ? task.payload['timeoutMs'] : undefined;
+    const deviceCommand = {
+      userId: task.userId,
+      deviceId: targetDevice,
+      command,
+      capability: typeof task.payload?.['capability'] === 'string' ? task.payload['capability'] : undefined,
+      action: typeof task.payload?.['action'] === 'string' ? task.payload['action'] : undefined,
+      cwd: typeof task.payload?.['cwd'] === 'string' ? task.payload['cwd'] : undefined,
+      timeoutMs,
+    };
+
+    let result: DeviceCommandResult;
+    try {
+      result = await guard.executeProtected(
+        {
+          actor: { id: task.userId, role: 'user' },
+          action: 'device:command',
+          resource: targetDevice,
+          scope: 'device',
+          traceId: task.id,
+          // Part of the approval fingerprint: approving one command must not approve another.
+          context: { deviceId: targetDevice, command, taskId: task.id, platform: 'windows' },
+        },
+        async () => dispatcher.dispatchCommand(deviceCommand),
+        { approvalId: approvedApprovalId },
+      );
+    } catch (err) {
+      if (err instanceof ApprovalRequiredError) {
+        const created = this.approvalCreator
+          ? await this.approvalCreator({
+              userId: task.userId,
+              taskId: task.id,
+              projectId: task.projectId,
+              action: err.requiredApproval.action,
+              resource: err.requiredApproval.resource,
+              scope: err.requiredApproval.scope,
+              riskLevel: err.requiredApproval.riskLevel,
+              consequence: err.requiredApproval.consequence,
+              fingerprint: err.requiredApproval.fingerprint,
+              expiresInSeconds: 3600,
+            })
+          : { id: 'appr-pending' };
+
+        currentCheckpointVersion++;
+        const cpWait = createVersionedCheckpoint({
+          version: currentCheckpointVersion,
+          stepIndex: 2,
+          totalSteps: 3,
+          lastExecutedAction: 'waiting_approval',
+          actionType: 'approval',
+          actionState: { approvalId: created.id, action: err.requiredApproval.action },
+          verified: true,
+        });
+        await this.taskRepo.updateTaskProgress(task.userId, task.id, 50, cpWait);
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'waiting_approval');
+
+        const approvalEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.waiting_approval',
+          {
+            approvalId: created.id,
+            action: err.requiredApproval.action,
+            riskLevel: err.requiredApproval.riskLevel,
+            consequence: err.requiredApproval.consequence,
+            fingerprint: err.requiredApproval.fingerprint,
+            deviceId: targetDevice,
+          },
+        );
+        this.broadcaster.publish(approvalEvent);
+        return;
+      }
+
+      if (err instanceof DeviceOfflineError) {
+        await this.failDeviceTask(
+          task,
+          `Windows Agent "${targetDevice}" tidak terhubung saat perintah dikirim.`,
+          { retryable: true, offlineReason: 'device_unreachable', deviceId: targetDevice },
+        );
+        return;
+      }
+
+      // An approval is bound to the exact command it was granted for, so a mismatch, a reused
+      // approval, or a denial all mean this command was never authorised. Say so instead of
+      // blaming the device.
+      if (err instanceof InvalidApprovalError || err instanceof PermissionDeniedError) {
+        await this.failDeviceTask(task, `Perintah perangkat tidak diotorisasi: ${err.message}`, {
+          retryable: false,
+          deviceId: targetDevice,
+        });
+        return;
+      }
+
+      const message = err instanceof Error ? err.message : String(err);
+      await this.failDeviceTask(task, `Perintah ke perangkat gagal: ${message}`, {
+        retryable: false,
+        deviceId: targetDevice,
+      });
+      return;
+    }
+
+    const artifact = {
+      id: `artifact-device-${task.id}`,
+      type: 'device_command_output',
+      title: `Output perintah Windows (${targetDevice})`,
+      content: JSON.stringify(
+        {
+          deviceId: targetDevice,
+          command,
+          exitCode: result.result?.exitCode ?? null,
+          stdout: result.result?.stdout ?? '',
+          stderr: result.result?.stderr ?? '',
+          truncated: result.result?.truncated ?? false,
+          durationMs: result.result?.durationMs ?? null,
+          error: result.error ?? null,
+        },
+        null,
+        2,
+      ),
+    };
+
+    if (!result.success) {
+      const detail =
+        result.error?.message ??
+        `exit code ${result.result?.exitCode ?? 'tidak diketahui'}` +
+          (result.result?.stderr ? `: ${result.result.stderr.trim()}` : '');
+      await this.failDeviceTask(task, `Perintah pada perangkat gagal (${detail}).`, {
+        retryable: false,
+        deviceId: targetDevice,
+        artifacts: [artifact],
+        commandResult: result.result ?? result.error,
+      });
+      return;
+    }
+
+    currentCheckpointVersion++;
+    const cpComplete = createVersionedCheckpoint({
+      version: currentCheckpointVersion,
+      stepIndex: 3,
+      totalSteps: 3,
+      lastExecutedAction: 'complete_task',
+      actionType: 'internal',
+      verified: true,
+    });
+    await this.taskRepo.updateTaskProgress(task.userId, task.id, 100, cpComplete);
+    await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed', {
+      artifacts: [artifact],
+    });
+
+    const completeEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', {
+      result: `Perintah dijalankan pada perangkat ${targetDevice} dengan exit code ${result.result?.exitCode ?? 0}.`,
+      deviceId: targetDevice,
+      command,
+      exitCode: result.result?.exitCode ?? 0,
+      artifacts: [artifact],
+    });
+    this.broadcaster.publish(completeEvent);
+    defaultTracer.endSpan(span, { status: 'ok' });
+  }
+
+  private async failDeviceTask(
+    task: TaskRecord,
+    reason: string,
+    options: {
+      retryable: boolean;
+      offlineReason?: string | undefined;
+      deviceId?: string | undefined;
+      artifacts?: Array<{ id: string; type: string; title: string; content: string }> | undefined;
+      commandResult?: unknown;
+    },
+  ): Promise<void> {
+    await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', { error: reason });
+    const failEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.failed', {
+      error: reason,
+      retryable: options.retryable,
+      ...(options.offlineReason === undefined ? {} : { offlineReason: options.offlineReason }),
+      ...(options.deviceId === undefined ? {} : { deviceId: options.deviceId }),
+      ...(options.artifacts === undefined ? {} : { artifacts: options.artifacts }),
+      ...(options.commandResult === undefined ? {} : { commandResult: options.commandResult }),
+    });
+    this.broadcaster.publish(failEvent);
   }
 
   private async executeRegisteredTool(task: TaskRecord, toolName: string, approvalId: string | undefined, span: TelemetrySpan): Promise<void> {

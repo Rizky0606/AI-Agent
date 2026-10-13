@@ -120,6 +120,16 @@ const DEFAULT_ACTION_RULES: ActionRule[] = [
       'Menjalankan interaksi formulir sensitif, login kredensial, atau unduhan file eksternal dari web.',
     allowWithoutApproval: false,
   },
+  // The Windows agent gates capability/action/cwd but has no command-text allowlist, so the
+  // command string a task carries is arbitrary. Approval is the compensating control: every
+  // dispatch to a user device needs an explicit human decision.
+  {
+    pattern: /^device:(command|script|exec)/i,
+    baseRisk: 'HIGH',
+    consequence:
+      'Menjalankan perintah pada perangkat pengguna melalui Windows Agent, di luar sandbox server.',
+    allowWithoutApproval: false,
+  },
 
   // CRITICAL: Destructive operations, drop database, system modification
   {
