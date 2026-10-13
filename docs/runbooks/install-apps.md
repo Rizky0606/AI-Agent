@@ -2,16 +2,16 @@
 
 ## Build installers
 
-GitHub Actions → **Build installable apps** → **Run workflow**. Workflow requires repository secret `EXPO_TOKEN` from an authorized Expo account. Android job builds a preview APK using EAS; Windows job builds a self-signed NSIS installer. Download artifacts from the completed Actions run:
+GitHub Actions → **Build installable apps** → **Run workflow**. Both jobs build from source with no repository secret: Android runs `expo prebuild` plus `gradlew assembleRelease` on `ubuntu-latest`, Windows runs `tauri build --bundles nsis` on `windows-latest`. Download artifacts from the completed Actions run:
 
 - `personal-ai-os-android-apk` → `personal-ai-os.apk`
 - `personal-ai-os-windows-installer` → `.exe`
 
-No installer is committed to the repository. No signing secret is required. Windows may show SmartScreen warnings because the installer is not signed by a trusted code-signing certificate.
+No installer is committed to the repository. No signing secret is required. Windows may show SmartScreen warnings because the installer is not signed by a trusted code-signing certificate, and the APK carries the debug keystore.
 
 ### Building without GitHub Actions
 
-Both installers can also be produced from the repository checkout, which avoids the `EXPO_TOKEN` secret and the `windows-latest` runner.
+Both installers can also be produced from the repository checkout, which avoids the `windows-latest` runner and lets an aarch64 host do the work.
 
 Windows NSIS installer, cross-built from Linux aarch64 (no Windows host required):
 
@@ -31,18 +31,22 @@ Android APK:
 cd apps/android
 npx expo prebuild --platform android --no-install
 cd android
+rm -rf /tmp/metro-cache /tmp/metro-file-map-*
 EXPO_PUBLIC_API_URL=https://ai.ojixx.my.id EXPO_PUBLIC_WS_URL=wss://ai.ojixx.my.id \
   ANDROID_HOME=<sdk> JAVA_HOME=<jdk17> \
   ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
 ```
 
+The environment values may also live in `apps/android/.env` (gitignored; `.env.example` documents the keys), which is what `@expo/cli export:embed` reads.
+
 Output: `apps/android/android/app/build/outputs/apk/release/app-release.apk`.
 
-Three things the local path needs that EAS handles for you:
+Four things the local path needs spelled out:
 
 - `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_WS_URL` are inlined at bundle time. Without them the APK falls back to `http://10.0.2.2:3000` (`apps/android/src/api/config.ts`), which only works on an emulator host.
+- Metro caches the transformed module, so the inlined literal is frozen at the value present when the cache entry was created. Changing `.env` and rebuilding without clearing `/tmp/metro-cache` silently ships the old URL. `rm -rf /tmp/metro-cache /tmp/metro-file-map-*` is required whenever these values change. Confirm the result with `unzip -p app-release.apk assets/index.android.bundle | grep -oE "https://[^\"']+|10\.0\.2\.2:3000" | sort -u`.
 - `-PreactNativeArchitectures=arm64-v8a` builds one ABI. The default is all four, which is slow enough to matter.
-- The release variant is signed with the generated debug keystore (`apps/android/android/app/build.gradle`), so it installs for sideloading but carries no release identity. EAS supplies a real credential.
+- The release variant is signed with the generated debug keystore (`apps/android/android/app/build.gradle`), so it installs for sideloading but carries no release identity. Producing a release-signed APK requires creating a keystore and wiring a `release` signing config.
 
 On an ARM64 host the Android build-tools `aapt2` and the NDK's `clang++` are x86-64 binaries, so they need `binfmt_misc` with `qemu-x86_64-static` plus the amd64 loader (`libc6:amd64`); install both before running Gradle. `apps/android/android/` is generated output and is not committed.
 
