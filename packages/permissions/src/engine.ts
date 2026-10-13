@@ -79,6 +79,14 @@ const DEFAULT_ACTION_RULES: ActionRule[] = [
     consequence: 'Menjalankan perintah lokal di lingkungan workspace.',
     allowWithoutApproval: true,
   },
+  // MCP: external, untrusted servers. `McpHub` names these `tool:mcp_<serverId>_<toolName>`,
+  // which no read/write rule matches, so without an explicit entry the engine would deny
+  // every MCP call by default. The scope is `external_mcp`, so MEDIUM escalates to approval.
+  {
+    pattern: /^tool:mcp_/i,
+    baseRisk: 'MEDIUM',
+    consequence: 'Memanggil tool pada server MCP eksternal yang tidak tepercaya.',
+  },
 
   // HIGH: External communication, git push, deployment
   {

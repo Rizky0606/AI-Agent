@@ -81,6 +81,24 @@ test('PermissionEngine correctly classifies risks and escalates on destructive c
   assert.equal(destructiveRes.riskLevel, 'CRITICAL');
 });
 
+test('PermissionEngine requires approval for untrusted MCP tool calls', () => {
+  const engine = new PermissionEngine();
+
+  // `McpHub` builds `tool:mcp_<serverId>_<toolName>`. Without a matching rule the engine
+  // would deny by default, so every MCP tool would be registered but permanently unusable.
+  const mcpRes = engine.evaluate({
+    actor: { id: 'user-1', role: 'user' },
+    action: 'tool:mcp_docs-server_read_doc',
+    resource: 'external_mcp://docs-server/read_doc',
+    scope: 'external_mcp',
+  });
+
+  assert.equal(mcpRes.decision, 'require_approval');
+  assert.equal(mcpRes.riskLevel, 'MEDIUM');
+  assert.ok(mcpRes.requiredApproval);
+  assert.ok(mcpRes.requiredApproval.fingerprint);
+});
+
 test('Approval fingerprint binds strictly to specific action, resource, scope, and context', () => {
   const fp1 = computeApprovalFingerprint('git:push', 'repo-A', 'cloud', 'HIGH');
   const fp2 = computeApprovalFingerprint('git:push', 'repo-B', 'cloud', 'HIGH');
