@@ -64,11 +64,11 @@ capabilities:
     limitation: attachment upload unavailable; task creation surface is coding-runtime-specific
   windows:
     status: partial
-    code: apps/windows/src/ui; apps/windows/src/connection; apps/windows/src/security
-    permission_boundary: authenticated device WSS; local capability registry
+    code: apps/windows/src/ui; apps/windows/src/api; apps/windows/src/connection; apps/windows/src/security
+    permission_boundary: authenticated device WSS; local capability registry; server REST calls reuse the same bearer token
     clients: windows
-    proof: pnpm --filter @personal-ai-os/windows test
-    limitation: no server task replay/approval/artifact/catalog parity
+    proof: apps/windows/test/server-api-and-events.test.ts; apps/windows/test/agent-connection.test.ts
+    limitation: server task list/detail/events/pause/resume/cancel, approval decisions, artifact preview and live model catalog are implemented and production-smoked from the Vite-served UI; Tauri packaging and the packaged webview origin remain unverified because rustc is absent
   memory_artifacts_observability:
     status: partial
     code: packages/memory; apps/api/src/db; apps/api/src/routes

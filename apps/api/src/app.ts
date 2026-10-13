@@ -125,6 +125,19 @@ const bearer = (request: FastifyRequest): string => {
   return value.slice(7);
 };
 
+/**
+ * Origins allowed to call the API from a browser context: the Tauri webview
+ * origins of the Windows agent plus the local dev server. Native clients
+ * (Android, tests) send no Origin header and are unaffected.
+ */
+const CORS_ALLOWED_ORIGINS = (
+  process.env.CORS_ALLOWED_ORIGINS ??
+  'tauri://localhost,http://tauri.localhost,https://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420'
+)
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+
 const userFromRequest = async (request: FastifyRequest, auth: AuthService): Promise<AuthUser> =>
   auth.authenticate(bearer(request));
 
@@ -156,6 +169,20 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-request-id', request.id);
     reply.header('x-trace-id', request.id);
+
+    const origin = request.headers.origin;
+    if (!origin || !CORS_ALLOWED_ORIGINS.includes(origin)) return;
+
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Vary', 'Origin');
+    if (request.method === 'OPTIONS') {
+      reply
+        .header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
+        .header('Access-Control-Allow-Headers', 'authorization,content-type')
+        .header('Access-Control-Max-Age', '600')
+        .code(204)
+        .send();
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {
