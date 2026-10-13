@@ -9,6 +9,7 @@ import {
   ArtifactQuotaExceededError,
   DiskArtifactStorage,
   InMemoryArtifactStorage,
+  ArtifactNotFoundError,
   InvalidFilenameError,
   InvalidMimeTypeError,
 } from '../src/index.ts';
@@ -67,7 +68,7 @@ test('ArtifactManager generates signed temporary access tokens with expiry', asy
   });
 
   // Generate signed token valid for 500ms
-  const { token } = manager.createSignedAccessToken(artifact.id, 'alice', 500);
+  const { token } = await manager.createSignedAccessToken(artifact.id, 'alice', 500);
 
   // 1. Accessing via valid signed token succeeds for third party
   const contentWithToken = await manager.getArtifactContent(artifact.id, undefined, token);
@@ -205,6 +206,42 @@ test('DiskArtifactStorage stores and streams files safely with atomic write', as
     await assert.rejects(
       async () => diskStorage.get('../../etc/passwd'),
       /Path traversal terdeteksi/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactManager resolves artifacts written by another process over shared storage', async () => {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'artifact-shared-'));
+  try {
+    // The worker writes the artifact; the API serves it from a separate manager instance.
+    const writer = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    const artifact = await writer.createArtifact({
+      ownerId: 'alice',
+      filename: 'screenshot.png',
+      mimeType: 'image/png',
+      content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    });
+
+    const reader = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    const content = await reader.getArtifactContent(artifact.id, 'alice');
+    assert.equal(content.toString('hex'), '89504e47');
+
+    const { token } = await reader.createSignedAccessToken(artifact.id, 'alice');
+    const shared = await reader.getArtifactContent(artifact.id, undefined, token);
+    assert.equal(shared.toString('hex'), '89504e47');
+
+    await assert.rejects(
+      async () => reader.getArtifactContent(artifact.id, 'bob'),
+      (err: unknown) => err instanceof ArtifactAccessDeniedError,
+    );
+
+    await reader.deleteArtifact(artifact.id, 'alice');
+    const third = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    await assert.rejects(
+      async () => third.getArtifact(artifact.id, 'alice'),
+      (err: unknown) => err instanceof ArtifactNotFoundError,
     );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

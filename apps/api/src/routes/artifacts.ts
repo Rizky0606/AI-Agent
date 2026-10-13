@@ -188,7 +188,7 @@ export function registerArtifactRoutes(
       const expiresInMs = req.body?.expiresInMs ?? 3600000;
 
       try {
-        const signed = artifactManager.createSignedAccessToken(req.params.id, user.id, expiresInMs);
+        const signed = await artifactManager.createSignedAccessToken(req.params.id, user.id, expiresInMs);
         return reply.send({
           data: {
             token: signed.token,

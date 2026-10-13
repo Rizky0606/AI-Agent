@@ -51,6 +51,10 @@ export class ArtifactManager {
   // User storage tracking
   private readonly userUsage = new Map<string, number>();
 
+  // Metadata sidecar prefix. The in-memory map is process-local, so a shared
+  // storage backend is what lets the worker's artifacts resolve in the API process.
+  private static readonly META_PREFIX = '_meta/';
+
   constructor(options: ArtifactManagerOptions) {
     this.storage = options.storage;
     this.signingSecret = options.signingSecret ?? 'default-artifact-signing-secret-key-32b';
@@ -58,6 +62,21 @@ export class ArtifactManager {
     this.maxSingleArtifactBytes =
       options.maxSingleArtifactBytes ?? DEFAULT_MAX_SINGLE_ARTIFACT_BYTES;
     this.allowedMimeTypes = options.allowedMimeTypes ?? DEFAULT_ALLOWED_MIME_TYPES;
+  }
+
+  private metaKey(artifactId: string): string {
+    return `${ArtifactManager.META_PREFIX}${artifactId}.json`;
+  }
+
+  /** Reads a sidecar written by another process, if the storage backend is shared. */
+  private async loadMetadata(artifactId: string): Promise<ArtifactMetadata | undefined> {
+    try {
+      const raw = await this.storage.get(this.metaKey(artifactId));
+      const parsed = JSON.parse(raw.toString('utf8')) as ArtifactMetadata;
+      return parsed.id === artifactId ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -169,6 +188,7 @@ export class ArtifactManager {
     };
 
     this.metadataStore.set(artifactId, metadata);
+    await this.storage.put(this.metaKey(artifactId), JSON.stringify(metadata));
     return metadata;
   }
 
@@ -180,7 +200,11 @@ export class ArtifactManager {
     requestingUserId?: string | undefined,
     signedToken?: string | undefined,
   ): Promise<ArtifactMetadata> {
-    const artifact = this.metadataStore.get(artifactId);
+    let artifact = this.metadataStore.get(artifactId);
+    if (!artifact) {
+      artifact = await this.loadMetadata(artifactId);
+      if (artifact) this.metadataStore.set(artifactId, artifact);
+    }
     if (!artifact) {
       throw new ArtifactNotFoundError(artifactId);
     }
@@ -217,16 +241,10 @@ export class ArtifactManager {
    * Deletes an artifact, verifying ownership and reclaiming quota.
    */
   async deleteArtifact(artifactId: string, requestingUserId: string): Promise<boolean> {
-    const artifact = this.metadataStore.get(artifactId);
-    if (!artifact) {
-      throw new ArtifactNotFoundError(artifactId);
-    }
-
-    if (artifact.ownerId !== requestingUserId) {
-      throw new ArtifactAccessDeniedError(artifactId, requestingUserId);
-    }
+    const artifact = await this.getArtifact(artifactId, requestingUserId);
 
     await this.storage.delete(artifact.storageKey);
+    await this.storage.delete(this.metaKey(artifactId)).catch(() => false);
     this.metadataStore.delete(artifactId);
 
     const currentUsage = this.userUsage.get(artifact.ownerId) ?? 0;
@@ -237,19 +255,12 @@ export class ArtifactManager {
   /**
    * Creates a signed temporary access token with expiry.
    */
-  createSignedAccessToken(
+  async createSignedAccessToken(
     artifactId: string,
     requestingUserId: string,
     expiresInMs = 3600000, // 1 hour default
-  ): { token: string; expiresAt: string } {
-    const artifact = this.metadataStore.get(artifactId);
-    if (!artifact) {
-      throw new ArtifactNotFoundError(artifactId);
-    }
-
-    if (artifact.ownerId !== requestingUserId) {
-      throw new ArtifactAccessDeniedError(artifactId, requestingUserId);
-    }
+  ): Promise<{ token: string; expiresAt: string }> {
+    const artifact = await this.getArtifact(artifactId, requestingUserId);
 
     const expiresAt = Date.now() + expiresInMs;
     const payload: ArtifactSignedTokenPayload = {
