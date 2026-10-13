@@ -86,7 +86,7 @@ const broadcaster = new RedisTaskEventBroadcaster({
   subscriber: redisSubscriber,
 });
 const approvalRepository = new SqlApprovalRepository(db);
-const toolRegistry = createDefaultToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
+const toolRegistry = createDefaultToolRegistry({ guard: new SecuredCapabilityGuard(new PermissionEngine()) });
 const auditRepository = new SqlAuditRepository(db);
 
 // Model Gateway Setup with explicit security checks

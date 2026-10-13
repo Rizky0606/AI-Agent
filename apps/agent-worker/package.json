@@ -26,6 +26,7 @@
     "bullmq": "^6.3.11",
     "drizzle-orm": "^0.43.1",
     "ioredis": "^5.11.1",
+    "playwright": "^1.64.0",
     "postgres": "^3.4.5"
   }
 }

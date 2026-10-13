@@ -31,6 +31,10 @@ services:
       - edge
     expose:
       - '3000'
+    volumes:
+      # Bind mount, not a named volume: the worker writes browser screenshots here
+      # and the API serves them, so both need the same host-visible directory.
+      - ./data/artifacts:/app/data/artifacts
     stop_grace_period: 30s
     healthcheck:
       test:
@@ -58,6 +62,10 @@ services:
     environment:
       RUNTIME_BRIDGE_URL: ${RUNTIME_BRIDGE_URL:-http://host.docker.internal:9120}
       RUNTIME_BRIDGE_TOKEN: ${RUNTIME_BRIDGE_TOKEN:?RUNTIME_BRIDGE_TOKEN is required}
+      ARTIFACTS_DIR: /app/data/artifacts
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    volumes:
+      - ./data/artifacts:/app/data/artifacts
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
@@ -87,8 +95,9 @@ services:
       resources:
         limits:
           cpus: '0.75'
-          memory: 1536M
-    mem_limit: 1536m
+          # Chromium needs headroom above the previous 1536M; one browser session max.
+          memory: 2048M
+    mem_limit: 2048m
     restart: unless-stopped
 
   scheduler:

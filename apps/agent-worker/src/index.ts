@@ -20,7 +20,13 @@ import {
 } from '@personal-ai-os/model-gateway';
 import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
 import { RemoteRuntimeAdapter, RuntimeManager } from '@personal-ai-os/agent-core';
-import { createDefaultToolRegistry } from '@personal-ai-os/tools';
+import {
+  ArtifactManager,
+  BrowserController,
+  createDefaultToolRegistry,
+  DiskArtifactStorage,
+} from '@personal-ai-os/tools';
+import { PlaywrightRunner } from './browser/playwright-runner.ts';
 
 export * from './task-executor.ts';
 
@@ -167,6 +173,21 @@ export const startWorkerProcess = async (): Promise<{
 
   const workerConcurrency = Number(process.env.WORKER_CONCURRENCY ?? 2);
   const guard = new SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo });
+
+  // Browser tooling is opt-in: it needs the Playwright Chromium download, so a worker
+  // without it keeps running with the HTTP-only toolset.
+  const browserController = process.env.BROWSER_TOOL_ENABLED === 'false'
+    ? undefined
+    : new BrowserController({
+        runner: new PlaywrightRunner(),
+        artifactManager: new ArtifactManager({
+          storage: new DiskArtifactStorage(
+            process.env.ARTIFACTS_DIR ?? resolve(process.cwd(), 'data/artifacts'),
+          ),
+        }),
+        maxConcurrency: Number(process.env.BROWSER_MAX_CONCURRENCY ?? 1),
+      });
+
   const workerHandle = createAgentWorker({
     redisUrl,
     concurrency: workerConcurrency,
@@ -179,7 +200,7 @@ export const startWorkerProcess = async (): Promise<{
       runtimeManager,
       preferredRuntimeId: runtimePreferred,
       guard,
-      registry: createDefaultToolRegistry(guard),
+      registry: createDefaultToolRegistry({ guard, browserController }),
     },
   });
 
