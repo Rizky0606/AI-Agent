@@ -368,9 +368,9 @@ export class TaskExecutor {
 
   private async executeRuntimeTrack(task: TaskRecord, prompt: string, runtimeId: string, span: TelemetrySpan): Promise<void> {
     if (!this.runtimeManager) throw new Error('Runtime execution requested but no RuntimeManager configured.');
-    const runtime = this.runtimeManager.getRuntime(runtimeId);
-    if (!runtime) throw new Error(`Selected runtime "${runtimeId}" is not registered.`);
-    const result: RuntimeExecuteResult = await runtime.execute({ taskId: task.id, prompt, timeoutMs: typeof task.payload?.timeoutMs === 'number' ? task.payload.timeoutMs : undefined, metadata: { workspaceId: task.payload?.workspaceId ?? task.id }, untrusted: true });
+    // `RuntimeManager.execute` applies the per-runtime concurrency/rate cap; `getRuntime` +
+    // `runtime.execute` would drive the bridge unbounded.
+    const result: RuntimeExecuteResult = await this.runtimeManager.execute(runtimeId, { taskId: task.id, prompt, timeoutMs: typeof task.payload?.timeoutMs === 'number' ? task.payload.timeoutMs : undefined, metadata: { workspaceId: task.payload?.workspaceId ?? task.id }, untrusted: true });
     const output = result.output ?? '';
     const outputEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', { tool: `runtime:${runtimeId}`, output, proposedActions: result.proposedActions ?? [], untrustedOutputWarning: result.untrustedOutputWarning === true });
     this.broadcaster.publish(outputEvent);

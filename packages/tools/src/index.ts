@@ -1,6 +1,9 @@
 // Core Types
 export * from './types.ts';
 
+// Execution rate/concurrency limiting
+export * from './execution-limiter.ts';
+
 // HTML text extraction
 export * from './html-text.ts';
 
