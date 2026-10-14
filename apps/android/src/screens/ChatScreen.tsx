@@ -93,7 +93,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       style={styles.container}
     >
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton}>
+        <TouchableOpacity onPress={onBack} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Go back">
           <Text style={styles.backButtonText}>‹</Text>
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
@@ -146,15 +146,15 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       <View style={styles.inputBar}>
         <View style={styles.inputControlsRow}>
           <Text style={styles.selectorLabel}>Mode: {selectedMode}</Text>
-          <TouchableOpacity onPress={() => setSelectedMode(selectedMode === 'auto' ? 'fast' : selectedMode === 'fast' ? 'coding' : selectedMode === 'coding' ? 'complex' : selectedMode === 'complex' ? 'research' : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Change mode, currently ${selectedMode}`} style={styles.selectorControl} onPress={() => setSelectedMode(selectedMode === 'auto' ? 'fast' : selectedMode === 'fast' ? 'coding' : selectedMode === 'coding' ? 'complex' : selectedMode === 'complex' ? 'research' : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity>
           <Text style={styles.selectorLabel}>Model: {selectedModel}</Text>
-          {models.length > 0 ? <TouchableOpacity onPress={() => setSelectedModel(selectedModel === 'auto' ? models[0]!.id : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity> : null}
+          {models.length > 0 ? <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Change model, currently ${selectedModel}`} style={styles.selectorControl} onPress={() => setSelectedModel(selectedModel === 'auto' ? models[0]!.id : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity> : null}
         </View>
         <View style={styles.inputControlsRow}>
-          <TextInput style={styles.textInput} value={draftText} onChangeText={setDraftText} placeholder="Ketik pesan untuk asisten..." placeholderTextColor={theme.colors.textMuted} multiline maxLength={4000} />
-          <TouchableOpacity style={[styles.sendBtn, (!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected') && styles.sendBtnDisabled]} onPress={handleSend} disabled={!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected'}><Text style={styles.sendBtnText}>↑</Text></TouchableOpacity>
+          <TextInput accessibilityLabel="Message" style={styles.textInput} value={draftText} onChangeText={setDraftText} placeholder="Ketik pesan untuk asisten..." placeholderTextColor={theme.colors.textMuted} multiline maxLength={4000} />
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Send message" style={[styles.sendBtn, (!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected') && styles.sendBtnDisabled]} onPress={handleSend} disabled={!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected'}><Text style={styles.sendBtnText}>↑</Text></TouchableOpacity>
         </View>
-        {isStreaming ? <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}><Text style={styles.cancelButtonText}>Stop</Text></TouchableOpacity> : null}
+        {isStreaming ? <TouchableOpacity accessibilityRole="button" accessibilityLabel="Stop response" style={styles.cancelButton} onPress={handleCancel}><Text style={styles.cancelButtonText}>Stop</Text></TouchableOpacity> : null}
       </View>
     </KeyboardAvoidingView>
   );
@@ -163,10 +163,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderBottomWidth: 1, borderBottomColor: theme.colors.surfaceBorder },
-  backButton: { marginRight: theme.spacing.sm },
+  backButton: { width: theme.controls.minTouchTarget, height: theme.controls.minTouchTarget, justifyContent: 'center', alignItems: 'center', marginRight: theme.spacing.sm },
   backButtonText: { color: theme.colors.primary, fontSize: 28 },
   headerTitleContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerTitle: { color: theme.colors.textPrimary, fontSize: 16, fontWeight: '600' },
+  headerTitle: { color: theme.colors.textPrimary, ...theme.typography.bodyLarge, fontWeight: '600' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorText: { color: theme.colors.danger, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, fontSize: 12 },
   messageList: { padding: theme.spacing.md, paddingBottom: theme.spacing.xl },
@@ -188,10 +188,11 @@ const styles = StyleSheet.create({
   cancelButtonText: { color: theme.colors.danger, fontSize: 11, fontWeight: '600' },
   inputBar: { backgroundColor: theme.colors.surface, borderTopWidth: 1, borderTopColor: theme.colors.surfaceBorder, padding: theme.spacing.sm },
   inputControlsRow: { flexDirection: 'row', alignItems: 'center' },
-  selectorLabel: { color: theme.colors.textMuted, fontSize: 11, marginRight: theme.spacing.xs },
-  selectorButton: { color: theme.colors.primary, fontSize: 11, marginRight: theme.spacing.sm },
-  textInput: { flex: 1, backgroundColor: theme.colors.surfaceElevated, color: theme.colors.textPrimary, paddingHorizontal: theme.spacing.md, paddingVertical: 8, borderRadius: theme.borderRadius.full, maxHeight: 100, fontSize: 14 },
-  sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.colors.primary, justifyContent: 'center', alignItems: 'center', marginLeft: theme.spacing.xs },
-  sendBtnDisabled: { opacity: 0.5 },
-  sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  selectorLabel: { color: theme.colors.textMuted, ...theme.typography.caption, marginRight: theme.spacing.xs },
+  selectorControl: { minHeight: theme.controls.minTouchTarget, justifyContent: 'center' },
+  selectorButton: { color: theme.colors.primary, ...theme.typography.caption, marginRight: theme.spacing.sm },
+  textInput: { flex: 1, backgroundColor: theme.colors.surfaceElevated, color: theme.colors.textPrimary, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.full, maxHeight: 100, ...theme.typography.body },
+  sendBtn: { width: theme.controls.minTouchTarget, height: theme.controls.minTouchTarget, borderRadius: theme.controls.minTouchTarget / 2, backgroundColor: theme.colors.primary, justifyContent: 'center', alignItems: 'center', marginLeft: theme.spacing.xs },
+  sendBtnDisabled: { backgroundColor: theme.colors.surfaceElevated, opacity: 0.6 },
+  sendBtnText: { color: theme.colors.textPrimary, fontSize: 20, fontWeight: '700' },
 });

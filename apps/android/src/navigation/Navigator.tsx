@@ -165,9 +165,7 @@ export const AppNavigator: React.FC = () => {
 
       {/* Bottom Tab Bar */}
       <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => {
+        <TouchableOpacity accessibilityRole="tab" accessibilityLabel="Chat" accessibilityState={{ selected: currentTab === 'chat' }} style={styles.tabItem} onPress={() => {
             setShowingArtifacts(false);
             setCurrentTab('chat');
           }}
@@ -272,7 +270,9 @@ const styles = StyleSheet.create({
   tabItem: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 4,
+    justifyContent: 'center',
+    minHeight: theme.controls.minTouchTarget,
+    paddingVertical: theme.spacing.xs,
   },
   tabIcon: {
     fontSize: 18,
