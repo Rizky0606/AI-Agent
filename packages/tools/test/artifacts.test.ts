@@ -325,3 +325,45 @@ test('ArtifactManager lists artifacts written by another process', async () => {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('ArtifactManager reports every written artifact to the audit sink', async () => {
+  const records: Array<{ artifactId: string; ownerId: string; filename: string }> = [];
+  const manager = new ArtifactManager({
+    storage: new InMemoryArtifactStorage(),
+    auditSink: (record) => void records.push(record),
+  });
+
+  const artifact = await manager.createArtifact({
+    ownerId: 'alice',
+    projectId: '11111111-1111-4111-8111-111111111111',
+    taskId: '22222222-2222-4222-8222-222222222222',
+    filename: 'audited.txt',
+    mimeType: 'text/plain',
+    content: 'audited content',
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0]?.artifactId, artifact.id);
+  assert.equal(records[0]?.ownerId, 'alice');
+  assert.equal(records[0]?.filename, 'audited.txt');
+});
+
+test('ArtifactManager keeps the artifact when the audit sink fails', async () => {
+  const storage = new InMemoryArtifactStorage();
+  const manager = new ArtifactManager({
+    storage,
+    auditSink: () => {
+      throw new Error('audit storage down');
+    },
+  });
+
+  const artifact = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'kept.txt',
+    mimeType: 'text/plain',
+    content: 'kept content',
+  });
+
+  assert.equal((await manager.getArtifactContent(artifact.id, 'alice')).toString('utf-8'), 'kept content');
+  assert.equal((await manager.listArtifactsByUser('alice')).length, 1);
+});

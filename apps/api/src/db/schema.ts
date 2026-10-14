@@ -229,7 +229,7 @@ export const auditLogs = pgTable(
     projectId: uuid('project_id').references(() => projects.id, { onDelete: 'set null' }),
     action: varchar('action', { length: 120 }).notNull(),
     resourceType: varchar('resource_type', { length: 80 }).notNull(),
-    resourceId: uuid('resource_id'),
+    resourceId: varchar('resource_id', { length: 512 }),
     decision: varchar('decision', { length: 32 }),
     traceId: varchar('trace_id', { length: 128 }),
     metadata: jsonb('metadata'),

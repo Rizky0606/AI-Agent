@@ -3,7 +3,7 @@
 **Tanggal Audit**: 2026-10-11, diperbarui 2026-10-13 dan 2026-10-14  
 **Auditor**: Principal Software Architect & Security Engineer  
 **Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
-**Catatan Status**: Dokumen ini **direvisi 2026-10-13 dan 2026-10-14** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery), persistensi memori pada butir 5, evaluator berbasis bukti nyata (butir 8), jalur coding **serta** research pada butir 7, dispatch + identitas kriptografis Windows pada butir 11, dan scheduler/notifikasi/FCM pada butir 10 **sudah diperbaiki dan diverifikasi live**. Butir 5 tetap **SEBAGIAN**: pencarian semantik belum punya provider embedding dan retensi belum ditegakkan. Butir 11 tetap **SEBAGIAN**: allowlist teks-perintah/biner dan sesi perangkat in-memory belum ada. Detail bukti ada di [assessment-2026-10-13.md](assessment-2026-10-13.md). Sistem tetap **TIDAK** dilabeli "PRODUCTION READY": cacat fungsional P0 nomor 7 (audit) dan 8 (paritas schema↔migrasi) masih terbuka, dan kredensial FCM produksi belum disuntikkan.
+**Catatan Status**: Dokumen ini **direvisi 2026-10-13 dan 2026-10-14** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery), persistensi memori pada butir 5, evaluator berbasis bukti nyata (butir 8), jalur coding **serta** research pada butir 7, dispatch + identitas kriptografis Windows pada butir 11, scheduler/notifikasi/FCM pada butir 10, dan **audit menyeluruh pada butir 12 (2026-10-14)** **sudah diperbaiki dan diverifikasi live**. Butir 5 tetap **SEBAGIAN**: pencarian semantik belum punya provider embedding dan retensi belum ditegakkan. Butir 11 tetap **SEBAGIAN**: allowlist teks-perintah/biner belum ada dan sesi perangkat masih in-memory. Butir 12 tetap **SEBAGIAN**: healthcheck worker masih menyentuh `/tmp/healthy` pada timer dan tidak ada alerting/tracing — hanya bagian audit yang kini lulus.
 
 ---
 
@@ -15,8 +15,8 @@ Quality gates dijalankan pada checkout `release/installers` (Linux aarch64), buk
 
 - **Linter (`pnpm lint`)**: 14/14 paket **LULUS** (0 error, 0 warning).
 - **Production Build (`pnpm build`)**: 14/14 paket **LULUS**.
-- **Verifikasi referensi path (`pnpm verify:audit`)**: 102 path unik valid (169 referensi diperiksa).
-- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 33/33, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 39/39, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 5/5, `@personal-ai-os/agent-core` 40/40, `@personal-ai-os/evaluator` 9/9, `@personal-ai-os/android` 19/19, API in-container 62/62, scheduler in-container 25/25, windows 18/22 (4 skipped: eksekusi PowerShell butuh Windows).
+- **Verifikasi referensi path (`pnpm verify:audit`)**: 104 path unik valid (171 referensi diperiksa).
+- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 35/35, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 39/39, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 6/6, `@personal-ai-os/agent-core` 40/40, `@personal-ai-os/evaluator` 9/9, `@personal-ai-os/android` 19/19, API in-container 62/62, scheduler in-container 25/25, windows 18/22 (4 skipped: eksekusi PowerShell butuh Windows).
 - **Catatan penting tentang Skenario 4**: test `apps/api/test/e2e-scenarios.test.ts:868-914` yang diklaim membuktikan pemulihan task **tidak memanggil `recoverInterruptedTasks` sama sekali**. Ia memanggil `executor.execute()` secara langsung dan menaikkan counter yang di-hardcode di dalam test. Test tersebut tidak dapat gagal karena perilaku sistem apa pun, sehingga lulusnya test itu tidak membuktikan apa pun tentang recovery. Lihat Butir 3.
 - **Catatan tentang `pnpm test` di root**: perintah itu tidak dapat dipakai; task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite harus dijalankan per paket.
 
@@ -158,7 +158,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - Test: `packages/mcp/test/mcp.test.ts`: Sanitasi MCP dan audit schema.
   - Test: `apps/windows/test/path-validator.test.ts`: Blokade traversal Windows System32.
   - Test: `apps/api/test/e2e-platform.test.ts`: SSRF guard memblokir IP metadata cloud.
-  - Output Aktual: Seluruh unit test security lulus 100%.
+  - Bukti live audit (2026-10-14): setiap pemanggilan `SecuredCapabilityGuard` menulis satu baris `audit_logs` setelah hasil diketahui — `web:fetch`/`web:search` (tool call), `tool:mcp_echo_echo` (`resource_type: external_mcp`, MCP call), `browser:navigate` (browser action), dan `artifact:write` (artifact write). Baris memuat aktor (`user_id`), action, resource, `decision`, dan `metadata.outcome` (`success`/`failure`) + `durationMs`/`error`. Bukti: SSRF `http://169.254.169.254/latest/meta-data/` tercatat `allow | failure | durationMs 0 | error "SSRF Protection…"`. Lihat §8.E "Cacat 5".
 
 ---
 
@@ -307,9 +307,8 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - `/etc/docker/daemon.json` memiliki rotasi log `max-size 10m, max-file 3`.
   - Backup harian berjalan di container `backup` (5 dump tersimpan, `BACKUP_INTERVAL_SECONDS=86400`), retensi `RETENTION_DAYS` default 14 (`scripts/backup-postgres.sh:15`).
   - Restore drill lulus terhadap arsip produksi nyata (lihat tabel checklist).
+- **Bukti live audit menyeluruh — SELESAI (2026-10-14)**: `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`) kini menulis **satu baris `audit_logs` per pemanggilan**, setelah hasil diketahui (`metadata.outcome` `success`/`failure` + `durationMs` + `error`). Guard diberi `auditLogger` di kedua proses: API (`apps/api/src/index.ts` → `createDefaultToolRegistry`) dan worker (`apps/agent-worker/src/index.ts` → registry + browser). Artifact write diaudit lewat `ArtifactManager.auditSink` (`packages/tools/src/artifacts/artifact-manager.ts`) yang dipakai API maupun worker. Kolom `audit_logs.resource_id` diubah dari `uuid` ke `varchar(512)` (migrasi `0010_audit_resource_id_text.sql`) karena tool call menulis path/URL/nama tool. Kegagalan sink tidak pernah mengubah hasil yang dilihat pemanggil. Pemanggilan tool MCP tercakup jalur guard yang sama (`action: tool:mcp_<server>_<tool>`, `resource_type: external_mcp`), jadi audit MCP tidak lagi hanya ke `console.log` (sink console.log di worker dihapus). Bukti live di §8.E "Cacat 5".
 - **Keterbatasan / Mengapa SEBAGIAN**:
-  - **`audit_logs` hanya berisi keputusan approval.** Produksi: 10 baris, seluruhnya `approval:approved` (5) dan `approval:denied` (5). Tidak ada satu pun baris untuk tool call, MCP call, browser action, atau artifact write. `SqlAuditRepository.log` hanya dipanggil dari `apps/api/src/routes/approvals.ts:113,219`.
-  - Audit MCP hanya ditulis ke `console.log` (`apps/agent-worker/src/index.ts`), sehingga hilang saat container di-recreate.
   - Healthcheck worker hanya menyentuh file `/tmp/healthy` pada timer, bukan memprobe database atau Redis (`apps/agent-worker/src/index.ts:307-320`).
   - Tidak ada alerting maupun tracing terdistribusi; hanya endpoint `/metrics` Prometheus yang harus di-scrape secara eksternal.
   - Restore drill belum pernah dijalankan sebagai prosedur berkala terjadwal.
@@ -361,7 +360,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **Memory & context ber-budget**                  | **SEBAGIAN** | **Persistensi diperbaiki 2026-10-13**: migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)`, dan fallback senyap ke `InMemoryMemoryStore` dihapus. Bukti live: create → `count=1` → restart API → `count=1`. Sisa: pencarian semantik tidak aktif karena 9Router tidak menyediakan provider embedding (`No credentials for provider: openai`), dan belum ada sweeper retensi. Lihat Butir 5. |
 | **Queue / cancel / checkpoint / recovery**       | **LULUS**    | Queue, cancel, dan checkpoint bekerja. **Recovery diperbaiki 2026-10-13**: `createAgentWorker` kini membuat `BullMqTaskQueue` dan mengembalikannya sebagai `queue`, `startWorkerProcess` melewatkannya ke `recoverInterruptedTasks`, dan parameter itu menjadi wajib sehingga panggilan tanpa queue tidak lagi dikompilasi. Bukti live: task `running`/40 tanpa job di Redis → restart worker → `recoveredCount: 1` → `completed`/100. Lihat Butir 3. |
 | **Windows device identity + allowlist**          | **SEBAGIAN** | **Identitas kriptografis SELESAI 2026-10-14**: agent membuktikan kepemilikan keypair P-256 atas challenge server, `deviceId` diterbitkan server (query string `deviceId` ditolak `DEVICE_IDENTITY_REQUIRED`), dan `devices.public_key` diisi serta diverifikasi. **Dispatch diperbaiki 2026-10-13**: `dispatchCommand` kini dipanggil dari jalur task dengan approval HIGH per perintah dan bukti live task → perangkat → hasil (lihat Butir 11). Path allowlist dan capability registry nyata dan ditegakkan. Sisa: tidak ada allowlist teks-perintah/biner, sesi koneksi in-memory. |
-| **MCP / tools / browser ber-permission & audit** | **SEBAGIAN** | Permission **lulus**: semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit tidak lulus**: `audit_logs` produksi hanya 10 baris keputusan approval; tool call, MCP call, browser action, dan artifact write tidak tercatat. MCP audit hanya `console.log`. Lihat Butir 12. |
+| **MCP / tools / browser ber-permission & audit** | **LULUS** | Semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit diperbaiki 2026-10-14**: setiap pemanggilan guard menulis satu baris `audit_logs` dengan aktor, action, resource, `decision`, dan `metadata.outcome` (`success`/`failure`) + `durationMs`/`error`; artifact write lewat `ArtifactManager.auditSink`. Tool call (`web:fetch`/`web:search`), MCP call (`tool:mcp_echo_echo`, `resource_type: external_mcp`), browser action (`browser:navigate`), dan artifact write (`artifact:write`) semua tercatat di produksi; audit MCP tidak lagi hanya `console.log`. Bukti live di §8.E "Cacat 5". |
 | **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada keempat jalur (coding, research, standard, tool). **Jalur tool diperbaiki 2026-10-13**: `executeRegisteredTool` menjalankan `GenericEvaluator` atas hasil tool sebelum menulis `completed`, dan tidak melampirkan bukti palsu bila tool mengembalikan `null`/`undefined` (`apps/agent-worker/src/task-executor.ts:637-674`). **Bukti coding kini nyata**: `LocalCodingEnvironment` menjalankan `node --run lint/typecheck/test/build` di workspace per task; bukti live task `3f5aeee2-…` → `failed` (`score 0.71`, lint keluar 1), task `a5776358-…` → `completed` (`score 1`). **Bukti research kini nyata**: `ResearchAgent` mencari dan membuka halaman sungguhan; bukti live task `46098f3e-…` → `completed` (`score 1`, 5 sumber nyata), task `c38ae271-…` → `failed` (`score 0`, tanpa sumber). Sisa: acceptance criteria belum dipersist sebelum eksekusi, dan klaim research belum disintesis model. Lihat Butir 7 dan 8. |
 | **Approval terikat aksi spesifik**               | **LULUS**    | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence` di `apps/api/src/routes/approvals.ts`.                                                                                |
 | **Scheduler & Event Deduplication**              | **LULUS**    | Idempotency key dan dedupe window ada, `EventEngine` tidak dapat dispatch tanpa `PermissionEngine`. `NotificationEngine` di API kini memakai `SqlNotificationRepository` + `createFcmProviderFromEnv()`, dan event task dari Redis menjadi baris `notifications` durable (`apps/api/src/services/task-notifications.ts`). Lihat Butir 10 dan §8.E "Cacat 6". |
@@ -402,7 +401,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 5. **Tidak ada jalur dispatch perintah ke Windows Agent — SELESAI (2026-10-13)**. `dispatchCommand` kini dipanggil dari jalur task: worker meminta presence ke API (`DeviceDispatcher.listOnlineDevices`), route internal ber-token `POST /v1/internal/device-commands` mengirim `command.execute` ke socket perangkat, dan hasil perangkat menjadi artifact. Aksi `device:command` berisiko HIGH dan selalu butuh approval yang terikat pada teks perintah + `deviceId`. Bukti live: task `954db21a-…` → `waiting_approval` → approve → `completed` (`exitCode 0`, `stdout` perangkat di artifact); perangkat offline → `failed` (`offlineReason: device_unreachable`). Cacat ikutan yang ditemukan dan diperbaiki: task `queued` yang gagal sebelum mulai melanggar state machine dan tertinggal `queued` selamanya. Sisa: belum ada allowlist teks-perintah/biner, dan identitas perangkat belum kriptografis (butir 9).
 6. **Notifikasi belum pernah terkirim — SELESAI (2026-10-14)**. `NotificationEngine` di API kini dibuat dengan `SqlNotificationRepository` dan `createFcmProviderFromEnv()`; `broadcaster.subscribe(createTaskNotificationListener(...))` mengubah event task (`task.completed`, `task.failed`, `task.waiting_approval`) dari Redis menjadi baris `notifications` durable dengan `delivery_state` dan `deep_link`. Preferensi notifikasi juga durable (bertahan setelah `docker compose restart api`). Bukti live di §8.E "Cacat 6". Sisa: tidak ada dead-letter queue untuk push yang gagal `maxAttempts`.
 7. **Token FCM hardcoded `dummy-env-token` — SELESAI (2026-10-14)**. `HttpFcmProvider` kini menerima `FcmAccessTokenSource`; `ServiceAccountTokenSource` menandatangani JWT RS256 dengan `client_email`/`private_key` service account dan menukarnya ke `token_uri` lewat grant `jwt-bearer`, lalu menyimpan access token sampai mendekati `expires_in` (margin 60 detik). Service account yang tidak lengkap menghasilkan `DisabledFcmProvider`, bukan pengiriman dengan token literal. Test: `apps/scheduler/test/fcm-provider.test.ts` (4/4, stub HTTP server).
-8. **Audit tidak menyeluruh** — hanya keputusan approval yang masuk `audit_logs`.
+8. **Audit tidak menyeluruh — SELESAI (2026-10-14)**. `SecuredCapabilityGuard` menulis satu baris `audit_logs` per pemanggilan setelah hasil diketahui (`metadata.outcome` + `durationMs` + `error`), guard diberi `auditLogger` di API dan worker, artifact write diaudit lewat `ArtifactManager.auditSink`, dan `audit_logs.resource_id` menjadi `varchar(512)` (migrasi `0010`). Bukti live: §8.E "Cacat 5".
 9. **Identitas perangkat tidak kriptografis — SELESAI (2026-10-14)**. `/v1/agent/ws` menerbitkan challenge acak; agent menandatanganinya dengan private key P-256 dan server memverifikasi sebelum membuat sesi. `deviceId` dari query string ditolak (`DEVICE_IDENTITY_REQUIRED`), id perangkat adalah uuid yang diterbitkan server, dan `devices.public_key` diisi dengan JWK kanonik (unique parsial `devices_public_key_uq`, migrasi `0008_device_key_identity.sql`). Bukti live di §8.E. Sisa: private key disimpan di `localStorage` webview, bukan OS keystore.
 10. **Skema menyimpang dari migrasi — sebagian selesai (2026-10-13)**. `memories` kini punya migrasi; tabel `artifacts` yang tidak terpakai dihapus dari `schema.ts`. Belum ada pemeriksaan paritas otomatis antara `schema.ts` dan `apps/api/src/db/migrations/`, sehingga kelas bug ini masih bisa terulang.
 11. **Dead code produksi** — `AiCouncil` (`packages/agent-core/src/council/`) dan `SelfHealingEngine` (`packages/agent-core/src/healing/`) tidak dipanggil dari `apps/`.
@@ -434,7 +433,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 ### Prioritas P0 (cacat fungsional, tidak memerlukan kredensial eksternal)
 
-Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sampai 6 sudah selesai (1–4 pada 2026-10-13, 5–6 pada 2026-10-13/2026-10-14) dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 7 dan 8 masih terbuka.
+Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sampai 7 sudah selesai (1–4 pada 2026-10-13, 5–6 pada 2026-10-13/2026-10-14, 7 pada 2026-10-14) dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 8 masih terbuka.
 
 1. **Perbaiki pemulihan task — SELESAI (2026-10-13)**. `queue` kini diteruskan dan wajib; test regresi baru (`live-worker-execution.test.ts`) gagal bila queue tidak diteruskan; bukti live task `running` tanpa job → restart → `completed`.
 2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. `:id` pada route memory kini divalidasi sebagai uuid, sehingga `GET`/`DELETE /v1/memories/search` menjawab `400`, bukan `500`. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi.
@@ -442,7 +441,7 @@ Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sampai 6 sud
 4. **Beri research jalur pencarian nyata — SELESAI (2026-10-13)**. Provider pencarian nyata (DuckDuckGo HTML, tanpa API key) terdaftar di `createDefaultToolRegistry` (`packages/tools/src/builtin/web-search.ts`, `packages/tools/src/registry/create-default-tool-registry.ts:20-21`); `LocalResearchEnvironment` mencari dan membuka halaman lewat `ToolRegistry` ber-permission; sumber dan claim hardcoded dihapus. Sisa yang belum selesai dari butir ini: sintesis klaim lintas sumber oleh `ModelGateway`, dan `ResearchEvaluator` belum mem-fetch URL untuk memverifikasi isi sitasi.
 5. **Sambungkan dispatch perintah ke Windows Agent — SELESAI (2026-10-13 dispatch, 2026-10-14 identitas)**. `dispatchCommand` terhubung ke jalur task dengan approval HIGH per perintah, verdict dari exit code perangkat, dan bukti live task → perangkat → hasil. Identitas perangkat kriptografis menyusul: `devices.public_key` diisi dari handshake bertanda tangan dan `deviceId` diterbitkan server (lihat butir 9). Sisa dari butir ini: tidak ada allowlist teks-perintah/biner, dan sesi perangkat in-memory sehingga hilang saat API restart.
 6. **Perbaiki notifikasi dan FCM — SELESAI (2026-10-14)**. `NotificationEngine` di API memakai `SqlNotificationRepository`, dan `fcm-provider.ts` memperoleh access token OAuth2 nyata dari service account (`ServiceAccountTokenSource`, JWT RS256 → `token_uri`). Literal `dummy-env-token` dihapus; service account tak lengkap → `DisabledFcmProvider`. Bukti live di §8.E "Cacat 6". Sisa: pengiriman ke Google belum pernah terjadi (Gap 2), dan push yang gagal `maxAttempts` tidak masuk dead-letter queue.
-7. **Perluas audit** — tulis tool call, MCP call, browser action, dan artifact write ke `audit_logs`, bukan hanya keputusan approval.
+7. **Perluas audit — SELESAI (2026-10-14)**. Tool call, MCP call, browser action, dan artifact write kini menulis baris `audit_logs` (bukan hanya keputusan approval). `SecuredCapabilityGuard` menulis satu baris per pemanggilan setelah hasil diketahui; artifact lewat `ArtifactManager.auditSink`; `resource_id` menjadi `varchar(512)` (migrasi `0010_audit_resource_id_text.sql`). Bukti live di §8.E "Cacat 5".
 8. **Tambahkan pemeriksaan paritas schema ↔ migrasi** — `memories` sudah punya migrasi dan `artifacts` yang tidak terpakai sudah dihapus, tetapi belum ada pemeriksaan otomatis, sehingga kelas bug ini masih bisa terulang.
 
 ### Prioritas P1 (kebersihan dan pengerasan)
@@ -488,11 +487,11 @@ Time:     ~28s
 `pnpm test` di root **tidak dapat dipakai**: task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite dijalankan per paket:
 
 ```text
-@personal-ai-os/tools          33/33
+@personal-ai-os/tools          35/35
 @personal-ai-os/mcp            17/17
 @personal-ai-os/agent-worker   39/39
 @personal-ai-os/memory          7/7
-@personal-ai-os/permissions     5/5
+@personal-ai-os/permissions     6/6
 @personal-ai-os/agent-core     40/40
 @personal-ai-os/evaluator       9/9
 API (in-container)             62/62, 0 skipped
@@ -506,8 +505,8 @@ Suite API dijalankan di dalam image `personal-ai-os-api:latest`; image `node:22-
 ### D. Verifikasi Referensi Path Dokumen (`pnpm verify:audit`)
 
 ```text
-[Verify Audit Refs] Memeriksa 169 referensi path dari docs/final-audit.md...
-[Verify Audit Refs] Berhasil memverifikasi 102 path unik yang valid.
+[Verify Audit Refs] Memeriksa 171 referensi path dari docs/final-audit.md...
+[Verify Audit Refs] Berhasil memverifikasi 104 path unik yang valid.
 [SUKSES] Semua referensi path file dalam docs/final-audit.md 100% valid dan ada di filesystem.
 ```
 
@@ -564,10 +563,45 @@ SSRF 169.254.169.254 -> failed
 # Sumber tunggal ditolak (task 597838e9-304e-4aec-8c0a-ed62f679011e): failed, score=0.8,
 #   cross_check gagal karena hanya 1 sumber dapat dibaca; 4 URL yang gagal dibaca disebut namanya.
 
-# Cacat 5 (BELUM DIPERBAIKI): audit hanya approval
-SELECT action, count(*) FROM audit_logs GROUP BY action;
- approval:denied   | 5
- approval:approved | 5
+# Cacat 5 (DIPERBAIKI 2026-10-14): audit hanya approval
+# Sebelum: SELECT action, count(*) FROM audit_logs GROUP BY action;
+#            approval:denied   | 5
+#            approval:approved | 5
+#          (10 baris; tool call, MCP call, browser action, dan artifact write tidak ada)
+# Sesudah: migrasi 0010_audit_resource_id_text.sql diterapkan ke DB produksi
+#          (ALTER TABLE audit_logs ALTER COLUMN resource_id TYPE varchar(512) USING resource_id::text),
+#          karena tool call menulis path/URL/nama tool dan kolom uuid melempar 22P02.
+#          SELECT action, resource_type, count(*), ... FROM audit_logs GROUP BY action, resource_type;
+#            web:fetch             | global       | 13 | success 10 | failure 3
+#            approval:denied       | git          |  3
+#            approval:approved     | device       |  3
+#            tool:search_knowledge | workspace    |  3 | success 3
+#            web:search            | global       |  3 | success 3
+#            approval:approved     | git          |  2
+#            approval:approved     | external_mcp |  2
+#            tool:mcp_echo_echo    | external_mcp |  2 | success 1 | failure 1
+#            artifact:write        | artifact     |  2
+#            browser:navigate      | global       |  1 | success 1
+#            (total 38 baris; keputusan approval lama tetap ada)
+# Artifact write: POST /v1/artifacts {filename:"audit-smoke.txt", mimeType:"text/plain"} -> 201
+#   -> baris artifact:write | artifact | 65f45807-9fda-4bb4-a57d-848b49ebc3b9 | allow
+#   -> baris kedua untuk screenshot browser 627093d6-089d-4cb8-8fe4-620611b6750d
+# Tool call (research nyata, task 242fe26e-a8f7-4ec4-9d57-18d3bb350217, query "postgres advisory locks") -> completed:
+#   -> 3 baris web:search | global | web_search | allow | success
+#   -> 11 baris web:fetch | global | <URL nyata> | allow | success   (resource_id = URL, bukan uuid)
+# Browser action (task 9627db03-22bd-4fd3-947a-06ca2d4ba415, browser_navigate https://example.com) -> completed:
+#   -> browser:navigate | global | https://example.com | allow | success | durationMs 1324
+#   -> artifact:write untuk screenshot PNG 627093d6-089d-4cb8-8fe4-620611b6750d
+# MCP call (task b351d773-dd40-4424-9159-98b08df33430, mcp_echo_echo) -> waiting_approval:
+#   -> tool:mcp_echo_echo | external_mcp | mcp_echo_echo | require_approval | failure | error "approval_required"
+#   POST /v1/approvals/53036637-…/approve -> 200 -> completed:
+#   -> tool:mcp_echo_echo | external_mcp | mcp_echo_echo | require_approval | success | durationMs 2
+#   (jalur guard yang sama; audit MCP tidak lagi hanya console.log)
+# Hasil nyata tercatat, bukan hanya keputusan evaluasi (task b2a34028-1ee7-4bf2-84f4-c380261e280b, web_fetch SSRF):
+#   -> web:fetch | global | http://169.254.169.254/latest/meta-data/ | allow | failure | durationMs 0
+#      error "SSRF Protection: Permintaan ke 'http://169.254.169.254/latest/meta-data…"
+# Setiap baris memuat user_id (aktor), action, resource_type, resource_id, decision, trace_id,
+# dan metadata {riskLevel, reason, evaluationId, outcome, durationMs, error}.
 
 # Cacat 6 (DIPERBAIKI 2026-10-14): notifikasi belum pernah terkirim
 # Sebelum: NotificationEngine di API tanpa storage; SELECT count(*) FROM notifications -> 0;

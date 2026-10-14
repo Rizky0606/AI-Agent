@@ -59,6 +59,42 @@ export class SecuredCapabilityGuard {
     this.auditLogger = options?.auditLogger;
   }
 
+  /**
+   * Records one audit row per guarded call, written once the outcome is known.
+   *
+   * A failing audit sink never changes what the caller sees: for an executed action the side
+   * effect already happened, so turning the call into an error would invite a retry that runs
+   * it twice. The audit failure is reported to stderr instead.
+   */
+  private async writeAudit(
+    request: PermissionRequest,
+    decision: AuditLogEntry['decision'],
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.auditLogger) return;
+    try {
+      await this.auditLogger.log({
+        userId: request.actor.id,
+        action: request.action,
+        resourceType: request.scope,
+        resourceId: request.resource,
+        decision,
+        traceId: request.traceId,
+        metadata,
+      });
+    } catch (err: unknown) {
+      console.error(
+        JSON.stringify({
+          service: 'permissions',
+          event: 'audit_write_failed',
+          action: request.action,
+          resource: request.resource,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  }
+
   async executeProtected<T>(
     request: PermissionRequest,
     actionFn: () => Promise<T>,
@@ -66,30 +102,29 @@ export class SecuredCapabilityGuard {
   ): Promise<T> {
     const evaluation = this.engine.evaluate(request);
 
-    // Audit trail logging
-    if (this.auditLogger) {
-      await this.auditLogger.log({
-        userId: request.actor.id,
-        action: request.action,
-        resourceType: request.scope,
-        resourceId: request.resource,
-        decision: evaluation.decision,
-        traceId: request.traceId,
-        metadata: {
-          riskLevel: evaluation.riskLevel,
-          reason: evaluation.reason,
-          evaluationId: evaluation.evaluationId,
-          ...request.context,
-        },
-      });
-    }
+    const baseMetadata: Record<string, unknown> = {
+      riskLevel: evaluation.riskLevel,
+      reason: evaluation.reason,
+      evaluationId: evaluation.evaluationId,
+      ...request.context,
+    };
 
     if (evaluation.decision === 'deny') {
+      await this.writeAudit(request, evaluation.decision, {
+        ...baseMetadata,
+        outcome: 'failure',
+        error: evaluation.reason,
+      });
       throw new PermissionDeniedError(evaluation.reason, evaluation.riskLevel);
     }
 
     if (evaluation.decision === 'require_approval') {
       if (!options?.approvalId) {
+        await this.writeAudit(request, evaluation.decision, {
+          ...baseMetadata,
+          outcome: 'failure',
+          error: 'approval_required',
+        });
         throw new ApprovalRequiredError(
           evaluation.reason,
           evaluation.riskLevel,
@@ -98,6 +133,11 @@ export class SecuredCapabilityGuard {
       }
 
       if (!this.approvalValidator) {
+        await this.writeAudit(request, evaluation.decision, {
+          ...baseMetadata,
+          outcome: 'failure',
+          error: 'approval_validator_unavailable',
+        });
         throw new InvalidApprovalError(
           'ApprovalValidator tidak tersedia untuk memvalidasi persetujuan.',
         );
@@ -110,6 +150,14 @@ export class SecuredCapabilityGuard {
       );
 
       if (!validation.valid) {
+        await this.writeAudit(request, evaluation.decision, {
+          ...baseMetadata,
+          outcome: 'failure',
+          approvalId: options.approvalId,
+          error:
+            validation.reason ??
+            'Approval tidak valid, kedaluwarsa, sudah digunakan, atau fingerprint tidak cocok.',
+        });
         throw new InvalidApprovalError(
           validation.reason ??
             'Approval tidak valid, kedaluwarsa, sudah digunakan, atau fingerprint tidak cocok.',
@@ -117,7 +165,24 @@ export class SecuredCapabilityGuard {
       }
     }
 
-    // Permission passed: execute capability
-    return await actionFn();
+    // Permission passed: execute capability, then record what actually happened.
+    const startedAt = Date.now();
+    try {
+      const result = await actionFn();
+      await this.writeAudit(request, evaluation.decision, {
+        ...baseMetadata,
+        outcome: 'success',
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (err: unknown) {
+      await this.writeAudit(request, evaluation.decision, {
+        ...baseMetadata,
+        outcome: 'failure',
+        durationMs: Date.now() - startedAt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 }

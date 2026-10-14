@@ -31,12 +31,24 @@ const DEFAULT_ALLOWED_MIME_TYPES = new Set([
 const DEFAULT_USER_QUOTA_BYTES = 100 * 1024 * 1024; // 100 MB per user
 const DEFAULT_MAX_SINGLE_ARTIFACT_BYTES = 25 * 1024 * 1024; // 25 MB single artifact
 
+export interface ArtifactAuditRecord {
+  artifactId: string;
+  ownerId: string;
+  projectId?: string | null | undefined;
+  taskId?: string | null | undefined;
+  filename: string;
+  mimeType: string;
+  size: number;
+  checksum: string;
+}
+
 export interface ArtifactManagerOptions {
   storage: StorageAdapter;
   signingSecret?: string | undefined;
   userQuotaBytes?: number | undefined;
   maxSingleArtifactBytes?: number | undefined;
   allowedMimeTypes?: Set<string> | undefined;
+  auditSink?: ((record: ArtifactAuditRecord) => Promise<void> | void) | undefined;
 }
 
 export class ArtifactManager {
@@ -45,6 +57,7 @@ export class ArtifactManager {
   private readonly userQuotaBytes: number;
   private readonly maxSingleArtifactBytes: number;
   private readonly allowedMimeTypes: Set<string>;
+  private readonly auditSink?: ((record: ArtifactAuditRecord) => Promise<void> | void) | undefined;
 
   // Metadata store
   private readonly metadataStore = new Map<string, ArtifactMetadata>();
@@ -60,6 +73,7 @@ export class ArtifactManager {
     this.maxSingleArtifactBytes =
       options.maxSingleArtifactBytes ?? DEFAULT_MAX_SINGLE_ARTIFACT_BYTES;
     this.allowedMimeTypes = options.allowedMimeTypes ?? DEFAULT_ALLOWED_MIME_TYPES;
+    this.auditSink = options.auditSink;
   }
 
   private metaKey(artifactId: string): string {
@@ -196,6 +210,33 @@ export class ArtifactManager {
 
     this.metadataStore.set(artifactId, metadata);
     await this.storage.put(this.metaKey(artifactId), JSON.stringify(metadata));
+
+    // The artifact is already durable here, so a failing audit sink must not fail the upload:
+    // a retry would write a second copy. Report it instead.
+    if (this.auditSink) {
+      try {
+        await this.auditSink({
+          artifactId: metadata.id,
+          ownerId: metadata.ownerId,
+          projectId: metadata.projectId,
+          taskId: metadata.taskId,
+          filename: metadata.filename,
+          mimeType: metadata.mimeType,
+          size: metadata.size,
+          checksum: metadata.checksum,
+        });
+      } catch (err: unknown) {
+        console.error(
+          JSON.stringify({
+            service: 'tools',
+            event: 'artifact_audit_failed',
+            artifactId: metadata.id,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+    }
+
     return metadata;
   }
 

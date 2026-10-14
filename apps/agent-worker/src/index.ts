@@ -11,7 +11,13 @@ import {
   type TaskJobData,
 } from './task-executor.ts';
 import type { TaskRepository } from '@personal-ai-os/shared';
-import { createDatabase, SqlApprovalRepository, SqlTaskRepository } from '@personal-ai-os/api/db';
+import {
+  artifactWriteAuditEntry,
+  createDatabase,
+  SqlApprovalRepository,
+  SqlAuditRepository,
+  SqlTaskRepository,
+} from '@personal-ai-os/api/db';
 import { BullMqTaskQueue, RedisTaskEventBroadcaster, TASK_QUEUE_NAME } from '@personal-ai-os/api/services';
 import {
   MockModelGateway,
@@ -121,6 +127,7 @@ export const startWorkerProcess = async (): Promise<{
   const { client: sqlClient, db } = createDatabase(databaseUrl);
   const taskRepo = new SqlTaskRepository(db);
   const approvalRepo = new SqlApprovalRepository(db);
+  const auditRepo = new SqlAuditRepository(db);
   const broadcaster = new RedisTaskEventBroadcaster({ redisUrl });
 
   // Approval creator for guarded actions
@@ -185,7 +192,10 @@ export const startWorkerProcess = async (): Promise<{
   }
 
   const workerConcurrency = Number(process.env.WORKER_CONCURRENCY ?? 2);
-  const guard = new SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo });
+  const guard = new SecuredCapabilityGuard(new PermissionEngine(), {
+    approvalValidator: approvalRepo,
+    auditLogger: auditRepo,
+  });
 
   // Browser tooling is opt-in: it needs the Playwright Chromium download, so a worker
   // without it keeps running with the HTTP-only toolset.
@@ -197,16 +207,13 @@ export const startWorkerProcess = async (): Promise<{
           storage: new DiskArtifactStorage(
             process.env.ARTIFACTS_DIR ?? resolve(process.cwd(), 'data/artifacts'),
           ),
+          auditSink: (record) => auditRepo.log(artifactWriteAuditEntry(record)),
         }),
         maxConcurrency: Number(process.env.BROWSER_MAX_CONCURRENCY ?? 1),
       });
 
   const registry = createDefaultToolRegistry({ guard, browserController });
-  const mcpHub = new McpHub({
-    auditSink: (entry) => {
-      console.log(JSON.stringify({ service: 'agent-worker', event: 'mcp_audit', ...entry }));
-    },
-  });
+  const mcpHub = new McpHub();
   const mcpAdapters = await registerMcpServers(mcpHub, registry);
 
   // The Windows agent dials the API, so the worker reaches a device through the API's internal

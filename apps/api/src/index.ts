@@ -26,7 +26,7 @@ import { SqlModelConfigRepository } from './db/model-config-repository.ts';
 import { SqlProjectRepository } from './db/project-repository.ts';
 import { SqlTaskRepository } from './db/task-repository.ts';
 import { SqlApprovalRepository } from './db/approval-repository.ts';
-import { SqlAuditRepository } from './db/audit-repository.ts';
+import { artifactWriteAuditEntry, SqlAuditRepository } from './db/audit-repository.ts';
 import { DrizzleMemoryRepository } from './db/memory-repository.ts';
 import { SqlSkillRepository } from './db/skill-repository.ts';
 import { SqlScheduleRepository } from './db/schedule-repository.ts';
@@ -93,8 +93,10 @@ const broadcaster = new RedisTaskEventBroadcaster({
   subscriber: redisSubscriber,
 });
 const approvalRepository = new SqlApprovalRepository(db);
-const toolRegistry = createDefaultToolRegistry({ guard: new SecuredCapabilityGuard(new PermissionEngine()) });
 const auditRepository = new SqlAuditRepository(db);
+const toolRegistry = createDefaultToolRegistry({
+  guard: new SecuredCapabilityGuard(new PermissionEngine(), { auditLogger: auditRepository }),
+});
 
 // Model Gateway Setup with explicit security checks
 const isProduction = process.env.NODE_ENV === 'production';
@@ -167,6 +169,7 @@ const artifactsDir =
 const artifactManager = new ArtifactManager({
   storage: new DiskArtifactStorage(artifactsDir),
   userQuotaBytes: Number(process.env.ARTIFACT_USER_QUOTA_BYTES ?? 100 * 1024 * 1024), // 100 MB default
+  auditSink: (record) => auditRepository.log(artifactWriteAuditEntry(record)),
 });
 
 // Skills Subsystem with SqlSkillRepository and startup sync from SKILLS_DIR
