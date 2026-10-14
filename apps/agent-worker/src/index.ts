@@ -109,10 +109,47 @@ export const resolveDatabaseUrl = (): string | undefined => {
   return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
 };
 
+export interface HealthProbe {
+  database: () => Promise<unknown>;
+  redis: () => Promise<unknown>;
+}
+
+/**
+ * Refreshes the Docker health file only after both probes answer. A worker that lost Postgres
+ * or Redis leaves the file stale, so `docker-compose.yml` marks the container unhealthy.
+ * Probe errors are reported, never thrown: a transient outage must not kill the worker.
+ */
+export const refreshHealthFile = async (
+  healthFile: string,
+  probe: HealthProbe,
+): Promise<boolean> => {
+  try {
+    await probe.database();
+    await probe.redis();
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        service: 'agent-worker',
+        event: 'healthcheck_failed',
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    return false;
+  }
+
+  try {
+    writeFileSync(healthFile, Date.now().toString());
+  } catch {
+    // Best effort
+  }
+  return true;
+};
+
 export const startWorkerProcess = async (): Promise<{
   close: () => Promise<void>;
   worker?: Worker | undefined;
   executor: TaskExecutor;
+  healthProbe: HealthProbe;
 }> => {
   const databaseUrl = resolveDatabaseUrl();
   const redisUrl = process.env.REDIS_URL;
@@ -129,6 +166,13 @@ export const startWorkerProcess = async (): Promise<{
   const approvalRepo = new SqlApprovalRepository(db);
   const auditRepo = new SqlAuditRepository(db);
   const broadcaster = new RedisTaskEventBroadcaster({ redisUrl });
+
+  // Dedicated fail-fast connection (same options as the API health client) so a dead Redis
+  // rejects the probe instead of queueing commands forever.
+  const healthRedis = new Redis(redisUrl, { maxRetriesPerRequest: 1, enableReadyCheck: true });
+  healthRedis.on('error', () => {
+    // Reported by the health probe; the listener keeps ioredis from raising an unhandled error event
+  });
 
   // Approval creator for guarded actions
   const approvalCreator = async (params: ApprovalCreatorParams) => {
@@ -280,12 +324,17 @@ export const startWorkerProcess = async (): Promise<{
     await Promise.all(mcpAdapters.map((adapter) => adapter.close()));
     await broadcaster.close(true);
     await sqlClient.end({ timeout: 5 });
+    healthRedis.disconnect();
   };
 
   return {
     close: closeAll,
     worker: workerHandle.worker,
     executor: workerHandle.executor,
+    healthProbe: {
+      database: () => sqlClient`select 1`,
+      redis: () => healthRedis.ping(),
+    },
   };
 };
 
@@ -388,18 +437,13 @@ if (isMainModule()) {
       });
 
       const healthFile = process.env.HEALTHCHECK_FILE ?? '/tmp/healthy';
-      const touchHealth = () => {
-        try {
-          writeFileSync(healthFile, Date.now().toString());
-        } catch {
-          // Best effort
-        }
-      };
-      touchHealth();
+      // Refresh only when Postgres and Redis both answer; otherwise the stale file makes
+      // the Docker healthcheck fail instead of reporting a disconnected worker as healthy.
+      void refreshHealthFile(healthFile, handle.healthProbe);
 
       // Keep process event loop alive indefinitely while waiting for jobs
       keepAliveInterval = setInterval(() => {
-        touchHealth();
+        void refreshHealthFile(healthFile, handle.healthProbe);
       }, 15_000);
     })
     .catch((err) => {
