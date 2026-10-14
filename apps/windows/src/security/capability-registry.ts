@@ -1,4 +1,5 @@
 import { SecurityError } from './path-validator.ts';
+import { DEFAULT_ALLOWED_COMMANDS } from './command-allowlist.ts';
 
 export type CapabilityName =
   'filesystem' | 'powershell' | 'git' | 'browser' | 'screenshot' | 'vscode' | 'docker';
@@ -9,6 +10,8 @@ export interface CapabilityRule {
   requiresExplicitOptIn: boolean;
   allowedActions?: string[] | undefined;
   allowedResources?: string[] | undefined;
+  /** Programs this capability may invoke. Absent or empty means "no command text at all". */
+  allowedCommands?: string[] | undefined;
 }
 
 export class CapabilityDisabledError extends SecurityError {
@@ -46,6 +49,7 @@ export class CapabilityRegistry {
       description: 'Execute PowerShell terminal commands within allowlist',
       requiresExplicitOptIn: false,
       allowedActions: ['exec', 'script'],
+      allowedCommands: [...DEFAULT_ALLOWED_COMMANDS],
     });
 
     this.rules.set('git', {
@@ -102,6 +106,7 @@ export class CapabilityRegistry {
       enabled?: boolean | undefined;
       allowedActions?: string[] | undefined;
       allowedResources?: string[] | undefined;
+      allowedCommands?: string[] | undefined;
     },
   ): void {
     const rule = this.rules.get(name);
@@ -111,6 +116,15 @@ export class CapabilityRegistry {
     if (options.enabled !== undefined) rule.enabled = options.enabled;
     if (options.allowedActions !== undefined) rule.allowedActions = options.allowedActions;
     if (options.allowedResources !== undefined) rule.allowedResources = options.allowedResources;
+    if (options.allowedCommands !== undefined) rule.allowedCommands = options.allowedCommands;
+  }
+
+  /**
+   * Programs `name` may invoke, read from the same local rules the capability flags live in. The
+   * server only ever receives these rules in the handshake; nothing inbound can widen them.
+   */
+  getAllowedCommands(name: CapabilityName): string[] {
+    return [...(this.rules.get(name)?.allowedCommands ?? [])];
   }
 
   assertCapabilityAllowed(name: CapabilityName, action?: string, resource?: string): void {

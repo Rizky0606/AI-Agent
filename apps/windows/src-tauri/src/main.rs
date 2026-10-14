@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod capabilities;
+mod command_allowlist;
 mod executor;
 mod security;
 
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
 use capabilities::{Capability, CapabilityConfig, CapabilityRegistry};
+use command_allowlist::assert_command_allowed;
 use executor::CommandOutput;
 use security::PathAllowlistManager;
 
@@ -171,6 +173,21 @@ fn set_capability(
 }
 
 #[tauri::command]
+fn get_allowed_commands(capability: Capability, state: State<'_, AppState>) -> Vec<String> {
+    state.capabilities.allowed_commands(capability)
+}
+
+#[tauri::command]
+fn set_allowed_commands(
+    capability: Capability,
+    commands: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.capabilities.set_allowed_commands(capability, commands);
+    Ok(())
+}
+
+#[tauri::command]
 fn get_allowed_paths(state: State<'_, AppState>) -> Vec<String> {
     state
         .allowlist
@@ -207,14 +224,18 @@ async fn execute_local_command(
         return Err(format!("Capability '{:?}' is disabled by user policy", capability));
     }
 
-    // 2. Verify CWD is within allowlist
+    // 2. Verify the command text only invokes programs on the local allowlist
+    assert_command_allowed(&command, &state.capabilities.allowed_commands(capability))
+        .map_err(|e| format!("{}: {}", e.code(), e))?;
+
+    // 3. Verify CWD is within allowlist
     let cwd_path = PathBuf::from(&cwd);
     let validated_cwd = state
         .allowlist
         .is_path_allowed(&cwd_path)
         .map_err(|e| e.to_string())?;
 
-    // 3. Execute
+    // 4. Execute
     executor::execute_powershell(&command, &validated_cwd, timeout_ms)
         .await
         .map_err(|e| e.to_string())
@@ -233,6 +254,8 @@ fn main() {
             get_device_identity,
             get_capabilities,
             set_capability,
+            get_allowed_commands,
+            set_allowed_commands,
             get_allowed_paths,
             add_allowed_path,
             remove_allowed_path,

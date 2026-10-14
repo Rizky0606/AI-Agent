@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { CapabilityRegistry } from './capability-registry.ts';
+import { assertCommandAllowed } from './command-allowlist.ts';
 import type { PathValidator } from './path-validator.ts';
 import type { CommandExecutionOptions, CommandExecutionResult, ICommandExecutor } from './types.ts';
 
@@ -32,10 +33,13 @@ export class TauriCommandExecutor implements ICommandExecutor {
     // 1. Validate capability is enabled locally
     this.capabilityRegistry.assertCapabilityAllowed(capability, action, options.cwd);
 
-    // 2. Validate CWD is within allowlist
+    // 2. Validate the command text only invokes programs on the local allowlist
+    assertCommandAllowed(commandText, this.capabilityRegistry.getAllowedCommands(capability));
+
+    // 3. Validate CWD is within allowlist
     const validatedCwd = this.pathValidator.assertPathAllowed(options.cwd);
 
-    // 3. Delegate execution to Rust backend via Tauri command
+    // 4. Delegate execution to Rust backend via Tauri command
     try {
       const output = await invoke<{
         exit_code: number;

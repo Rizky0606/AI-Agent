@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { CapabilityRegistry } from './capability-registry.ts';
+import { assertCommandAllowed } from './command-allowlist.ts';
 import { PathValidator, SecurityError } from './path-validator.ts';
 import {
   DEFAULT_TIMEOUT_MS,
@@ -48,10 +49,13 @@ export class CommandExecutor implements ICommandExecutor {
     // 1. Validate capability is enabled locally
     this.capabilityRegistry.assertCapabilityAllowed(capability, action, options.cwd);
 
-    // 2. Validate CWD is within allowlist (and free from traversal)
+    // 2. Validate the command text only invokes programs on the local allowlist
+    assertCommandAllowed(commandText, this.capabilityRegistry.getAllowedCommands(capability));
+
+    // 3. Validate CWD is within allowlist (and free from traversal)
     const validatedCwd = this.pathValidator.assertPathAllowed(options.cwd);
 
-    // 3. Setup timeouts and caps
+    // 4. Setup timeouts and caps
     const rawTimeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const timeoutMs = Math.min(Math.max(1_000, rawTimeout), MAX_TIMEOUT_MS);
     const maxBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES;

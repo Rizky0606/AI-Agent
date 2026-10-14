@@ -120,9 +120,11 @@ const DEFAULT_ACTION_RULES: ActionRule[] = [
       'Menjalankan interaksi formulir sensitif, login kredensial, atau unduhan file eksternal dari web.',
     allowWithoutApproval: false,
   },
-  // The Windows agent gates capability/action/cwd but has no command-text allowlist, so the
-  // command string a task carries is arbitrary. Approval is the compensating control: every
-  // dispatch to a user device needs an explicit human decision.
+  // The Windows agent now parses the command text against a local binary allowlist
+  // (`apps/windows/src/security/command-allowlist.ts`, enforced in `command-executor.ts`,
+  // `tauri-executor.ts`, and Rust `execute_local_command`), so the command string is no longer
+  // arbitrary. Approval stays the outer control: a dispatch to a user device is still an explicit
+  // human decision, and the local allowlist can refuse what the approval let through.
   {
     pattern: /^device:(command|script|exec)/i,
     baseRisk: 'HIGH',

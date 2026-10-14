@@ -12,6 +12,21 @@ pub enum SecurityError {
     InvalidPathFormat(String),
     #[error("Command execution timed out after {0} ms")]
     ExecutionTimeout(u64),
+    #[error("COMMAND_NOT_ALLOWED ({1}): \"{0}\" is not on the local command allowlist")]
+    CommandNotAllowed(String, &'static str),
+}
+
+impl SecurityError {
+    /// The wire code the Windows agent reports; the human-readable detail is in `Display`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            SecurityError::PathOutsideAllowlist(_) => "PATH_OUTSIDE_ALLOWLIST",
+            SecurityError::PathTraversal(_) => "PATH_TRAVERSAL",
+            SecurityError::InvalidPathFormat(_) => "INVALID_PATH_FORMAT",
+            SecurityError::ExecutionTimeout(_) => "EXECUTION_TIMEOUT",
+            SecurityError::CommandNotAllowed(_, _) => "COMMAND_NOT_ALLOWED",
+        }
+    }
 }
 
 pub struct PathAllowlistManager {
