@@ -5,6 +5,7 @@ import type { DeviceKeyStore } from './device-key.ts';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
+
 export interface ChatFrame {
   type: string;
   conversationId?: string;
@@ -14,6 +15,7 @@ export interface ChatFrame {
   code?: string;
   message?: string | { id: string; role: 'user' | 'assistant' | 'system'; content: string; cancelled?: boolean; metadata?: Record<string, unknown> };
   usage?: Record<string, unknown>;
+  resolvedModel?: string;
 }
 
 export interface AgentConnectionOptions {
@@ -384,20 +386,29 @@ export class ChatConnection {
   private pending: Record<string, unknown> | null = null;
   private activeMessageId: string | undefined;
   private cancelPending = false;
-
   private authenticated = false;
-  private readonly options: { serverUrl: string; token: string; onFrame: (frame: ChatFrame) => void };
-  constructor(options: { serverUrl: string; token: string; onFrame: (frame: ChatFrame) => void }) { this.options = options; }
+  private status: ConnectionStatus = 'disconnected';
+  private reconnectAttempts = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private closedExplicitly = false;
+  private readonly options: {
+    serverUrl: string;
+    token: string;
+    onFrame: (frame: ChatFrame) => void;
+    onStatusChange?: ((status: ConnectionStatus) => void) | undefined;
+    maxReconnectAttempts?: number | undefined;
+  };
+  constructor(options: ChatConnection['options']) { this.options = options; }
 
-  sendChatMessage(payload: Record<string, unknown>): void {
-    if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
-      this.ws.send(JSON.stringify(payload));
-      return;
-    }
-    if (this.ws?.readyState === WebSocket.CONNECTING) return;
-    this.activeMessageId = typeof payload['messageId'] === 'string' ? payload['messageId'] : undefined;
-    this.pending = payload;
+  private setStatus(status: ConnectionStatus): void {
+    if (this.status === status) return;
+    this.status = status;
+    this.options.onStatusChange?.(status);
+  }
+
+  private open(): void {
     const base = this.options.serverUrl.replace(/\/+$/, '').replace(/^http(s?):/i, 'ws$1:');
+    this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
     const ws = new WebSocket(`${base}/v1/chat/ws?token=${encodeURIComponent(this.options.token)}`);
     this.ws = ws;
     ws.onmessage = (event) => {
@@ -406,23 +417,50 @@ export class ChatConnection {
         const frame = JSON.parse(String(event.data)) as ChatFrame;
         if (frame.type === 'auth.ok') {
           this.authenticated = true;
+          this.reconnectAttempts = 0;
+          this.setStatus('connected');
           if (this.pending) ws.send(JSON.stringify(this.pending));
           this.pending = null;
           if (this.cancelPending) this.cancelChat();
         }
         if (frame.type === 'message.created' && typeof frame.message === 'object' && frame.message.role === 'assistant') this.activeMessageId = frame.message.id;
         this.options.onFrame(frame);
-      } catch { this.options.onFrame({ type: 'error', message: 'Invalid chat frame received' }); }
+      } catch { this.options.onFrame({ type: 'error', code: 'INVALID_FRAME', message: 'Invalid chat frame received' }); }
     };
-    ws.onerror = () => this.options.onFrame({ type: 'error', code: 'CHAT_CONNECTION', message: 'Chat connection failed' });
+    ws.onerror = () => {
+      if (this.ws !== ws || this.closedExplicitly) return;
+      this.options.onFrame({ type: 'error', code: 'CHAT_CONNECTION', message: 'Chat connection failed' });
+    };
     ws.onclose = () => {
       if (this.ws !== ws) return;
       this.ws = null;
       this.authenticated = false;
-      this.pending = null;
       this.cancelPending = false;
-      this.options.onFrame({ type: 'error', code: 'CHAT_CLOSED', message: 'Chat connection closed. Retry to reconnect.' });
+      if (this.closedExplicitly) { this.setStatus('disconnected'); return; }
+      this.options.onFrame({ type: 'error', code: 'CHAT_CLOSED', message: 'Chat connection lost. Reconnecting…' });
+      this.scheduleReconnect();
     };
+  }
+
+  sendChatMessage(payload: Record<string, unknown>): void {
+    if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
+      this.ws.send(JSON.stringify(payload));
+      return;
+    }
+    // Queue for the open (possibly still authenticating) socket instead of dialling a second one.
+    this.pending = payload;
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
+    this.closedExplicitly = false;
+    this.reconnectAttempts = 0;
+    this.open();
+  }
+
+  /** Opens the socket before the first message so connection state is visible immediately. */
+  connect(): void {
+    if (this.ws) return;
+    this.closedExplicitly = false;
+    this.reconnectAttempts = 0;
+    this.open();
   }
 
   cancelChat(): void {
@@ -430,12 +468,36 @@ export class ChatConnection {
     if (!this.cancelPending) this.ws?.send(JSON.stringify({ type: 'chat.cancel', ...(this.activeMessageId ? { messageId: this.activeMessageId } : {}) }));
   }
 
+  private scheduleReconnect(): void {
+    const maxAttempts = this.options.maxReconnectAttempts ?? 10;
+    if (this.reconnectAttempts >= maxAttempts) {
+      this.setStatus('disconnected');
+      this.options.onFrame({ type: 'error', code: 'CHAT_RECONNECT_EXHAUSTED', message: 'Chat is offline. Retry to reconnect.' });
+      return;
+    }
+    this.setStatus('reconnecting');
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 10_000);
+    this.reconnectAttempts++;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.open(); }, delay);
+  }
+
   disconnect(): void {
+    this.closedExplicitly = true;
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     const ws = this.ws;
     this.ws = null;
     this.authenticated = false;
     this.pending = null;
     this.cancelPending = false;
     ws?.close();
+    this.setStatus('disconnected');
   }
 }

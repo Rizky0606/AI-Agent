@@ -52,8 +52,9 @@ const persistSession = (session: StoredSession): void => {
   }
 };
 
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; model?: string | null; }
 export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; }
+export type ChatStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 export interface TaskEventEntry {
   id: string;
@@ -81,6 +82,7 @@ export interface AgentState {
   activeConversationId: string;
   chatDraft: string;
   chatStreaming: boolean;
+  chatStatus: ChatStatus;
   chatError: string | null;
   selectedModel: string;
   selectedMode: 'auto' | 'fast' | 'coding' | 'complex' | 'research';
@@ -227,6 +229,7 @@ export const createAgentStore = (
     activeConversationId: '',
     chatDraft: '',
     chatStreaming: false,
+    chatStatus: 'disconnected',
     chatError: null,
     selectedModel: 'auto',
     selectedMode: 'auto',
@@ -431,11 +434,12 @@ export const createAgentStore = (
       const scope = `${state.serverUrl}\n${state.authToken}`;
       if (chatScope === scope && activeChatConnection) return;
       chatScope = scope;
-      set({ conversations: [{ id: '', title: 'New conversation', messages: [] }], activeConversationId: '', chatStreaming: false, chatError: null });
+      set({ conversations: [{ id: '', title: 'New conversation', messages: [] }], activeConversationId: '', chatStreaming: false, chatStatus: 'disconnected', chatError: null });
       activeChatConnection?.disconnect();
       activeChatConnection = new ChatConnection({
         serverUrl: state.serverUrl,
         token: state.authToken,
+        onStatusChange: (chatStatus) => { if (`${get().serverUrl}\n${get().authToken}` === scope) set({ chatStatus }); },
         onFrame: (frame) => set((current) => {
           if (`${current.serverUrl}\n${current.authToken}` !== scope) return {};
           if (frame.type === 'conversation.created' && frame.conversationId) {
@@ -455,7 +459,7 @@ export const createAgentStore = (
             if (conversation.id !== conversationId) return conversation;
             const existing = conversation.messages.find((message) => message.id === id);
             const content = frame.delta ? `${existing?.content ?? ''}${frame.delta}` : incoming?.content ?? frame.content ?? existing?.content ?? '';
-            const message = { id, role: role === 'system' ? 'assistant' : role, content, cancelled: Boolean(incoming?.cancelled || incoming?.metadata?.['cancelled']) } as ChatMessage;
+            const message = { id, role: role === 'system' ? 'assistant' : role, content, cancelled: Boolean(incoming?.cancelled || incoming?.metadata?.['cancelled']), model: frame.resolvedModel ?? existing?.model } as ChatMessage;
             return { ...conversation, messages: existing ? conversation.messages.map((item) => item.id === id ? { ...item, ...message } : item) : [...conversation.messages, message] };
           });
           const done = frame.type === 'message.completed' || frame.type === 'message.cancelled';
@@ -465,9 +469,10 @@ export const createAgentStore = (
       });
       pendingChat = null;
       if (!state.authToken.trim()) { activeChatConnection.disconnect(); activeChatConnection = null; return; }
+      activeChatConnection.connect();
       try {
         const history = await api().listConversations();
-        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Conversation', messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']) }] : []) })));
+        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Conversation', messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']), model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null }] : []) })));
         if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
         set((current) => {
           const merged = conversations.map((conversation) => {

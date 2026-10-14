@@ -101,6 +101,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <StatusPill status={connectionStatus} />
         </View>
       </View>
+      {connectionStatus !== 'connected' ? (
+        <View style={styles.connBanner}>
+          <Text style={styles.connBannerText}>
+            {connectionStatus === 'reconnecting' ? 'Koneksi terputus. Menyambung ulang…' : connectionStatus === 'connecting' ? 'Menyambungkan…' : 'Tidak terhubung. Pesan tidak dapat dikirim.'}
+          </Text>
+        </View>
+      ) : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       {historyError ? (
         <View style={styles.errorBanner}>
@@ -131,6 +138,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
                   <Text style={styles.bubbleRole}>{isUser ? 'You' : 'Assistant'}</Text>
                   <Text style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}>{item.content || 'Thinking…'}</Text>
+                  {typeof item.metadata?.['resolvedModel'] === 'string' ? <Text style={styles.bubbleModel}>{item.metadata['resolvedModel']}</Text> : null}
                   {item.attachments && item.attachments.length > 0 ? (
                     <View style={styles.attachmentList}>
                       {item.attachments.map((att: MessageAttachment, idx: number) => (
@@ -188,6 +196,8 @@ const styles = StyleSheet.create({
   headerTitleContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitle: { color: theme.colors.textPrimary, ...theme.typography.bodyLarge, fontWeight: '600' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  connBanner: { paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, backgroundColor: theme.colors.surfaceElevated, borderBottomWidth: 1, borderBottomColor: theme.colors.warning },
+  connBannerText: { color: theme.colors.warning, ...theme.typography.caption, fontWeight: '600' },
   errorText: { color: theme.colors.danger, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, fontSize: 12 },
   loadingText: { color: theme.colors.textSecondary, ...theme.typography.body, marginTop: theme.spacing.sm },
   errorBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.spacing.md, marginHorizontal: theme.spacing.md, marginTop: theme.spacing.sm, padding: theme.spacing.sm, borderRadius: theme.borderRadius.sm, borderWidth: 1, borderColor: theme.colors.danger, backgroundColor: theme.colors.dangerBg },
@@ -209,6 +219,7 @@ const styles = StyleSheet.create({
   assistantText: { color: theme.colors.textPrimary },
   bubbleRole: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600', marginBottom: 2 },
   timestamp: { color: theme.colors.textMuted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
+  bubbleModel: { color: theme.colors.textMuted, fontSize: 10, marginTop: 2 },
   attachmentList: { marginTop: 4 },
   attachmentPill: { fontSize: 11, color: theme.colors.primary, backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginTop: 2 },
   streamingIndicatorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: theme.spacing.xs },

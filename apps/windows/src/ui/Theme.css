@@ -424,3 +424,6 @@ input:checked + .slider:before {
 .chat-input { width: 100%; resize: vertical; min-height: 72px; }
 .chat-error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); border: 1px solid rgba(244, 63, 94, .35); border-radius: var(--radius-sm); color: var(--accent-rose); background: rgba(244, 63, 94, .08); }
 .chat-error > div { display: flex; gap: var(--space-2); }
+.chat-status { display: flex; align-items: center; gap: var(--space-2); }
+.chat-conn { color: var(--text-sub); font-size: 11px; text-transform: capitalize; }
+.chat-model { color: var(--text-sub); font-size: 10px; }
