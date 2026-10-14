@@ -801,8 +801,32 @@ Semua dijalankan terhadap produksi yang sedang berjalan (`docker compose`, image
 #   apps/android/test/pkce.test.ts (26 test paket android) memverifikasi S256 terhadap vektor
 #   RFC 7636 lampiran B dan base64url terhadap Buffer.toString('base64url') untuk tiap panjang 0..40;
 #   apps/windows/test/google-auth.test.ts 4 test lulus; suite windows 39 test, 35 lulus, 4 skip.
-# Batas bukti: tidak ada kredensial Google nyata di lingkungan ini, jadi penukaran kode otorisasi
-#   Google yang sesungguhnya (langkah 2) belum pernah dijalankan sampai tuntas; yang terbukti adalah
-#   kontrak server, penolakan, dan reaksi terhadap respons gagal dari Google.
+# Bukti end-to-end dengan akun Google sungguhan (2026-10-14, produksi ai.ojixx.my.id):
+#   Login dijalankan di browser nyata terhadap client OAuth asli
+#   (905088938174-k5ln7231shdd1h30dnccjmjunelocq88.apps.googleusercontent.com).
+#   start -> 302 accounts.google.com -> consent -> Google mengembalikan ke callback dengan kode
+#   otorisasi asli -> callback -> 302 http://127.0.0.1:51234/auth?code=<login code>&state=verify2
+#   POST /v1/auth/exchange {code, codeVerifier} -> 200 dalam 18 ms
+#     user.id = 60fed462-3efb-4767-8431-3fe096f5f2dc, email = rizkyfauzi132@gmail.com
+#     accessToken 233 byte, refreshToken 43 byte
+#   GET /v1/me dengan accessToken itu -> 200 {"user":{"id":"60fed462-…","email":"rizkyfauzi132@gmail.com"}}
+#   POST /v1/auth/refresh -> 200, accessToken berbeda, refresh token dirotasi, token baru juga 200 di /v1/me
+#   Token yang sama juga dipakai ke permukaan produksi lain: /v1/models 200 ("source":"live"),
+#   /v1/tasks 200, /v1/devices 200, /v1/memories 200 — jadi sesi hasil login Google benar-benar
+#   diterima di seluruh API, bukan hanya di /v1/me.
+#   DB: user_identities berisi (user_id 60fed462-…, provider google, subject 103900276835349006686,
+#       email rizkyfauzi132@gmail.com); satu baris, satu identitas.
+#   Kontrol negatif pada jalur yang sama:
+#     codeVerifier salah -> 400 INVALID_LOGIN_CODE ("login code does not match this device")
+#     /v1/me tanpa Authorization -> 401; dengan "Bearer not.a.token" -> 401
+#   Catatan: akun ini sudah ada sejak 2026-10-12 dengan password_hash terisi, dan login Google
+#   memakai ulang user id yang sama (password_hash tetap ada). Ini memang desain yang dipilih —
+#   email terverifikasi Google jadi anchor identitas — tapi konsekuensinya: siapa pun yang
+#   menguasai akun Google dengan email itu otomatis mendapat akun lokal yang sudah ada, termasuk
+#   yang punya sandi. Kalau nanti ada alur verifikasi email sendiri, urutannya perlu ditinjau.
+#   Observasi, bukan cacat: login code 60 detik itu bisa ditukar lebih dari sekali dalam masa
+#   berlakunya (replay menghasilkan 200 lagi). Dampaknya kecil karena penukaran tetap menuntut
+#   codeVerifier PKCE yang hanya dipegang klien, tapi single-use akan lebih ketat; itu menuntut
+#   penyimpanan state yang sengaja dihindari (state saat ini ditandatangani, bukan disimpan).
 ```
 

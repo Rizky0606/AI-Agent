@@ -1,6 +1,6 @@
 # Capability Acceptance Report
 
-Date: 2026-10-13, extended 2026-10-14 (M9–M14: dead-code removal, tool/runtime execution caps, worker healthcheck, artifact streaming + magic bytes + retention sweeper, Windows command allowlist, device reconnect grace)
+Date: 2026-10-13, extended 2026-10-14 (M9–M15: dead-code removal, tool/runtime execution caps, worker healthcheck, artifact streaming + magic bytes + retention sweeper, Windows command allowlist, device reconnect grace, Google sign-in)
 
 ## Corrections applied 2026-10-13 (after live re-audit), extended 2026-10-14
 
@@ -36,12 +36,13 @@ This report previously overstated several capabilities. The following claims wer
 - `/v1/catalog` now includes registered `ToolRegistry` metadata when a registry is injected, alongside skills.
 - Android attachment UI no longer creates `https://placeholder.local/image.png`; explicit unavailable state rendered. No upload contract exists.
 - Capability matrix: `docs/capability-matrix.yaml`.
+- Both clients sign in with Google instead of pasting a JWT (2026-10-14). Authorization Code + PKCE with the token exchange on the server: `GET /v1/auth/google/start` signs a state blob (redirect target, client state, client challenge, server-side PKCE verifier) and redirects to Google, `GET /v1/auth/google/callback` verifies the ID token against Google's JWKS (issuer, audience, `email_verified`) and redirects back with a one-minute login code bound to the client's challenge, and `POST /v1/auth/exchange` redeems it for the usual token pair. Migration `0011_user_identities.sql` adds `user_identities` and makes `users.password_hash` nullable, because a provider-only account has no password; a verified email reuses the existing user row, so a password login and its Google login stay on one user id. Android uses `expo-crypto` PKCE and the `personal-ai://auth` deep link; the Windows agent binds a loopback listener in the Rust `google_login` command, opens the system browser, persists the session, and refreshes once on `401`. With `GOOGLE_CLIENT_ID`/`SECRET`/`REDIRECT_URI` unset the routes answer `503 NOT_CONFIGURED` rather than half-working. Verified end to end against production with a real Google account (see `docs/final-audit.md` §8.F Cacat 16).
 
 ## Verification passed
 
-- Per-package suites, 2026-10-14 (latest run, after the corrections below): tools 44/44, mcp 18/18, agent-worker 43/43, memory 7/7, permissions 6/6, agent-core 33/33, evaluator 9/9, android 19/19, windows 35 tests / 31 passed / 4 skipped (the skipped ones execute PowerShell and need Windows), API in-container 66/66, scheduler in-container 25/25.
+- Per-package suites, 2026-10-14 (latest run, after the Google sign-in change): tools 44/44, mcp 18/18, agent-worker 43/43, memory 7/7, permissions 6/6, agent-core 33/33, evaluator 9/9, android 26/26, windows 39 tests / 35 passed / 4 skipped (the skipped ones execute PowerShell and need Windows), API in-container 70/70, scheduler in-container 25/25.
 - `pnpm lint`: 14 tasks successful. `pnpm build`: 14 tasks successful.
-- `pnpm verify:audit`: passed, 204 references and 122 unique paths valid.
+- `pnpm verify:audit`: passed, 211 references and 128 unique paths valid.
 - `RUNTIME_BRIDGE_TOKEN=verification-only docker compose config --quiet`: passed.
 - `pnpm test` at the root is still unusable: the `scheduler:test` task hangs on `ECONNREFUSED 127.0.0.1:6379`, so suites run per package or inside the container images.
 

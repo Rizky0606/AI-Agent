@@ -73,6 +73,20 @@ Allowed `redirect_uri` values are `personal-ai://auth` (Android) and
 application** in the Google Cloud console with `GOOGLE_REDIRECT_URI` registered — no Android
 keystore SHA-1 is involved, so the debug keystore cannot cause `ApiException: 10`.
 
+Verified end to end against production on 2026-10-14 with a real Google account and the real OAuth
+client: the browser round trip returned a genuine authorization code, `POST /v1/auth/exchange`
+answered `200`, the access token authenticated `GET /v1/me`, `POST /v1/auth/refresh` rotated both
+tokens, and `user_identities` gained one row for the Google subject. A wrong `codeVerifier` on that
+same code answers `400 INVALID_LOGIN_CODE`.
+
+While the OAuth consent screen is still **Testing**, only accounts listed under **Test users** can
+sign in; anyone else gets `403 access_denied` from Google before ever reaching this server. Add each
+person there, or press **Publish app** — the `openid email` scopes need no Google review.
+
+An account that already exists under the same email is reused rather than duplicated, and its
+password keeps working. Google has verified that email, which is what makes the link safe; if an
+independent email-verification flow is added later, revisit that ordering.
+
 Email/password login and a manual access token still work and are documented below.
 
 ## Android
