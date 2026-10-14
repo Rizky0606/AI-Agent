@@ -175,6 +175,9 @@ export const AppNavigator: React.FC = () => {
         </TouchableOpacity>
 
         <TouchableOpacity
+          accessibilityRole="tab"
+          accessibilityLabel="Tasks"
+          accessibilityState={{ selected: currentTab === 'tasks' }}
           style={styles.tabItem}
           onPress={() => {
             setShowingArtifacts(false);
@@ -186,6 +189,9 @@ export const AppNavigator: React.FC = () => {
         </TouchableOpacity>
 
         <TouchableOpacity
+          accessibilityRole="tab"
+          accessibilityLabel="Approvals"
+          accessibilityState={{ selected: currentTab === 'approvals' }}
           style={styles.tabItem}
           onPress={() => {
             setShowingArtifacts(false);
@@ -199,6 +205,9 @@ export const AppNavigator: React.FC = () => {
         </TouchableOpacity>
 
         <TouchableOpacity
+          accessibilityRole="tab"
+          accessibilityLabel="Workspace"
+          accessibilityState={{ selected: currentTab === 'projects' }}
           style={styles.tabItem}
           onPress={() => {
             setShowingArtifacts(false);
@@ -212,6 +221,9 @@ export const AppNavigator: React.FC = () => {
         </TouchableOpacity>
 
         <TouchableOpacity
+          accessibilityRole="tab"
+          accessibilityLabel="Settings"
+          accessibilityState={{ selected: currentTab === 'settings' }}
           style={styles.tabItem}
           onPress={() => {
             setShowingArtifacts(false);

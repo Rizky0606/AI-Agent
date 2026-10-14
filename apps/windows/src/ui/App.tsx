@@ -36,7 +36,35 @@ const ChatPanel: React.FC = () => {
   const state = useAgentStore();
   const conversation = state.conversations.find((item) => item.id === state.activeConversationId);
   useEffect(() => { void state.refreshChat(); }, [state.serverUrl, state.authToken]);
-  return <div><div className="chat-layout"><aside className="card chat-sidebar"><button className="btn btn-primary" onClick={state.newConversation}>New conversation</button>{state.conversations.filter((item) => item.id).map((item) => <button key={item.id} className={`chat-conversation ${item.id === state.activeConversationId ? 'active' : ''}`} onClick={() => state.setActiveConversation(item.id)}>{item.title}</button>)}</aside><section className="card chat-panel"><div className="chat-toolbar"><select value={state.selectedMode} onChange={(event) => state.setSelectedMode(event.target.value as typeof state.selectedMode)}><option value="auto">Auto</option><option value="fast">Fast</option><option value="coding">Coding</option><option value="complex">Complex</option><option value="research">Research</option></select><input className="text-input" value={state.selectedModel} onChange={(event) => state.setSelectedModel(event.target.value)} placeholder="Model (auto)" /></div><div className="chat-messages">{conversation?.messages.map((message) => <div key={message.id} className={`chat-message ${message.role}`}><strong>{message.role === 'user' ? 'You' : 'Assistant'}</strong><div style={{ whiteSpace: 'pre-wrap' }}>{message.content}</div>{message.cancelled && <small>Cancelled</small>}</div>)}</div>{state.chatError && <div className="chat-error" role="alert">{state.chatError}<button className="btn btn-sm" onClick={state.clearChatError}>Clear</button><button className="btn btn-sm" onClick={state.retryChat} disabled={state.chatStreaming}>Retry</button></div>}<textarea className="text-input chat-input" value={state.chatDraft} onChange={(event) => state.setChatDraft(event.target.value)} placeholder="Message" disabled={state.chatStreaming} />{state.chatStreaming ? <button className="btn btn-danger" onClick={state.cancelChat}>Cancel</button> : <button className="btn btn-primary" onClick={state.sendChat} disabled={!state.chatDraft.trim()}>Send</button>}</section></div><ProjectPanel /></div>;
+  const hasMessages = Boolean(conversation?.messages.length);
+  return (
+    <div>
+      <div className="chat-layout">
+        <aside className="card chat-sidebar" aria-label="Conversations">
+          <div className="chat-sidebar-heading"><div><span className="eyebrow">Workspace chat</span><h2 className="chat-title">Conversations</h2></div><span className="chat-count">{state.conversations.filter((item) => item.id).length}</span></div>
+          <button className="btn btn-primary" onClick={state.newConversation}>+ New conversation</button>
+          <div className="chat-conversation-list">
+            {state.conversations.filter((item) => item.id).map((item) => (
+              <button key={item.id} className={`chat-conversation ${item.id === state.activeConversationId ? 'active' : ''}`} onClick={() => state.setActiveConversation(item.id)} aria-current={item.id === state.activeConversationId ? 'page' : undefined}>
+                <span>{item.title}</span><small>{item.messages.length} {item.messages.length === 1 ? 'message' : 'messages'}</small>
+              </button>
+            ))}
+            {!state.conversations.some((item) => item.id) && <p className="chat-sidebar-empty">Your conversations appear here.</p>}
+          </div>
+        </aside>
+        <section className="card chat-panel" aria-label="Chat">
+          <header className="chat-header"><div><span className="eyebrow">Personal AI OS</span><h2 className="chat-title">{conversation?.title ?? 'New conversation'}</h2></div><span className={`chat-state ${state.chatStreaming ? 'active' : ''}`}>{state.chatStreaming ? 'Responding' : 'Ready'}</span></header>
+          <div className="chat-toolbar"><label>Mode<select aria-label="Chat mode" value={state.selectedMode} onChange={(event) => state.setSelectedMode(event.target.value as typeof state.selectedMode)}><option value="auto">Auto</option><option value="fast">Fast</option><option value="coding">Coding</option><option value="complex">Complex</option><option value="research">Research</option></select></label><label className="model-field">Model<input aria-label="Chat model" className="text-input" value={state.selectedModel} onChange={(event) => state.setSelectedModel(event.target.value)} placeholder="Auto" /></label></div>
+          <div className="chat-messages" aria-live="polite">
+            {hasMessages ? conversation?.messages.map((message) => <article key={message.id} className={`chat-message ${message.role}`}><div className="chat-message-meta"><strong>{message.role === 'user' ? 'You' : 'Assistant'}</strong>{message.cancelled && <small>Cancelled</small>}</div><div className="chat-message-content">{message.content || (state.chatStreaming ? 'Thinking…' : '')}</div></article>) : <div className="chat-empty"><span className="chat-empty-mark">✦</span><h3>Start a conversation</h3><p>Ask anything. Your messages stay available across devices.</p></div>}
+          </div>
+          {state.chatError && <div className="chat-error" role="alert"><span>{state.chatError}</span><div><button className="btn btn-sm" onClick={state.clearChatError}>Clear</button><button className="btn btn-sm btn-primary" onClick={state.retryChat} disabled={state.chatStreaming}>Retry</button></div></div>}
+          <div className="chat-composer"><textarea aria-label="Message" className="text-input chat-input" value={state.chatDraft} onChange={(event) => state.setChatDraft(event.target.value)} placeholder="Message your assistant…" disabled={state.chatStreaming} rows={2} /><div className="chat-composer-footer"><span>Enter a clear request</span>{state.chatStreaming ? <button className="btn btn-danger" onClick={state.cancelChat}>Stop response</button> : <button className="btn btn-primary" onClick={state.sendChat} disabled={!state.chatDraft.trim()}>Send message</button>}</div></div>
+        </section>
+      </div>
+      <ProjectPanel />
+    </div>
+  );
 };
 const ModelSettings: React.FC = () => {
   const state = useAgentStore();

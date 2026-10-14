@@ -49,7 +49,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setSelectedMode,
     connectionStatus,
   } = useChatStore();
-  const { data: initialMessages, isLoading: isLoadingInitial, error: historyError } = useMessages(conversationId);
+  const { data: initialMessages, isLoading: isLoadingInitial, error: historyError, refetch: refetchHistory } = useMessages(conversationId);
   useEffect(() => {
     void defaultApiClient.listModels().then((catalog) => setModels(catalog.models)).catch(() => setModels([]));
   }, [setModels]);
@@ -101,10 +101,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <StatusPill status={connectionStatus} />
         </View>
       </View>
-      {error || historyError ? <Text style={styles.errorText}>{error ?? (historyError instanceof Error ? historyError.message : 'Unable to load history')}</Text> : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {historyError ? (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{historyError instanceof Error ? historyError.message : 'Riwayat gagal dimuat'}</Text>
+          <TouchableOpacity accessibilityRole="button" style={styles.retryButton} onPress={() => void refetchHistory()}><Text style={styles.retryButtonText}>Coba lagi</Text></TouchableOpacity>
+        </View>
+      ) : null}
 
       {isLoadingInitial && messages.length === 0 ? (
-        <View style={styles.loadingContainer}><ActivityIndicator color={theme.colors.primary} /></View>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator color={theme.colors.primary} />
+          <Text style={styles.loadingText}>Memuat riwayat…</Text>
+        </View>
       ) : (
         <FlatList
           ref={flatListRef}
@@ -115,9 +124,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           renderItem={({ item }) => {
             const isUser = item.role === 'user';
             return (
-              <View style={[styles.bubbleContainer, isUser ? styles.userAlign : styles.assistantAlign]}>
+              <View
+                style={[styles.bubbleContainer, isUser ? styles.userAlign : styles.assistantAlign]}
+                accessibilityLabel={`${isUser ? 'You' : 'Assistant'}: ${item.content}`}
+              >
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}>{item.content}</Text>
+                  <Text style={styles.bubbleRole}>{isUser ? 'You' : 'Assistant'}</Text>
+                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}>{item.content || 'Thinking…'}</Text>
                   {item.attachments && item.attachments.length > 0 ? (
                     <View style={styles.attachmentList}>
                       {item.attachments.map((att: MessageAttachment, idx: number) => (
@@ -130,6 +143,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               </View>
             );
           }}
+          ListEmptyComponent={!isStreaming ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyMark}>✦</Text>
+              <Text style={styles.emptyTitle}>Mulai percakapan</Text>
+              <Text style={styles.emptySubtitle}>Tanyakan apa saja. Pesan Anda tersimpan lintas perangkat.</Text>
+            </View>
+          ) : null}
           ListFooterComponent={isStreaming && !messages.some((message) => message.id === useChatStore.getState().streamingMessageId) ? (
             <View style={[styles.bubbleContainer, styles.assistantAlign]}>
               <View style={[styles.bubble, styles.assistantBubble]}>
@@ -154,7 +174,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <TextInput accessibilityLabel="Message" style={styles.textInput} value={draftText} onChangeText={setDraftText} placeholder="Ketik pesan untuk asisten..." placeholderTextColor={theme.colors.textMuted} multiline maxLength={4000} />
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Send message" style={[styles.sendBtn, (!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected') && styles.sendBtnDisabled]} onPress={handleSend} disabled={!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected'}><Text style={styles.sendBtnText}>↑</Text></TouchableOpacity>
         </View>
-        {isStreaming ? <TouchableOpacity accessibilityRole="button" accessibilityLabel="Stop response" style={styles.cancelButton} onPress={handleCancel}><Text style={styles.cancelButtonText}>Stop</Text></TouchableOpacity> : null}
+        {isStreaming ? <TouchableOpacity accessibilityRole="button" accessibilityLabel="Stop response" accessibilityState={{ disabled: isCancelling }} disabled={isCancelling} style={[styles.cancelButton, isCancelling && styles.sendBtnDisabled]} onPress={handleCancel}><Text style={styles.cancelButtonText}>{isCancelling ? 'Stopping…' : 'Stop'}</Text></TouchableOpacity> : null}
       </View>
     </KeyboardAvoidingView>
   );
@@ -169,6 +189,14 @@ const styles = StyleSheet.create({
   headerTitle: { color: theme.colors.textPrimary, ...theme.typography.bodyLarge, fontWeight: '600' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorText: { color: theme.colors.danger, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, fontSize: 12 },
+  loadingText: { color: theme.colors.textSecondary, ...theme.typography.body, marginTop: theme.spacing.sm },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.spacing.md, marginHorizontal: theme.spacing.md, marginTop: theme.spacing.sm, padding: theme.spacing.sm, borderRadius: theme.borderRadius.sm, borderWidth: 1, borderColor: theme.colors.danger, backgroundColor: theme.colors.dangerBg },
+  retryButton: { minHeight: theme.controls.minTouchTarget, justifyContent: 'center', paddingHorizontal: theme.spacing.md },
+  retryButtonText: { color: theme.colors.danger, ...theme.typography.body, fontWeight: '700' },
+  emptyState: { alignItems: 'center', paddingVertical: theme.spacing.xxl, paddingHorizontal: theme.spacing.xl },
+  emptyMark: { color: theme.colors.primary, fontSize: 32, marginBottom: theme.spacing.sm },
+  emptyTitle: { color: theme.colors.textPrimary, ...theme.typography.title, marginBottom: theme.spacing.xs },
+  emptySubtitle: { color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' },
   messageList: { padding: theme.spacing.md, paddingBottom: theme.spacing.xl },
   bubbleContainer: { width: '100%', marginBottom: theme.spacing.sm },
   userAlign: { alignItems: 'flex-end' },
@@ -179,13 +207,14 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 14, lineHeight: 20 },
   userText: { color: '#fff' },
   assistantText: { color: theme.colors.textPrimary },
+  bubbleRole: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600', marginBottom: 2 },
   timestamp: { color: theme.colors.textMuted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
   attachmentList: { marginTop: 4 },
   attachmentPill: { fontSize: 11, color: theme.colors.primary, backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginTop: 2 },
   streamingIndicatorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: theme.spacing.xs },
   streamingLabel: { color: theme.colors.textMuted, fontSize: 11 },
-  cancelButton: { backgroundColor: theme.colors.dangerBg, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, borderWidth: 1, borderColor: theme.colors.danger },
-  cancelButtonText: { color: theme.colors.danger, fontSize: 11, fontWeight: '600' },
+  cancelButton: { backgroundColor: theme.colors.dangerBg, minHeight: theme.controls.minTouchTarget, justifyContent: 'center', paddingHorizontal: theme.spacing.md, borderRadius: theme.borderRadius.sm, borderWidth: 1, borderColor: theme.colors.danger },
+  cancelButtonText: { color: theme.colors.danger, ...theme.typography.body, fontWeight: '600' },
   inputBar: { backgroundColor: theme.colors.surface, borderTopWidth: 1, borderTopColor: theme.colors.surfaceBorder, padding: theme.spacing.sm },
   inputControlsRow: { flexDirection: 'row', alignItems: 'center' },
   selectorLabel: { color: theme.colors.textMuted, ...theme.typography.caption, marginRight: theme.spacing.xs },
