@@ -3,36 +3,93 @@ import test from 'node:test';
 import { PermissionEngine } from '@personal-ai-os/permissions';
 import {
   AgentRouter,
-  HermesRuntimeAdapter,
-  OmpRuntimeAdapter,
-  OpenHandsRuntimeAdapter,
-  PiRuntimeAdapter,
+  BaseAgentRuntime,
   RuntimeManager,
+  type RuntimeCapability,
+  type RuntimeExecuteInput,
+  type RuntimeExecuteResult,
+  type RuntimeHealth,
+  type RuntimeProposedAction,
 } from '../src/index.ts';
+
+const CODING_CAPABILITIES: readonly RuntimeCapability[] = [
+  { name: 'coding', description: 'Coding', level: 'write' },
+];
+
+/**
+ * Test-local fake runtime. The worker registers no in-process adapter
+ * (only RemoteRuntimeAdapter over the bridge), so these fixtures live here.
+ */
+class FakeRuntime extends BaseAgentRuntime {
+  readonly id: string;
+  readonly name: string;
+  readonly version: string;
+  readonly capabilities: readonly RuntimeCapability[];
+
+  private readonly health: RuntimeHealth;
+  private readonly proposedActions: RuntimeProposedAction[];
+
+  constructor(opts: {
+    id: string;
+    name: string;
+    version: string;
+    health: RuntimeHealth;
+    proposedActions?: RuntimeProposedAction[] | undefined;
+    permissionEngine?: PermissionEngine | undefined;
+  }) {
+    super(opts.permissionEngine);
+    this.id = opts.id;
+    this.name = opts.name;
+    this.version = opts.version;
+    this.capabilities = CODING_CAPABILITIES;
+    this.health = opts.health;
+    this.proposedActions = opts.proposedActions ?? [];
+  }
+
+  async execute(input: RuntimeExecuteInput): Promise<RuntimeExecuteResult> {
+    const proposedActions = this.proposedActions;
+    return {
+      taskId: input.taskId,
+      status: 'completed',
+      output: 'Refactored auth module',
+      durationMs: 0,
+      // Runtime output is UNTRUSTED; it must be filtered before being trusted.
+      untrustedOutputWarning: true,
+      proposedActions,
+      appliedActions: await this.filterUntrustedActions(proposedActions),
+    };
+  }
+
+  async healthCheck(): Promise<RuntimeHealth> {
+    return this.health;
+  }
+}
 
 test('RuntimeManager: registers, manages lifecycle and health of runtimes', async () => {
   const manager = new RuntimeManager();
 
-  const omp = new OmpRuntimeAdapter({
-    commandRunner: async (_cmd, args) => {
-      if (args[0] === '--help') {
-        return { stdout: 'omp --mode json [options]', stderr: '', exitCode: 0 };
-      }
-      return { stdout: '{}', stderr: '', exitCode: 0 };
+  const runtime = new FakeRuntime({
+    id: 'omp',
+    name: 'Test Coding Agent',
+    version: '1.0.0',
+    health: {
+      healthy: true,
+      lastChecked: new Date().toISOString(),
+      details: 'test-runtime 1.0.0',
     },
   });
 
-  manager.register(omp);
+  manager.register(runtime);
   assert.equal(manager.getAllRuntimes().length, 1);
-  assert.equal(manager.getRuntime('omp')?.name, 'Oh-My-Pi Coding Agent');
+  assert.equal(manager.getRuntime('omp')?.name, 'Test Coding Agent');
 
   // Duplicate registration throws
-  assert.throws(() => manager.register(omp), /already registered/);
+  assert.throws(() => manager.register(runtime), /already registered/);
 
   // Health check
   const health = await manager.healthCheck('omp');
   assert.equal(health.healthy, true);
-  assert.ok(health.details?.includes('18.6.1'));
+  assert.ok(health.details?.includes('1.0.0'));
 
   // Task lifecycle
   await manager.pauseTask('omp', 'task-1');
@@ -48,7 +105,7 @@ test('RuntimeManager: registers, manages lifecycle and health of runtimes', asyn
   assert.equal(healthy?.id, 'omp');
 });
 
-test('OmpRuntimeAdapter & PiRuntimeAdapter: enforce untrusted output boundaries via PermissionEngine', async () => {
+test('Untrusted runtime output: enforced through PermissionEngine before being trusted', async () => {
   const permissions = new PermissionEngine([
     {
       pattern: /^file:read$/i,
@@ -64,37 +121,31 @@ test('OmpRuntimeAdapter & PiRuntimeAdapter: enforce untrusted output boundaries 
     },
   ]);
 
-  const omp = new OmpRuntimeAdapter({
+  const runtime = new FakeRuntime({
+    id: 'fake-untrusted',
+    name: 'Fake Untrusted Runtime',
+    version: '1.0.0',
+    health: { healthy: true, lastChecked: new Date().toISOString() },
     permissionEngine: permissions,
-    commandRunner: async (_cmd, args) => {
-      if (args[0] === '-p') {
-        // Output proposed actions from untrusted runtime
-        const responseJson = {
-          response: 'Refactored auth module',
-          proposedActions: [
-            {
-              id: 'act-1',
-              type: 'file_write',
-              action: 'file:read',
-              resource: 'workspace/src/auth.ts',
-              riskLevel: 'LOW',
-            },
-            {
-              id: 'act-2',
-              type: 'command',
-              action: 'shell:exec',
-              resource: 'workspace/rm -rf /',
-              riskLevel: 'HIGH',
-            },
-          ],
-        };
-        return { stdout: JSON.stringify(responseJson), stderr: '', exitCode: 0 };
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
-    },
+    proposedActions: [
+      {
+        id: 'act-1',
+        type: 'file_write',
+        action: 'file:read',
+        resource: 'workspace/src/auth.ts',
+        riskLevel: 'LOW',
+      },
+      {
+        id: 'act-2',
+        type: 'command',
+        action: 'shell:exec',
+        resource: 'workspace/rm -rf /',
+        riskLevel: 'HIGH',
+      },
+    ],
   });
 
-  const res = await omp.execute({
+  const res = await runtime.execute({
     taskId: 'task-untrusted-1',
     prompt: 'Refactor auth and cleanup',
   });
@@ -106,6 +157,7 @@ test('OmpRuntimeAdapter & PiRuntimeAdapter: enforce untrusted output boundaries 
   // act-1 is allowed
   assert.equal(res.appliedActions?.[0]?.action.id, 'act-1');
   assert.equal(res.appliedActions?.[0]?.permissionGranted, true);
+  assert.equal(res.appliedActions?.[0]?.executed, true);
 
   // act-2 is blocked by PermissionEngine
   assert.equal(res.appliedActions?.[1]?.action.id, 'act-2');
@@ -113,46 +165,56 @@ test('OmpRuntimeAdapter & PiRuntimeAdapter: enforce untrusted output boundaries 
   assert.equal(res.appliedActions?.[1]?.executed, false);
 });
 
-test('Unverified runtimes (Hermes, OpenHands): rejected and report unhealthy per Rule 6 and assessment.md', async () => {
-  const hermes = new HermesRuntimeAdapter();
-  const openhands = new OpenHandsRuntimeAdapter();
+test('Runtime without PermissionEngine: untrusted output denied by default (fail-closed)', async () => {
+  const runtime = new FakeRuntime({
+    id: 'fake-no-engine',
+    name: 'Fake Runtime Without PermissionEngine',
+    version: '1.0.0',
+    health: { healthy: true, lastChecked: new Date().toISOString() },
+    proposedActions: [
+      {
+        id: 'act-1',
+        type: 'command',
+        action: 'shell:exec',
+        resource: 'workspace/rm -rf /',
+        riskLevel: 'HIGH',
+      },
+    ],
+  });
 
-  const hermesHealth = await hermes.healthCheck();
-  assert.equal(hermesHealth.healthy, false);
-  assert.ok(hermesHealth.error?.includes('NOT verified/installed'));
+  const res = await runtime.execute({ taskId: 'task-fail-closed', prompt: 'run cleanup' });
 
-  const openhandsHealth = await openhands.healthCheck();
-  assert.equal(openhandsHealth.healthy, false);
-  assert.ok(openhandsHealth.error?.includes('NOT verified/installed'));
-
-  // Execution fails immediately
-  const hermesExec = await hermes.execute({ taskId: 'h-1', prompt: 'test' });
-  assert.equal(hermesExec.status, 'failed');
-  assert.ok(hermesExec.error?.includes('not verified or installed'));
-
-  // Initialization throws per Rule 6
-  await assert.rejects(async () => hermes.initialize(), /Refusing execution per Rule 6/);
+  assert.equal(res.untrustedOutputWarning, true);
+  assert.equal(res.appliedActions?.length, 1);
+  assert.equal(res.appliedActions?.[0]?.permissionGranted, false);
+  assert.equal(res.appliedActions?.[0]?.executed, false);
 });
 
 test('AgentRouter: selects healthy runtime and automatically triggers fallback when primary runtime is unhealthy', async () => {
   const manager = new RuntimeManager();
 
-  // OMP is UNHEALTHY (e.g. binary missing or error)
-  const unhealthyOmp = new OmpRuntimeAdapter({
-    commandRunner: async () => ({
-      stdout: '',
-      stderr: 'omp binary not found or crashed',
-      exitCode: 127,
-    }),
+  // Primary is UNHEALTHY (e.g. binary missing or error)
+  const unhealthyOmp = new FakeRuntime({
+    id: 'omp',
+    name: 'Test Coding Agent',
+    version: '1.0.0',
+    health: {
+      healthy: false,
+      lastChecked: new Date().toISOString(),
+      error: 'omp binary not found or crashed',
+    },
   });
 
-  // Pi is HEALTHY
-  const healthyPi = new PiRuntimeAdapter({
-    commandRunner: async () => ({
-      stdout: 'pi --mode json version 1.1.0',
-      stderr: '',
-      exitCode: 0,
-    }),
+  // Fallback is HEALTHY
+  const healthyPi = new FakeRuntime({
+    id: 'pi',
+    name: 'Test Fallback Agent',
+    version: '1.1.0',
+    health: {
+      healthy: true,
+      lastChecked: new Date().toISOString(),
+      details: 'pi 1.1.0',
+    },
   });
 
   manager.register(unhealthyOmp);
@@ -166,7 +228,7 @@ test('AgentRouter: selects healthy runtime and automatically triggers fallback w
     preferredRuntimeId: 'omp',
   });
 
-  // Primary OMP was unhealthy, so router must have fallen back to healthy Pi
+  // Primary was unhealthy, so router must have fallen back to the healthy one
   assert.equal(resolution.route.fallbackUsed, true);
   assert.equal(resolution.route.originalRuntimeId, 'omp');
   assert.equal(resolution.route.selectedRuntimeId, 'pi');
