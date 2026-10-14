@@ -36,6 +36,10 @@ import { ModelRouter } from './services/model-router.ts';
 import { BullMqTaskQueue } from './services/task-queue.ts';
 import { RedisTaskEventBroadcaster } from './services/event-broadcaster.ts';
 import { createTaskNotificationListener } from './services/task-notifications.ts';
+import {
+  DEFAULT_EPHEMERAL_TTL_MS,
+  sweepExpiredArtifacts,
+} from './services/artifact-retention-sweeper.ts';
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -268,6 +272,33 @@ const app = await buildApp({
   },
 });
 
+// Retention sweep: the API process owns both the artifact storage and the database, so it is
+// where expired artifacts get deleted. Disabled unless the interval is set to a positive value.
+const artifactSweepIntervalMs = Number(process.env.ARTIFACT_RETENTION_SWEEP_INTERVAL_MS ?? 0);
+const artifactSweepTimer =
+  artifactSweepIntervalMs > 0
+    ? setInterval(() => {
+        void sweepExpiredArtifacts({
+          artifactManager,
+          getTaskStatus: async (ownerId, taskId) =>
+            (await taskRepository.getTask(ownerId, taskId))?.status ?? null,
+          projectExists: async (ownerId, projectId) =>
+            (await projectRepository.getProject(ownerId, projectId)) !== null,
+          ephemeralTtlMs: Number(process.env.ARTIFACT_EPHEMERAL_TTL_MS ?? DEFAULT_EPHEMERAL_TTL_MS),
+        })
+          .then((result) => {
+            app.log.debug(result, 'artifact retention sweep');
+            if (result.deleted > 0 || result.failed.length > 0) {
+              app.log.info(result, 'artifact retention sweep');
+            }
+          })
+          .catch((err: unknown) => {
+            app.log.error({ err }, 'artifact retention sweep failed');
+          });
+      }, artifactSweepIntervalMs)
+    : undefined;
+artifactSweepTimer?.unref();
+
 // Event task dari worker (Redis) menjadi baris notifications durable di proses API.
 broadcaster.subscribe(
   createTaskNotificationListener({
@@ -280,6 +311,7 @@ broadcaster.subscribe(
 
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, 'shutting down');
+  clearInterval(artifactSweepTimer);
   await app.close();
   await broadcaster.close(true);
   await redis.quit();

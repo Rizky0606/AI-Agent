@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { Readable } from 'node:stream';
 import {
   ArtifactAccessDeniedError,
   ArtifactManager,
@@ -13,6 +14,7 @@ import {
   InvalidFilenameError,
   InvalidMimeTypeError,
 } from '../src/index.ts';
+import { sniffContentKind } from '../src/artifacts/magic-bytes.ts';
 
 test('ArtifactManager creates artifact and validates ownership strictly', async () => {
   const storage = new InMemoryArtifactStorage();
@@ -366,4 +368,107 @@ test('ArtifactManager keeps the artifact when the audit sink fails', async () =>
 
   assert.equal((await manager.getArtifactContent(artifact.id, 'alice')).toString('utf-8'), 'kept content');
   assert.equal((await manager.listArtifactsByUser('alice')).length, 1);
+});
+
+test('ArtifactManager rejects content that contradicts the declared MIME type', async () => {
+  const manager = new ArtifactManager({ storage: new InMemoryArtifactStorage() });
+
+  await assert.rejects(
+    async () =>
+      manager.createArtifact({
+        ownerId: 'alice',
+        filename: 'fake.png',
+        mimeType: 'image/png',
+        content: 'plain text pretending to be a PNG',
+      }),
+    (err: unknown) => err instanceof InvalidMimeTypeError,
+  );
+
+  await assert.rejects(
+    async () =>
+      manager.createArtifact({
+        ownerId: 'alice',
+        filename: 'fake.pdf',
+        mimeType: 'application/pdf',
+        content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      }),
+    (err: unknown) => err instanceof InvalidMimeTypeError,
+  );
+
+  // `application/octet-stream` claims nothing, so any bytes are acceptable.
+  const binary = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'blob.bin',
+    mimeType: 'application/octet-stream',
+    content: Buffer.from([0x00, 0x01, 0x02, 0x03]),
+  });
+  assert.equal(binary.size, 4);
+
+  const png = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'real.png',
+    mimeType: 'image/png',
+    content: Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('body'),
+    ]),
+  });
+  assert.equal(png.mimeType, 'image/png');
+
+  // An empty text file carries no signature but is still valid text.
+  const empty = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'empty.txt',
+    mimeType: 'text/plain',
+    content: '',
+  });
+  assert.equal(empty.size, 0);
+});
+
+test('ArtifactManager stores a streamed upload without losing bytes to the signature peek', async () => {
+  const manager = new ArtifactManager({ storage: new InMemoryArtifactStorage() });
+  const bytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(2 * 1024 * 1024, 0x41)]);
+
+  const artifact = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'large.pdf',
+    mimeType: 'application/pdf',
+    content: Readable.from(bytes),
+  });
+
+  assert.equal(artifact.size, bytes.length);
+  assert.ok((await manager.getArtifactContent(artifact.id, 'alice')).equals(bytes));
+});
+
+test('sniffContentKind classifies the supported signatures', () => {
+  assert.equal(sniffContentKind(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), 'jpeg');
+  assert.equal(sniffContentKind(Buffer.from('GIF89a...')), 'gif');
+  assert.equal(sniffContentKind(Buffer.from('RIFF\u0000\u0000\u0000\u0000WEBPVP8 ')), 'webp');
+  assert.equal(sniffContentKind(Buffer.from('%PDF-1.7')), 'pdf');
+  assert.equal(sniffContentKind(Buffer.from([0x50, 0x4b, 0x03, 0x04])), 'zip');
+  assert.equal(sniffContentKind(Buffer.from('{"a":1}')), 'text');
+  // A text file that merely starts with "PK" is not a ZIP.
+  assert.equal(sniffContentKind(Buffer.from('PK notes about zips')), 'text');
+  assert.equal(sniffContentKind(Buffer.from([0x00, 0x01, 0x02])), undefined);
+});
+
+test('ArtifactManager lists every artifact across owners', async () => {
+  const manager = new ArtifactManager({ storage: new InMemoryArtifactStorage() });
+  await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'a.txt',
+    mimeType: 'text/plain',
+    content: 'a',
+  });
+  await manager.createArtifact({
+    ownerId: 'bob',
+    filename: 'b.txt',
+    mimeType: 'text/plain',
+    content: 'b',
+  });
+
+  assert.deepEqual(
+    (await manager.listAllArtifacts()).map((artifact) => artifact.filename).sort(),
+    ['a.txt', 'b.txt'],
+  );
 });

@@ -11,6 +11,7 @@ import {
   InvalidMimeTypeError,
   type CreateArtifactInput,
 } from './types.ts';
+import { MAGIC_BYTES_LENGTH, assertMimeMatchesContent } from './magic-bytes.ts';
 
 const DEFAULT_ALLOWED_MIME_TYPES = new Set([
   'text/plain',
@@ -139,12 +140,50 @@ export class ArtifactManager {
   }
 
   /**
+   * Returns the leading bytes used for signature validation. A stream keeps its bytes: the
+   * peeked head is pushed back so the upload still reaches storage complete.
+   */
+  private async headBytes(content: CreateArtifactInput['content']): Promise<Buffer> {
+    if (typeof (content as Readable).pipe !== 'function') {
+      const buffer = Buffer.isBuffer(content)
+        ? content
+        : Buffer.from(content as Uint8Array | string);
+      return buffer.subarray(0, MAGIC_BYTES_LENGTH);
+    }
+
+    const stream = content as Readable;
+    const head = await new Promise<Buffer>((resolve, reject) => {
+      const onReadable = (): void => {
+        const chunk = stream.read(MAGIC_BYTES_LENGTH) as Buffer | null;
+        if (!chunk) return;
+        stream.off('readable', onReadable);
+        stream.off('end', onEnd);
+        // Synchronous: an awaited unshift lands after the stream has already seen EOF and is
+        // destroyed, which would silently drop the bytes.
+        stream.unshift(chunk);
+        resolve(chunk);
+      };
+      // A stream that ends before the peek returns everything it had, including nothing.
+      const onEnd = (): void => {
+        stream.off('readable', onReadable);
+        resolve((stream.read() as Buffer | null) ?? Buffer.alloc(0));
+      };
+      stream.on('readable', onReadable);
+      stream.on('end', onEnd);
+      stream.on('error', reject);
+    });
+    return head;
+  }
+
+  /**
    * Stores a new artifact, enforcing MIME validation, quota, and path traversal protection.
    */
   async createArtifact(input: CreateArtifactInput): Promise<ArtifactMetadata> {
     const sanitizedFilename = this.sanitizeFilename(input.filename);
     this.validateMimeType(input.mimeType);
-
+    // The declared type must match the actual bytes, otherwise a client could store an
+    // executable under `image/png`. Streams are peeked without buffering the whole body.
+    assertMimeMatchesContent(input.mimeType, await this.headBytes(input.content));
     const artifactId = randomUUID();
     const storageKey = `${input.ownerId}/${artifactId}/${sanitizedFilename}`;
 
@@ -371,18 +410,20 @@ export class ArtifactManager {
   }
 
   async listArtifactsByUser(userId: string, projectId?: string | null): Promise<ArtifactMetadata[]> {
+    return (await this.listAllArtifacts()).filter(
+      (artifact) =>
+        artifact.ownerId === userId && (!projectId || artifact.projectId === projectId),
+    );
+  }
+
+  /**
+   * Enumerates every artifact regardless of owner, for cross-user maintenance jobs such as
+   * the retention sweep. Metadata written by other processes is loaded from the sidecars.
+   */
+  async listAllArtifacts(): Promise<ArtifactMetadata[]> {
     for (const key of await this.storage.listKeys(ArtifactManager.META_PREFIX)) {
       await this.loadMetadata(key.slice(ArtifactManager.META_PREFIX.length, -'.json'.length));
     }
-
-    const list: ArtifactMetadata[] = [];
-    for (const art of this.metadataStore.values()) {
-      if (art.ownerId === userId) {
-        if (!projectId || art.projectId === projectId) {
-          list.push(art);
-        }
-      }
-    }
-    return list;
+    return [...this.metadataStore.values()];
   }
 }

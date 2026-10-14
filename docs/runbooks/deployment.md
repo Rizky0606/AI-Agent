@@ -185,6 +185,13 @@ curl -f http://localhost:3000/ready
    mkdir -p ~/apps/personal-ai-os/data/artifacts
    sudo chown -R 1000:1000 ~/apps/personal-ai-os/data
    ```
+
+   Sweeper retensi artefak berjalan di proses API dan **mati secara default**. Aktifkan dengan
+   mengisi `ARTIFACT_RETENTION_SWEEP_INTERVAL_MS` (milidetik, mis. `900000` untuk 15 menit) di
+   `.env`; nilai kosong/`0` mematikannya. Sweep menghapus artefak `ephemeral` yang melewati
+   `ARTIFACT_EPHEMERAL_TTL_MS` (default 24 jam), artefak `task_duration` setelah task-nya
+   terminal, dan artefak `project_lifetime` setelah project-nya hilang; artefak `permanent`
+   tidak pernah dihapus.
 4. **Jalankan Migrasi Database** (service one-shot `migrate`, idempoten via tabel `schema_migrations`):
    ```sh
    docker compose run --rm migrate
