@@ -23,8 +23,18 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "ndk;26.1.10909125" "build-tools;35.0.0" "platforms;android-35"
+      # `android-actions/setup-android` installs the retired `tools` package, which the
+      # cmdline-tools shipped on ubuntu-latest now reject ("Failed to find package 'tools'").
+      # The image already ships an SDK, so install only what this build needs.
+      - name: Set up Android SDK
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          CMDLINE_BIN="$(ls -d "$SDK_ROOT"/cmdline-tools/*/bin | sort -V | tail -1)"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$CMDLINE_BIN" >> "$GITHUB_PATH"
+          yes | "$CMDLINE_BIN/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$CMDLINE_BIN/sdkmanager" --install "platform-tools" "build-tools;35.0.0" "platforms;android-35" "ndk;26.1.10909125"
       - run: pnpm install --frozen-lockfile
       - run: npx expo prebuild --platform android --no-install
         working-directory: apps/android
