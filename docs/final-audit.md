@@ -3,7 +3,7 @@
 **Tanggal Audit**: 2026-10-11, diperbarui 2026-10-13 dan 2026-10-14  
 **Auditor**: Principal Software Architect & Security Engineer  
 **Status Keseluruhan**: **CANDIDATE PRE-RELEASE (STAGING VERIFIED — MENUNGGU VERIFIKASI LANGSUNG DI VPS)**  
-**Catatan Status**: Dokumen ini **direvisi 2026-10-13 dan 2026-10-14** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery), persistensi memori pada butir 5, evaluator berbasis bukti nyata (butir 8), jalur coding **serta** research pada butir 7, dispatch + identitas kriptografis Windows pada butir 11, scheduler/notifikasi/FCM pada butir 10, dan **audit menyeluruh pada butir 12 (2026-10-14)** **sudah diperbaiki dan diverifikasi live**. Butir 5 tetap **SEBAGIAN**: pencarian semantik belum punya provider embedding dan retensi belum ditegakkan. Butir 11 tetap **SEBAGIAN**: allowlist teks-perintah/biner belum ada dan sesi perangkat masih in-memory. Butir 12 tetap **SEBAGIAN**: healthcheck worker masih menyentuh `/tmp/healthy` pada timer dan tidak ada alerting/tracing — hanya bagian audit yang kini lulus.
+**Catatan Status**: Dokumen ini **direvisi 2026-10-13 dan 2026-10-14** setelah audit ulang terhadap database produksi dan container produksi yang berjalan. Revisi pertama menurunkan butir yang klaimnya tidak didukung bukti: 3 (recovery), 5 (memory), 7 (coding/research), 10 (notifikasi), 11 (Windows dispatch), 12 (observability). Butir 3 (recovery), persistensi memori pada butir 5, evaluator berbasis bukti nyata (butir 8), jalur coding **serta** research pada butir 7, dispatch + identitas kriptografis Windows pada butir 11, scheduler/notifikasi/FCM pada butir 10, **audit menyeluruh pada butir 12 (2026-10-14)**, dan **pemeriksaan paritas `schema.ts` ↔ migrasi (2026-10-14)** **sudah diperbaiki dan diverifikasi live**. Butir 5 tetap **SEBAGIAN**: pencarian semantik belum punya provider embedding dan retensi belum ditegakkan. Butir 11 tetap **SEBAGIAN**: allowlist teks-perintah/biner belum ada dan sesi perangkat masih in-memory. Butir 12 tetap **SEBAGIAN**: healthcheck worker masih menyentuh `/tmp/healthy` pada timer dan tidak ada alerting/tracing — hanya bagian audit yang kini lulus. **Seluruh delapan butir Prioritas P0 di §7 sudah selesai.**
 
 ---
 
@@ -15,8 +15,8 @@ Quality gates dijalankan pada checkout `release/installers` (Linux aarch64), buk
 
 - **Linter (`pnpm lint`)**: 14/14 paket **LULUS** (0 error, 0 warning).
 - **Production Build (`pnpm build`)**: 14/14 paket **LULUS**.
-- **Verifikasi referensi path (`pnpm verify:audit`)**: 104 path unik valid (171 referensi diperiksa).
-- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 35/35, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 39/39, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 6/6, `@personal-ai-os/agent-core` 40/40, `@personal-ai-os/evaluator` 9/9, `@personal-ai-os/android` 19/19, API in-container 62/62, scheduler in-container 25/25, windows 18/22 (4 skipped: eksekusi PowerShell butuh Windows).
+- **Verifikasi referensi path (`pnpm verify:audit`)**: 106 path unik valid (176 referensi diperiksa).
+- **Test per-paket yang dijalankan ulang dan diverifikasi**: `@personal-ai-os/tools` 35/35, `@personal-ai-os/mcp` 17/17, `@personal-ai-os/agent-worker` 39/39, `@personal-ai-os/memory` 7/7, `@personal-ai-os/permissions` 6/6, `@personal-ai-os/agent-core` 40/40, `@personal-ai-os/evaluator` 9/9, `@personal-ai-os/android` 19/19, API in-container 63/63, scheduler in-container 25/25, windows 18/22 (4 skipped: eksekusi PowerShell butuh Windows).
 - **Catatan penting tentang Skenario 4**: test `apps/api/test/e2e-scenarios.test.ts:868-914` yang diklaim membuktikan pemulihan task **tidak memanggil `recoverInterruptedTasks` sama sekali**. Ia memanggil `executor.execute()` secara langsung dan menaikkan counter yang di-hardcode di dalam test. Test tersebut tidak dapat gagal karena perilaku sistem apa pun, sehingga lulusnya test itu tidak membuktikan apa pun tentang recovery. Lihat Butir 3.
 - **Catatan tentang `pnpm test` di root**: perintah itu tidak dapat dipakai; task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite harus dijalankan per paket.
 
@@ -403,7 +403,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 7. **Token FCM hardcoded `dummy-env-token` — SELESAI (2026-10-14)**. `HttpFcmProvider` kini menerima `FcmAccessTokenSource`; `ServiceAccountTokenSource` menandatangani JWT RS256 dengan `client_email`/`private_key` service account dan menukarnya ke `token_uri` lewat grant `jwt-bearer`, lalu menyimpan access token sampai mendekati `expires_in` (margin 60 detik). Service account yang tidak lengkap menghasilkan `DisabledFcmProvider`, bukan pengiriman dengan token literal. Test: `apps/scheduler/test/fcm-provider.test.ts` (4/4, stub HTTP server).
 8. **Audit tidak menyeluruh — SELESAI (2026-10-14)**. `SecuredCapabilityGuard` menulis satu baris `audit_logs` per pemanggilan setelah hasil diketahui (`metadata.outcome` + `durationMs` + `error`), guard diberi `auditLogger` di API dan worker, artifact write diaudit lewat `ArtifactManager.auditSink`, dan `audit_logs.resource_id` menjadi `varchar(512)` (migrasi `0010`). Bukti live: §8.E "Cacat 5".
 9. **Identitas perangkat tidak kriptografis — SELESAI (2026-10-14)**. `/v1/agent/ws` menerbitkan challenge acak; agent menandatanganinya dengan private key P-256 dan server memverifikasi sebelum membuat sesi. `deviceId` dari query string ditolak (`DEVICE_IDENTITY_REQUIRED`), id perangkat adalah uuid yang diterbitkan server, dan `devices.public_key` diisi dengan JWK kanonik (unique parsial `devices_public_key_uq`, migrasi `0008_device_key_identity.sql`). Bukti live di §8.E. Sisa: private key disimpan di `localStorage` webview, bukan OS keystore.
-10. **Skema menyimpang dari migrasi — sebagian selesai (2026-10-13)**. `memories` kini punya migrasi; tabel `artifacts` yang tidak terpakai dihapus dari `schema.ts`. Belum ada pemeriksaan paritas otomatis antara `schema.ts` dan `apps/api/src/db/migrations/`, sehingga kelas bug ini masih bisa terulang.
+10. **Skema menyimpang dari migrasi — SELESAI (2026-10-14)**. `memories` kini punya migrasi dan tabel `artifacts` yang tidak terpakai sudah dihapus dari `schema.ts`. Pemeriksaan paritas otomatis ditambahkan: `apps/api/test/schema-parity.test.ts` membuat database sementara, menerapkan **seluruh** migrasi `apps/api/src/db/migrations/` dari nol, mengintrospeksi hasilnya (`pg_attribute` + `format_type`), lalu membandingkannya dengan setiap tabel di `schema.ts` (`getTableConfig`). Test gagal bila `schema.ts` mendeklarasikan tabel/kolom yang tidak dibuat migrasi, atau bila tipe kolom menyimpang. Diverifikasi menangkap dua arah: kolom `ghost_column` yang hanya ada di `schema.ts` → gagal; `resource_id` dikembalikan ke `uuid` (kondisi sebelum migrasi 0010) → gagal dengan `column audit_logs.resource_id is varchar(512) after the migrations but uuid in schema.ts`.
 11. **Dead code produksi** — `AiCouncil` (`packages/agent-core/src/council/`) dan `SelfHealingEngine` (`packages/agent-core/src/healing/`) tidak dipanggil dari `apps/`.
 
 ### 5.2 Gap operasional (menunggu lingkungan atau kredensial)
@@ -433,7 +433,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 
 ### Prioritas P0 (cacat fungsional, tidak memerlukan kredensial eksternal)
 
-Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sampai 7 sudah selesai (1–4 pada 2026-10-13, 5–6 pada 2026-10-13/2026-10-14, 7 pada 2026-10-14) dan dipertahankan di daftar ini sebagai catatan riwayat; nomor 8 masih terbuka.
+Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. **Kedelapan butir P0 sudah selesai** (1–4 pada 2026-10-13, 5–6 pada 2026-10-13/2026-10-14, 7–8 pada 2026-10-14) dan dipertahankan di daftar ini sebagai catatan riwayat.
 
 1. **Perbaiki pemulihan task — SELESAI (2026-10-13)**. `queue` kini diteruskan dan wajib; test regresi baru (`live-worker-execution.test.ts`) gagal bila queue tidak diteruskan; bukti live task `running` tanpa job → restart → `completed`.
 2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. `:id` pada route memory kini divalidasi sebagai uuid, sehingga `GET`/`DELETE /v1/memories/search` menjawab `400`, bukan `500`. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi.
@@ -442,7 +442,7 @@ Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. Nomor 1 sampai 7 sud
 5. **Sambungkan dispatch perintah ke Windows Agent — SELESAI (2026-10-13 dispatch, 2026-10-14 identitas)**. `dispatchCommand` terhubung ke jalur task dengan approval HIGH per perintah, verdict dari exit code perangkat, dan bukti live task → perangkat → hasil. Identitas perangkat kriptografis menyusul: `devices.public_key` diisi dari handshake bertanda tangan dan `deviceId` diterbitkan server (lihat butir 9). Sisa dari butir ini: tidak ada allowlist teks-perintah/biner, dan sesi perangkat in-memory sehingga hilang saat API restart.
 6. **Perbaiki notifikasi dan FCM — SELESAI (2026-10-14)**. `NotificationEngine` di API memakai `SqlNotificationRepository`, dan `fcm-provider.ts` memperoleh access token OAuth2 nyata dari service account (`ServiceAccountTokenSource`, JWT RS256 → `token_uri`). Literal `dummy-env-token` dihapus; service account tak lengkap → `DisabledFcmProvider`. Bukti live di §8.E "Cacat 6". Sisa: pengiriman ke Google belum pernah terjadi (Gap 2), dan push yang gagal `maxAttempts` tidak masuk dead-letter queue.
 7. **Perluas audit — SELESAI (2026-10-14)**. Tool call, MCP call, browser action, dan artifact write kini menulis baris `audit_logs` (bukan hanya keputusan approval). `SecuredCapabilityGuard` menulis satu baris per pemanggilan setelah hasil diketahui; artifact lewat `ArtifactManager.auditSink`; `resource_id` menjadi `varchar(512)` (migrasi `0010_audit_resource_id_text.sql`). Bukti live di §8.E "Cacat 5".
-8. **Tambahkan pemeriksaan paritas schema ↔ migrasi** — `memories` sudah punya migrasi dan `artifacts` yang tidak terpakai sudah dihapus, tetapi belum ada pemeriksaan otomatis, sehingga kelas bug ini masih bisa terulang.
+8. **Tambahkan pemeriksaan paritas schema ↔ migrasi — SELESAI (2026-10-14)**. `apps/api/test/schema-parity.test.ts` membuat database sementara, menerapkan seluruh migrasi dari nol, dan membandingkan tabel/kolom/tipe hasilnya dengan `schema.ts`; test itu bagian dari suite API (`node --test test/*.test.ts`), jadi berjalan di CI setelah langkah `sh scripts/migrate-db.sh`. Bukti negatif: kolom hantu di `schema.ts` dan `resource_id` yang dikembalikan ke `uuid` keduanya menggagalkan test.
 
 ### Prioritas P1 (kebersihan dan pengerasan)
 
@@ -494,7 +494,7 @@ Time:     ~28s
 @personal-ai-os/permissions     6/6
 @personal-ai-os/agent-core     40/40
 @personal-ai-os/evaluator       9/9
-API (in-container)             62/62, 0 skipped
+API (in-container)             63/63, 0 skipped
 scheduler (in-container)       25/25, 0 skipped
 android                        19/19
 windows                        18/22, 4 skipped (eksekusi PowerShell butuh Windows)
@@ -505,8 +505,8 @@ Suite API dijalankan di dalam image `personal-ai-os-api:latest`; image `node:22-
 ### D. Verifikasi Referensi Path Dokumen (`pnpm verify:audit`)
 
 ```text
-[Verify Audit Refs] Memeriksa 171 referensi path dari docs/final-audit.md...
-[Verify Audit Refs] Berhasil memverifikasi 104 path unik yang valid.
+[Verify Audit Refs] Memeriksa 176 referensi path dari docs/final-audit.md...
+[Verify Audit Refs] Berhasil memverifikasi 106 path unik yang valid.
 [SUKSES] Semua referensi path file dalam docs/final-audit.md 100% valid dan ada di filesystem.
 ```
 
@@ -677,4 +677,20 @@ SSRF 169.254.169.254 -> failed
 #     -> perangkat menerima {"type":"command.execute","command":"hostname"} -> task.completed {exitCode:0,
 #        stdout:"SMOKE-WORKSTATION-SIGNED"}   (dispatch M4 tidak teregresi)
 #   Index: devices_public_key_uq UNIQUE, btree (public_key) WHERE public_key IS NOT NULL
+#
+# Cacat 9 (DIPERBAIKI 2026-10-14): tidak ada pemeriksaan paritas schema <-> migrasi
+# Sebelum: `memories` dideklarasikan di schema.ts tanpa satu pun CREATE TABLE di migrasi 0000-0006,
+#          dan tabel `artifacts` ada di schema.ts tanpa migrasi; keduanya hanya ketahuan dari audit manual.
+# Sesudah: apps/api/test/schema-parity.test.ts membuat database sementara, menerapkan seluruh
+#          apps/api/src/db/migrations/*.sql dari nol, mengintrospeksi public schema
+#          (pg_class/pg_attribute + format_type(atttypid, atttypmod)), lalu membandingkannya
+#          dengan setiap tabel di schema.ts lewat getTableConfig(); database sementara selalu di-drop.
+#          node --test test/schema-parity.test.ts -> ok 1 (916 ms), suite API 63/63.
+# Bukti test itu benar-benar bisa gagal (dua arah, masing-masing dijalankan terpisah):
+#   schema.ts users + ghostColumn: varchar('ghost_column', {length:10})
+#     -> not ok: 'column users.ghost_column is declared in schema.ts but no migration creates it'
+#   schema.ts audit_logs.resourceId dikembalikan ke uuid('resource_id') (kondisi sebelum 0010)
+#     -> not ok: 'column audit_logs.resource_id is varchar(512) after the migrations but uuid in schema.ts'
+#   Keduanya dijalankan lewat image personal-ai-os-api:latest pada network Docker internal;
+#   setelah selesai tidak ada database sisa (SELECT datname FROM pg_database WHERE datname LIKE 'schema_parity%' -> 0 baris).
 ```

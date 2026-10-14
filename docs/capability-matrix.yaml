@@ -1,5 +1,5 @@
 version: 1
-updated: 2026-10-13
+updated: 2026-10-14
 capabilities:
   control_plane:
     status: implemented
@@ -7,6 +7,8 @@ capabilities:
     permission_boundary: authenticated Fastify routes; repository ownership checks
     clients: android; windows
     proof: pnpm --filter @personal-ai-os/api test
+    limitation: |
+      Schema/migration parity is enforced automatically as of 2026-10-14: `apps/api/test/schema-parity.test.ts` creates a scratch database, applies every file in `apps/api/src/db/migrations/` from scratch, introspects the result (`pg_class`/`pg_attribute` with `format_type`), and compares it with every table in `apps/api/src/db/schema.ts` via `getTableConfig` — tables, columns, and column types. The scratch database is dropped afterwards. It runs as part of the API suite (`node --test test/*.test.ts`), which CI invokes after `sh scripts/migrate-db.sh`. The test is proven able to fail in both directions: a `ghost_column` declared only in `schema.ts`, and `audit_logs.resource_id` reverted to `uuid` (the pre-`0010` state), each produce a named mismatch.
   durable_tasks:
     status: implemented
     code: apps/api/src/routes/tasks.ts; apps/api/src/db/task-repository.ts; apps/api/src/services/task-queue.ts

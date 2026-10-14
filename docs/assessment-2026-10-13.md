@@ -120,7 +120,7 @@ Sisa temuan lain di bagian ini yang belum diperbaiki:
 
 ### 3.7 Artifact dan skills
 
-- Tabel `artifacts` (dulu `apps/api/src/db/schema.ts:293-323`) **tanpa migrasi** dan tanpa repository; **sudah dihapus dari schema pada 2026-10-13**. Artifact sebenarnya selalu disimpan di disk.
+- Tabel `artifacts` (dulu `apps/api/src/db/schema.ts:293-323`) **tanpa migrasi** dan tanpa repository; **sudah dihapus dari schema pada 2026-10-13**. Artifact sebenarnya selalu disimpan di disk. **Sejak 2026-10-14 paritas `schema.ts` ↔ migrasi diperiksa otomatis** oleh `apps/api/test/schema-parity.test.ts`, yang membuat database sementara, menerapkan seluruh migrasi dari nol, dan membandingkan tabel/kolom/tipe hasilnya dengan `schema.ts`.
 - Upload tidak streaming: `POST /v1/artifacts` menerima `content: string` JSON (`apps/api/src/routes/artifacts.ts:44-63`); batas efektif = `bodyLimit` Fastify default 1 MiB (`apps/api/src/app.ts:145-159`), bukan 25 MB.
 - `getArtifactStream` ada tetapi tidak dipakai route.
 - MIME berdasarkan deklarasi klien (allowlist string), tanpa magic bytes.
@@ -177,7 +177,7 @@ Keduanya punya test, keduanya lolos, dan keduanya tidak pernah dijalankan oleh s
 4. **Klaim completion palsu.** Sistem dapat melaporkan coding task `completed` tanpa menjalankan satu pun test.
 5. **FCM token hardcoded — DITUTUP 2026-10-14.** Provider kini memperoleh access token OAuth2 nyata dari service account; literal `dummy-env-token` dihapus. Sisa: kredensial Google belum disuntikkan, jadi provider aktif adalah `DisabledFcmProvider` yang jujur.
 6. **Device identity dipalsukan — DITUTUP 2026-10-14.** `deviceId` dari query string kini ditolak dan `public_key` diverifikasi terhadap challenge bertanda tangan. Sisa risiko: private key agent ada di `localStorage` webview, jadi kompromi webview berarti kompromi identitas perangkat itu.
-7. **Tabel `artifacts` dan `memories` tanpa migrasi** menunjukkan tidak ada yang memverifikasi paritas schema↔migrasi. Tabel lain mungkin menyimpang tanpa terdeteksi.
+7. **Tabel `artifacts` dan `memories` tanpa migrasi — DITUTUP 2026-10-14.** Keduanya sudah dibereskan (`memories` punya migrasi `0007`, `artifacts` dihapus dari schema), dan kelas bug ini kini dicegah oleh `apps/api/test/schema-parity.test.ts`: database sementara dibangun dari seluruh migrasi lalu dibandingkan dengan `schema.ts` (tabel, kolom, dan tipe). Diverifikasi menangkap dua arah drift: kolom hantu di `schema.ts` dan `resource_id` yang dikembalikan ke `uuid`.
 8. **VPS 2 OCPU / 11 GiB tanpa swap** dengan worker 2048m + Chromium. Belum ada bukti beban puncak.
 
 ---
