@@ -53,6 +53,17 @@ export type AppDependencies = {
         }>
       >)
     | undefined;
+  /**
+   * Resolves the row a verified device key belongs to, creating it on first contact. The agent
+   * never picks its own id: the handshake verifies a signature and the server answers with
+   * `devices.id`.
+   */
+  registerAgent?:
+    | ((
+        userId: string,
+        input: { name: string; platform: string; publicKey: string },
+      ) => Promise<{ id: string; name: string; platform: string }>)
+    | undefined;
   registerDevice?: (
     userId: string,
     input: { name: string; platform: string },
@@ -366,16 +377,12 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
 
   app.get('/v1/devices', async (request, reply) => {
     const user = await userFromRequest(request, dependencies.auth);
-    const online = dependencies.deviceManager?.getOnlineDevices(user.id) ?? [];
-    const known = new Set(online.map((device) => device.deviceId));
-    // A connected agent may have no row in `devices` at all, so report both sources instead of
-    // hiding live devices that were never registered over REST.
+    // Presence comes from the live sockets; the shape comes from the registered rows, so every
+    // entry carries the same fields whether the device is connected or not.
+    const online = new Set(dependencies.deviceManager?.listOnlineDeviceIds(user.id) ?? []);
     const registered = (await dependencies.listDevices?.(user.id)) ?? [];
-    const offline = registered
-      .filter((device) => !known.has(device.id))
-      .map((device) => ({ ...device, isOnline: false }));
     return reply.send({
-      devices: [...online.map((device) => ({ ...device, isOnline: true })), ...offline],
+      devices: registered.map((device) => ({ ...device, isOnline: online.has(device.id) })),
     });
   });
 
@@ -383,6 +390,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     registerAgentWsRoute(app, {
       auth: dependencies.auth,
       deviceManager: dependencies.deviceManager,
+      registerAgent: dependencies.registerAgent,
     });
     if (dependencies.internalBridgeToken) {
       registerDeviceCommandRoutes(app, {

@@ -93,13 +93,13 @@ Masih terbuka: klaim adalah kutipan awal tiap halaman, bukan sintesis model, seh
 Sisa temuan lain di bagian ini yang belum diperbaiki:
 - `POST /v1/tasks` menerima `kind` string bebas 1-80 karakter (`apps/api/src/routes/tasks.ts:38`) tanpa whitelist. `TaskRecord.kind` bertipe `string` (`packages/shared/src/tasks/types.ts:31`).
 
-### 3.5 Windows Agent — dispatch DIPERBAIKI 2026-10-13, identitas belum
+### 3.5 Windows Agent — dispatch dan identitas kriptografis DIPERBAIKI
 
 - **Diperbaiki**: `dispatchCommand` kini dipanggil dari jalur task. Worker meminta presence ke API (`DeviceDispatcher.listOnlineDevices` → `GET /v1/internal/devices`) dan mendispatch lewat route internal ber-token `POST /v1/internal/device-commands` (`apps/api/src/routes/device-commands.ts`), karena socket perangkat hanya hidup di proses API. Aksi `device:command` berisiko HIGH dan selalu butuh approval yang terikat pada teks perintah + `deviceId`; verdict task adalah exit code perangkat.
 - **Diperbaiki**: handshake `/v1/agent/ws` tidak lagi menulis `deviceId` dari query string ke `devices.id` (kolom `uuid`). Sebelumnya agent Windows mengirim id non-uuid dan API mati dengan `PostgresError: invalid input syntax for type uuid`.
 - **Diperbaiki**: task yang gagal sebelum mulai (perangkat offline) tidak lagi melanggar state machine; sebelumnya `queued → failed` melempar `IllegalTaskStateTransitionError` dan task tertinggal `queued` selamanya tanpa error yang terlihat.
 - Masih terbuka: capability registry 7 kapabilitas, `default enabled: false`, allowlist ditegakkan (`apps/windows/src/security/capability-registry.ts:116`), tapi **tidak ada allowlist teks-perintah atau biner** — hanya capability + action + `cwd`. Tidak ada pemetaan capability Windows → capability Personal AI OS.
-- Masih terbuka: identitas perangkat bukan kriptografis: `devices.public_key` ada di schema (`apps/api/src/db/schema.ts:30`) tetapi tidak pernah diisi/diverifikasi; `create` hanya `name` + `platform`; `fetchDeviceIdentity` fallback ke `win-dev-local` (`apps/windows/src/connection/device-identity.ts:26`); `deviceId` diambil dari query string `/v1/agent/ws` (`apps/api/src/routes/agent-ws.ts:43`).
+- **Diperbaiki 2026-10-14**: identitas perangkat kini kriptografis. `/v1/agent/ws` menolak `deviceId` dari query string (`DEVICE_IDENTITY_REQUIRED`), mengirim `device.challenge`, dan hanya membuat sesi setelah agent menandatangani challenge itu dengan private key P-256; verifikasi di server memakai `crypto.verify(..., { dsaEncoding: 'ieee-p1363' })` (`apps/api/src/services/device-identity.ts`). `devices.public_key` diisi JWK kanonik dan `DeviceRepository.registerAgent` mencari baris berdasarkan `(userId, public_key)`, sehingga key sama → baris sama. Id perangkat adalah uuid terbitan server; agent tidak lagi membuat id sendiri (`win-dev-<hash>` dihapus). Migrasi `0008_device_key_identity.sql` mengganti unique `devices_user_name_uq` dengan `devices_public_key_uq` parsial. Sisa: private key disimpan di `localStorage` webview, bukan OS keystore.
 - Masih terbuka: sesi koneksi device in-memory (`apps/api/src/services/device-connection-manager.ts`) — hilang saat restart API.
 - Direktori `runtimes/{pi,omp,hermes,openhands}-adapter` **tidak ada**. Hermes & OpenHands = `UnverifiedRuntimeAdapter` yang menolak eksekusi (`packages/agent-core/src/runtimes/unverified-adapter.ts`).
 
@@ -160,7 +160,7 @@ Keduanya punya test, keduanya lolos, dan keduanya tidak pernah dijalankan oleh s
 | Evaluator menentukan completion | **Tidak** | Evaluator tidak mengeksekusi apa pun; satu jalur `completed` tanpa evaluator |
 | Approval mengikat tindakan | **Bekerja** | Fingerprint, action, resource, expiry ada |
 | Scheduler/event/notification | Sebagian | Notifikasi 0 baris; FCM token dummy; API tanpa storage |
-| Windows Agent capability-limited | Sebagian | Tidak ada jalur dispatch perintah; identitas non-kriptografis |
+| Windows Agent capability-limited | Sebagian | Dispatch dan identitas kriptografis sudah nyata; sisa: tidak ada allowlist teks-perintah/biner, sesi device in-memory |
 | Tanpa secret di klien/log/repo | **Bekerja** | APK bersih; logger meredaksi |
 | PostgreSQL/Redis tidak publik | **Bekerja** | Terverifikasi `ss -tulpn` |
 | Backup/restore/observability/ARM64 | Sebagian | Backup+restore drill lulus; tidak ada alerting, tidak ada tracing terdistribusi |
@@ -174,7 +174,7 @@ Keduanya punya test, keduanya lolos, dan keduanya tidak pernah dijalankan oleh s
 3. **Task menggantung permanen.** Setiap restart worker berpotensi meninggalkan task di `running` selamanya tanpa retry, timeout, atau eskalasi.
 4. **Klaim completion palsu.** Sistem dapat melaporkan coding task `completed` tanpa menjalankan satu pun test.
 5. **FCM token hardcoded.** Begitu kredensial nyata disuntikkan, provider akan mengirim dengan token literal `dummy-env-token` dan gagal 401 — kegagalan yang tampak seperti masalah kredensial eksternal, bukan bug kode.
-6. **Device identity dapat dipalsukan.** `deviceId` dari query string, `public_key` tidak diverifikasi.
+6. **Device identity dipalsukan — DITUTUP 2026-10-14.** `deviceId` dari query string kini ditolak dan `public_key` diverifikasi terhadap challenge bertanda tangan. Sisa risiko: private key agent ada di `localStorage` webview, jadi kompromi webview berarti kompromi identitas perangkat itu.
 7. **Tabel `artifacts` dan `memories` tanpa migrasi** menunjukkan tidak ada yang memverifikasi paritas schema↔migrasi. Tabel lain mungkin menyimpang tanpa terdeteksi.
 8. **VPS 2 OCPU / 11 GiB tanpa swap** dengan worker 2048m + Chromium. Belum ada bukti beban puncak.
 
@@ -190,7 +190,7 @@ Setiap milestone harus menghasilkan bukti yang dapat diulang. Tidak ada mileston
 | **M1. Recovery task** | Task `running` yang ditinggal restart worker kembali dieksekusi otomatis tanpa duplikasi side effect. Test regresi memanggil `recoverInterruptedTasks(queue)` sungguhan dan gagal bila task tetap `running` setelah worker hidup. Reproduksi live: task `running/40` → restart → `completed`. |
 | **M2. Memory durable** | **SELESAI untuk persistensi (2026-10-13).** Migrasi `0007_memories.sql` + `vector(1536)` + 5 index; memori bertahan setelah restart API (create → restart → list masih 1, terverifikasi live). Fallback senyap ke `InMemoryMemoryStore` dihapus. `:id` divalidasi uuid, jadi `GET`/`DELETE /v1/memories/search` → `400`, bukan `500`. **Belum**: provider embedding (9Router tidak menyediakan) dan sweeper retention. |
 | **M3. Evaluator berbasis bukti** | **SELESAI (2026-10-13).** `LocalCodingEnvironment` (`packages/agent-core/src/coding/local-environment.ts`) menjalankan `node --run lint/typecheck/test/build` di workspace per task; `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dihapus. Worker memberi setiap task coding workspace git sendiri di `CODING_WORKSPACE_ROOT=/app/data/workspaces` (named volume `coding-workspaces`). `executeRegisteredTool` menjalankan `GenericEvaluator` sebelum `completed`. Bukti live: workspace dengan `lint` keluar 1 → `failed` (`score 0.71`); workspace dengan script lulus → `completed` (`score 1`, artifact diff nyata). **Belum**: acceptance criteria belum dipersist sebelum eksekusi, sehingga `GenericEvaluator` pada jalur tool masih memakai kriteria default. |
-| **M4. Windows dispatch** | **SELESAI (2026-10-13).** Task dengan `payload.targetDevice` mengirim `command.execute` melalui WSS ke device yang online, menerima hasil, dan menyimpannya sebagai artifact: `TaskExecutor` (`apps/agent-worker/src/task-executor.ts:167-205`, `:663-884`) meminta presence lewat `DeviceDispatcher.listOnlineDevices`, worker memakai `HttpDeviceDispatcher` (`apps/agent-worker/src/device-dispatcher.ts:59`) ke route internal ber-token `POST /v1/internal/device-commands` (`apps/api/src/routes/device-commands.ts:43`) — Caddy menutup `/v1/internal/*` dengan `404`, jadi hanya terjangkau dari network Docker internal. Aksi `device:command` berisiko HIGH dan tidak diizinkan tanpa approval (`packages/permissions/src/engine.ts:127`); fingerprint memuat teks perintah + `deviceId`, sehingga approval satu perintah tidak mengotorisasi perintah lain. Verdict = exit code perangkat; tidak ada evaluator yang melunakkan. **Bukti live**: task `954db21a-…` → `waiting_approval` → approve `200` → perangkat menerima `command.execute` → `completed` `exitCode 0` dengan artifact berisi `stdout` perangkat; device offline → `failed` (`offlineReason: device_unreachable`), bukan sukses palsu. Test regresi: `apps/api/test/device-commands.test.ts`, `apps/agent-worker/test/device-dispatch.test.ts`. Cacat ikutan yang ditemukan live dan diperbaiki: `queued → failed` melanggar state machine sehingga task tertinggal `queued` tanpa error. **Belum**: identitas perangkat kriptografis dan allowlist teks-perintah (lihat §3.5). |
+| **M4. Windows dispatch + identitas perangkat** | **SELESAI (2026-10-13 dispatch, 2026-10-14 identitas).** Task dengan `payload.targetDevice` mengirim `command.execute` melalui WSS ke device yang online, menerima hasil, dan menyimpannya sebagai artifact: `TaskExecutor` (`apps/agent-worker/src/task-executor.ts:167-205`, `:663-884`) meminta presence lewat `DeviceDispatcher.listOnlineDevices`, worker memakai `HttpDeviceDispatcher` (`apps/agent-worker/src/device-dispatcher.ts:59`) ke route internal ber-token `POST /v1/internal/device-commands` (`apps/api/src/routes/device-commands.ts:43`) — Caddy menutup `/v1/internal/*` dengan `404`, jadi hanya terjangkau dari network Docker internal. Aksi `device:command` berisiko HIGH dan tidak diizinkan tanpa approval (`packages/permissions/src/engine.ts:127`); fingerprint memuat teks perintah + `deviceId`, jadi satu approval tidak mengotorisasi perintah lain. **Identitas kriptografis (2026-10-14)**: agent menandatangani `device.challenge` dengan keypair P-256, `deviceId` diterbitkan server (`DEVICE_IDENTITY_REQUIRED` bila agent mengklaim sendiri), `devices.public_key` diisi JWK kanonik, dan key yang sama selalu memetakan ke baris device yang sama (migrasi `0008_device_key_identity.sql`). **Belum**: allowlist teks-perintah/biner, sesi device in-memory. |
 | **M5. Notifikasi + scheduler** | `NotificationEngine` memakai storage durable; task selesai/gagal menghasilkan baris `notifications` dengan delivery state. Scheduler tick jalan di salah satu proses dengan bukti slot idempoten di DB. FCM memakai token OAuth nyata dari service account, bukan literal. |
 | **M6. Research** | **SELESAI (2026-10-13).** Provider pencarian nyata terdaftar: `duckDuckGoSearch` (`packages/tools/src/builtin/web-search.ts`) di `createDefaultToolRegistry` (`packages/tools/src/registry/create-default-tool-registry.ts:20-21`), tanpa API key. `LocalResearchEnvironment` (`packages/agent-core/src/research/local-environment.ts`) mencari lewat `web_search` dan membuka setiap hasil lewat `web_fetch`, keduanya melalui `ToolRegistry` ber-permission (`web:search`/`web:fetch`). Sumber dan claim hardcoded dihapus; klaim terikat ke URL yang benar-benar di-fetch. Bukti live: query nyata → `completed` (`score 1`, 5 sumber nyata, 5 klaim tertaut); query tanpa hasil → `failed` (`score 0`, `No valid sources provided`). **Belum**: sintesis klaim lintas sumber oleh `ModelGateway` — klaim masih kutipan awal halaman, sehingga relevansi terhadap pertanyaan belum dinilai; `ResearchEvaluator` juga belum mem-fetch URL sendiri. |
 | **M7. Audit menyeluruh** | Setiap tool call, MCP call, browser action, dan artifact write menulis baris `audit_logs` dengan aktor, action, resource, hasil. Bukan `console.log`. |
@@ -247,17 +247,20 @@ docker exec -u node personal-ai-os-worker-1 sh -c '
 # 9. Dispatch perintah ke Windows Agent (M4)
 # Terminal 1 — agent Windows palsu terhubung dan menjawab satu perintah:
 #   node -e 'const ws=new WebSocket("ws://127.0.0.1:8080/v1/agent/ws?token="+process.env.TOKEN+"&deviceId=win-smoke-m5&platform=windows");
-#            ws.onmessage=e=>{const f=JSON.parse(e.data); if(f.type==="command.execute")
-#              ws.send(JSON.stringify({type:"command.result",commandId:f.commandId,success:true,
-#                result:{exitCode:0,stdout:"SMOKE-WORKSTATION",stderr:"",truncated:false,durationMs:11}}))}'
-# POST /v1/tasks {kind:"windows_command", payload:{targetDevice:"win-smoke-m5", command:"hostname"}} -> 201
-#   -> task.waiting_approval {action:"device:command", deviceId:"win-smoke-m5", riskLevel:"HIGH"}
+#            -> device.error DEVICE_IDENTITY_REQUIRED (id yang diklaim ditolak sejak 2026-10-14)
+# Agent palsu menandatangani challenge dengan keypair P-256 (WebCrypto global Node 22), lalu:
+#   ws://127.0.0.1:8080/v1/agent/ws?token=<TOKEN>            (tanpa deviceId)
+#     -> device.challenge -> device.handshake {publicKey,signature,name,platform}
+#     -> device.handshake_ack {deviceId:"<uuid terbitan server>"}
+# POST /v1/tasks {kind:"windows_command", payload:{targetDevice:"<uuid>", command:"hostname"}} -> 201
+#   -> task.waiting_approval {action:"device:command", deviceId:"<uuid>", riskLevel:"HIGH"}
 # POST /v1/approvals/<approvalId>/approve -> 200
 #   -> perangkat menerima {"type":"command.execute","command":"hostname","timeoutMs":60000}
 #   -> task.completed {exitCode:0, artifacts:[{type:"device_command_output",
-#        content:{stdout:"SMOKE-WORKSTATION"}}]}
+#        content:{stdout:"SMOKE-WORKSTATION-SIGNED"}}]}
 # POST /v1/tasks {kind:"windows_command", payload:{targetDevice:"win-smoke-absent", command:"hostname"}}
 #   -> failed, "Windows Agent \"win-smoke-absent\" sedang offline…",
 #      task.failed {offlineReason:"device_unreachable"}   (bukan sukses palsu)
-# GET /v1/devices -> perangkat yang terhubung muncul dengan isOnline:true
-#   (sebelum perbaikan: route ini hanya membaca baris tabel devices, jadi agent tidak terlihat)
+# GET /v1/devices -> baris terdaftar dengan isOnline dari sesi online
+#   (sebelum perbaikan 2026-10-13: route ini hanya membaca baris tabel devices, jadi agent tidak terlihat)
+# Reconnect dengan keypair yang sama -> deviceId identik, dan socket lama ditutup server.

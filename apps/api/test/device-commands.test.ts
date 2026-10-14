@@ -3,9 +3,25 @@ import test from 'node:test';
 import { buildApp } from '../src/app.ts';
 import { InMemoryAuthRepository, createAuthService } from '../src/auth/service.ts';
 import { DeviceConnectionManager } from '../src/services/device-connection-manager.ts';
+import { connectDeviceAgent, type DeviceAgentSession } from './support/device-agent.ts';
 
 const secret = 'test-secret-at-least-thirty-two-chars-long';
 const bridgeToken = 'internal-bridge-token-for-device-command-tests';
+
+/** Answers only the first dispatched command; later ones stay silent to exercise the timeout. */
+const answerFirstCommand = (stdout: string) => {
+  let answered = false;
+  return (frame: Record<string, unknown>, send: (f: Record<string, unknown>) => void): void => {
+    if (answered) return;
+    answered = true;
+    send({
+      type: 'command.result',
+      commandId: frame['commandId'],
+      success: true,
+      result: { exitCode: 0, stdout, stderr: '', truncated: false, durationMs: 12 },
+    });
+  };
+};
 
 test('Internal device routes: token-guarded presence and command dispatch over the agent session', async () => {
   const auth = createAuthService(new InMemoryAuthRepository(), secret);
@@ -13,45 +29,25 @@ test('Internal device routes: token-guarded presence and command dispatch over t
   const owner = await auth.register('device-owner@example.com', 'ValidPassword123!');
   const stranger = await auth.register('device-stranger@example.com', 'ValidPassword123!');
 
-  const app = await buildApp({ auth, deviceManager, internalBridgeToken: bridgeToken });
+  const app = await buildApp({
+    auth,
+    deviceManager,
+    internalBridgeToken: bridgeToken,
+    registerAgent: async (_userId, input) => ({ id: crypto.randomUUID(), ...input }),
+  });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = app.server.address() as { port: number };
 
-  const received: Array<Record<string, unknown>> = [];
-  const deviceId = 'win-dev-cmd-01';
-  const deviceOnline = Promise.withResolvers<void>();
-  const unsubscribe = deviceManager.onDeviceStatusChange((event) => {
-    if (event.deviceId === deviceId && event.status === 'online') deviceOnline.resolve();
-  });
-
-  const ws = new WebSocket(
-    `ws://127.0.0.1:${port}/v1/agent/ws?token=${encodeURIComponent(owner.accessToken)}&deviceId=${deviceId}&platform=windows`,
-  );
-  // The device answers only the first command; the second is left unanswered to exercise the
-  // dispatch timeout.
-  ws.onmessage = (event: MessageEvent) => {
-    const frame = JSON.parse(String(event.data)) as Record<string, unknown>;
-    if (frame.type !== 'command.execute') return;
-    received.push(frame);
-    if (received.length > 1) return;
-    ws.send(
-      JSON.stringify({
-        type: 'command.result',
-        commandId: frame.commandId,
-        success: true,
-        result: {
-          exitCode: 0,
-          stdout: 'workstation-42\r\n',
-          stderr: '',
-          truncated: false,
-          durationMs: 12,
-        },
-      }),
-    );
-  };
+  let session: DeviceAgentSession | null = null;
 
   try {
-    await deviceOnline.promise;
+    session = await connectDeviceAgent({
+      port,
+      token: owner.accessToken,
+      name: 'Command Target',
+      onCommandExecute: answerFirstCommand('workstation-42\r\n'),
+    });
+    const deviceId = session.deviceId;
 
     // 1. Every internal route rejects a missing or wrong service token.
     const anonymous = await app.inject({ method: 'GET', url: '/v1/internal/devices?userId=x' });
@@ -64,7 +60,7 @@ test('Internal device routes: token-guarded presence and command dispatch over t
     });
     assert.equal(wrongToken.statusCode, 401);
 
-    // 2. Presence reflects the live session.
+    // 2. Presence reflects the live session, keyed by the id the server issued.
     const presence = await app.inject({
       method: 'GET',
       url: `/v1/internal/devices?userId=${owner.user.id}&platform=windows`,
@@ -84,9 +80,10 @@ test('Internal device routes: token-guarded presence and command dispatch over t
     const result = dispatched.json().result;
     assert.equal(result.success, true);
     assert.equal(result.result.stdout, 'workstation-42\r\n');
-    assert.equal(received[0]?.type, 'command.execute');
-    assert.equal(received[0]?.command, 'hostname');
-    assert.equal(received[0]?.commandId, result.commandId);
+
+    const executed = session.frames.find((frame) => frame['type'] === 'command.execute');
+    assert.equal(executed?.['command'], 'hostname');
+    assert.equal(executed?.['commandId'], result.commandId);
 
     // 4. A device that is not connected is reported as offline, never as an empty success.
     const offline = await app.inject({
@@ -118,8 +115,7 @@ test('Internal device routes: token-guarded presence and command dispatch over t
     assert.equal(silent.statusCode, 504);
     assert.equal(silent.json().error.code, 'DEVICE_DISPATCH_FAILED');
   } finally {
-    unsubscribe();
-    ws.close();
+    session?.close();
     await app.close();
   }
 });

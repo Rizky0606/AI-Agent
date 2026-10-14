@@ -225,6 +225,7 @@ const app = await buildApp({
   internalBridgeToken: process.env.RUNTIME_BRIDGE_TOKEN,
   listDevices: (userId) => deviceRepository.listByUser(userId),
   registerDevice: (userId, input) => deviceRepository.create(userId, input),
+  registerAgent: (userId, input) => deviceRepository.registerAgent(userId, input),
   chat: {
     chatRepo: chatRepository,
     router: modelRouter,

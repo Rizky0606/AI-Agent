@@ -61,6 +61,7 @@ export class DeviceConnectionManager {
   private readonly pendingCommands = new Map<
     string,
     {
+      deviceId: string;
       resolve: (result: DeviceCommandResult) => void;
       reject: (err: Error) => void;
       timer: NodeJS.Timeout;
@@ -78,6 +79,13 @@ export class DeviceConnectionManager {
     socket: DeviceSocket,
     metadata?: Record<string, unknown> | undefined,
   ): void {
+    const previous = this.sessions.get(deviceId);
+    if (previous) {
+      // Same key, new socket: the old one is stale, and its close event must not tear down the
+      // session that replaced it.
+      previous.socket.close();
+    }
+
     const session: ConnectedDeviceSession = {
       deviceId,
       userId,
@@ -92,17 +100,21 @@ export class DeviceConnectionManager {
     this.emitter.emit('status', { deviceId, userId, platform, status: 'online' });
   }
 
-  unregisterConnection(deviceId: string): void {
+  /**
+   * Drops the session only when it still belongs to `socket`, so a socket that was replaced by a
+   * reconnect cannot unregister its successor.
+   */
+  unregisterConnection(deviceId: string, socket?: DeviceSocket | undefined): void {
     const existing = this.sessions.get(deviceId);
-    if (existing) {
-      this.sessions.delete(deviceId);
-      this.emitter.emit('status', {
-        deviceId,
-        userId: existing.userId,
-        platform: existing.platform,
-        status: 'offline',
-      });
-    }
+    if (!existing) return;
+    if (socket !== undefined && existing.socket !== socket) return;
+    this.sessions.delete(deviceId);
+    this.emitter.emit('status', {
+      deviceId,
+      userId: existing.userId,
+      platform: existing.platform,
+      status: 'offline',
+    });
   }
 
   isDeviceOnline(deviceId: string): boolean {
@@ -123,33 +135,6 @@ export class DeviceConnectionManager {
     return ids;
   }
 
-  getOnlineDevices(userId: string): Array<{
-    deviceId: string;
-    platform: string;
-    connectedAt: string;
-    lastSeenAt: string;
-  }> {
-    const list: Array<{
-      deviceId: string;
-      platform: string;
-      connectedAt: string;
-      lastSeenAt: string;
-    }> = [];
-
-    for (const session of this.sessions.values()) {
-      if (session.userId === userId) {
-        list.push({
-          deviceId: session.deviceId,
-          platform: session.platform,
-          connectedAt: session.connectedAt,
-          lastSeenAt: session.lastSeenAt,
-        });
-      }
-    }
-
-    return list;
-  }
-
   updateHeartbeat(deviceId: string): void {
     const session = this.sessions.get(deviceId);
     if (session) {
@@ -157,13 +142,56 @@ export class DeviceConnectionManager {
     }
   }
 
-  handleCommandResult(result: DeviceCommandResult): void {
-    const pending = this.pendingCommands.get(result.commandId);
-    if (pending) {
-      clearTimeout(pending.timer);
-      this.pendingCommands.delete(result.commandId);
-      pending.resolve(result);
+  /**
+   * Routes a device's `command.result` frame back to the dispatch waiting for it. The frame is
+   * parsed here rather than cast at the call site: the socket is on the far side of a trust
+   * boundary, and a device that reports success without an exit code must not be able to turn a
+   * failed command into a completed task.
+   */
+  handleCommandResult(deviceId: string, frame: Record<string, unknown>): void {
+    const commandId = frame['commandId'];
+    if (typeof commandId !== 'string') return;
+    const pending = this.pendingCommands.get(commandId);
+    if (!pending || pending.deviceId !== deviceId) return;
+
+    clearTimeout(pending.timer);
+    this.pendingCommands.delete(commandId);
+
+    const raw = frame['result'];
+    const result =
+      typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : undefined;
+    const error =
+      typeof frame['error'] === 'object' && frame['error'] !== null
+        ? (frame['error'] as Record<string, unknown>)
+        : undefined;
+    const exitCode = result?.['exitCode'];
+
+    if (frame['success'] !== true || typeof exitCode !== 'number') {
+      pending.resolve({
+        commandId,
+        success: false,
+        error: {
+          code: typeof error?.['code'] === 'string' ? error['code'] : 'COMMAND_FAILED',
+          message:
+            typeof error?.['message'] === 'string'
+              ? error['message']
+              : 'Device reported failure without an exit code',
+        },
+      });
+      return;
     }
+
+    pending.resolve({
+      commandId,
+      success: true,
+      result: {
+        exitCode,
+        stdout: typeof result?.['stdout'] === 'string' ? result['stdout'] : '',
+        stderr: typeof result?.['stderr'] === 'string' ? result['stderr'] : '',
+        truncated: result?.['truncated'] === true,
+        durationMs: typeof result?.['durationMs'] === 'number' ? result['durationMs'] : 0,
+      },
+    });
   }
 
   /**
@@ -193,7 +221,7 @@ export class DeviceConnectionManager {
         reject(new Error(`Command ${command.commandId} dispatch to device timed out`));
       }, timeoutMs);
 
-      this.pendingCommands.set(command.commandId, { resolve, reject, timer });
+      this.pendingCommands.set(command.commandId, { deviceId, resolve, reject, timer });
 
       try {
         const raw = JSON.stringify(payload);

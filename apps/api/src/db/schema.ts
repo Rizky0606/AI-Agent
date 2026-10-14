@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -42,7 +43,11 @@ export const devices = pgTable(
   },
   (table) => [
     index('devices_user_idx').on(table.userId),
-    uniqueIndex('devices_user_name_uq').on(table.userId, table.name),
+    // Identity is the key, not the name: two machines may share a hostname, and one key must not
+    // claim devices under two accounts.
+    uniqueIndex('devices_public_key_uq')
+      .on(table.publicKey)
+      .where(sql`public_key IS NOT NULL`),
   ],
 );
 

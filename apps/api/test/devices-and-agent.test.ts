@@ -3,101 +3,119 @@ import test from 'node:test';
 import { buildApp } from '../src/app.ts';
 import { InMemoryAuthRepository, createAuthService } from '../src/auth/service.ts';
 import { DeviceConnectionManager } from '../src/services/device-connection-manager.ts';
+import {
+  connectDeviceAgent,
+  storedPublicKey,
+  waitForDeviceOffline,
+} from './support/device-agent.ts';
 
 const secret = 'test-secret-at-least-thirty-two-chars-long';
 
-test('Devices & Agent WSS: registration, online status, heartbeat, and offline transition', async () => {
+test('Devices & Agent WSS: the server names the device, tracks presence, and drops it on disconnect', async () => {
   const authRepo = new InMemoryAuthRepository();
   const auth = createAuthService(authRepo, secret);
   const deviceManager = new DeviceConnectionManager();
+  /** Stands in for the `devices` table: registration writes it, `GET /v1/devices` reads it. */
+  const rows: Array<{ id: string; name: string; platform: string; publicKey: string }> = [
+    { id: 'win-dev-99', name: 'Workstation 99', platform: 'windows', publicKey: 'stored-key' },
+  ];
+  let nextId = 1;
 
   const user = await auth.register('windows-user@example.com', 'ValidPassword123!');
-  const token = user.accessToken;
 
   const app = await buildApp({
     auth,
     deviceManager,
-    listDevices: async () => [
-      { id: 'win-dev-99', name: 'Workstation 99', platform: 'windows', lastSeenAt: new Date() },
-    ],
-    registerDevice: async (_userId, input) => ({
-      id: 'win-dev-99',
-      name: input.name,
-      platform: input.platform,
-    }),
+    listDevices: async () =>
+      rows.map((row) => ({ ...row, lastSeenAt: new Date('2026-01-01T00:00:00.000Z') })),
+    registerDevice: async (_userId, input) => ({ id: 'win-dev-99', ...input }),
+    registerAgent: async (_userId, input) => {
+      const id = `00000000-0000-4000-8000-00000000000${nextId++}`;
+      rows.push({ id, ...input });
+      return { id, name: input.name, platform: input.platform };
+    },
   });
 
   await app.listen({ port: 0, host: '127.0.0.1' });
-  const addressInfo = app.server.address() as { port: number };
-  const port = addressInfo.port;
+  const port = (app.server.address() as { port: number }).port;
 
   try {
-    // 1. Initial check - device is registered in DB but currently offline
-    const listRes = await app.inject({
+    // 1. A registered device that has never connected is reported offline.
+    const before = await app.inject({
       method: 'GET',
       url: '/v1/devices',
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${user.accessToken}` },
     });
-    assert.equal(listRes.statusCode, 200);
-    const body1 = listRes.json();
-    assert.equal(body1.devices.length, 1);
-    assert.equal(body1.devices[0].id, 'win-dev-99');
-    assert.equal(body1.devices[0].isOnline, false);
-    assert.equal(deviceManager.isDeviceOnline('win-dev-99'), false);
-
-    // 2. Connect outbound WSS from Windows Agent
-    const wsUrl = `ws://127.0.0.1:${port}/v1/agent/ws?token=${encodeURIComponent(token)}&deviceId=win-dev-99&platform=windows`;
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve();
-      ws.onerror = (e) => reject(e);
-    });
-
-    // Wait for server to process websocket connection handler
-    await new Promise((r) => setTimeout(r, 50));
-
-    // Device should now be marked online
-    assert.equal(deviceManager.isDeviceOnline('win-dev-99'), true);
-    assert.deepEqual(deviceManager.listOnlineDeviceIds(user.user.id, 'windows'), ['win-dev-99']);
-
-    // Check GET /v1/devices reflects online status
-    const listRes2 = await app.inject({
-      method: 'GET',
-      url: '/v1/devices',
-      headers: { authorization: `Bearer ${token}` },
-    });
-    const body2 = listRes2.json();
-    assert.equal(body2.devices[0].isOnline, true);
-
-    const frames: Array<Record<string, unknown>> = [];
-    ws.onmessage = (event) => {
-      frames.push(JSON.parse(String(event.data)) as Record<string, unknown>);
-    };
-
-    // 3. Handshake & Heartbeat
-    ws.send(JSON.stringify({ type: 'device.handshake', deviceId: 'win-dev-99' }));
-    ws.send(JSON.stringify({ type: 'pong' }));
-
-    await new Promise((r) => setTimeout(r, 40));
-    assert.ok(
-      frames.some((f) => f['type'] === 'device.handshake_ack' && f['deviceId'] === 'win-dev-99'),
-      'the agent must receive a handshake acknowledgement for its own device id',
+    assert.equal(before.statusCode, 200);
+    const beforeDevices = before.json().devices as Array<{ id: string; isOnline: boolean }>;
+    assert.deepEqual(
+      beforeDevices.map((device) => [device.id, device.isOnline]),
+      [['win-dev-99', false]],
     );
 
-    // 4. Disconnect WSS -> device transitions to offline
-    ws.close();
-    await new Promise((r) => setTimeout(r, 60));
+    // 2. The agent connects, proves its key, and learns the id the server assigned.
+    const session = await connectDeviceAgent({
+      port,
+      token: user.accessToken,
+      name: 'Workstation 99',
+    });
 
-    assert.equal(deviceManager.isDeviceOnline('win-dev-99'), false);
-    assert.deepEqual(deviceManager.listOnlineDeviceIds(user.user.id, 'windows'), []);
+    assert.equal(rows.length, 2, 'the agent key must add exactly one device row');
+    assert.deepEqual(rows[1], {
+      id: session.deviceId,
+      name: 'Workstation 99',
+      platform: 'windows',
+      publicKey: storedPublicKey(session),
+    });
+    assert.match(session.deviceId, /^[0-9a-f-]{36}$/, 'the id must be a server-issued uuid');
 
-    const listRes3 = await app.inject({
+    assert.equal(deviceManager.isDeviceOnline(session.deviceId), true);
+    assert.deepEqual(deviceManager.listOnlineDeviceIds(user.user.id, 'windows'), [session.deviceId]);
+
+    // 3. The live session shows up next to the registered row.
+    const during = await app.inject({
       method: 'GET',
       url: '/v1/devices',
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${user.accessToken}` },
     });
-    assert.equal(listRes3.json().devices[0].isOnline, false);
+    const duringDevices = during.json().devices as Array<{ id: string; isOnline: boolean }>;
+    assert.deepEqual(
+      duringDevices.map((device) => [device.id, device.isOnline]),
+      [
+        ['win-dev-99', false],
+        [session.deviceId, true],
+      ],
+    );
+
+    // 4. Heartbeat: the agent pings, the server answers, and the session survives.
+    const pong = session.waitForFrame((frame) => frame['type'] === 'pong');
+    session.send({ type: 'ping' });
+    await pong;
+    assert.equal(deviceManager.isDeviceOnline(session.deviceId), true);
+
+    // 5. Disconnect -> offline, while the registered row stays.
+    const wentOffline = waitForDeviceOffline(deviceManager, session.deviceId);
+    session.close();
+    await wentOffline;
+
+    assert.equal(deviceManager.isDeviceOnline(session.deviceId), false);
+    assert.deepEqual(deviceManager.listOnlineDeviceIds(user.user.id, 'windows'), []);
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/v1/devices',
+      headers: { authorization: `Bearer ${user.accessToken}` },
+    });
+    assert.deepEqual(
+      (after.json().devices as Array<{ id: string; isOnline: boolean }>).map((device) => [
+        device.id,
+        device.isOnline,
+      ]),
+      [
+        ['win-dev-99', false],
+        [session.deviceId, false],
+      ],
+    );
   } finally {
     await app.close();
   }

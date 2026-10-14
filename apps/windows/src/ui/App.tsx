@@ -330,7 +330,9 @@ export const App: React.FC = () => {
           <span className="brand-logo">🪟</span>
           <div>
             <h1 className="brand-title">Personal AI OS — Windows Agent</h1>
-            <span className="device-badge">ID: {device.id}</span>
+            <span className="device-badge">
+              ID: {device.id || 'belum terdaftar (menunggu server)'}
+            </span>
           </div>
         </div>
 

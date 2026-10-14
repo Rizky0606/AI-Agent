@@ -1,30 +1,31 @@
 import { invoke } from '@tauri-apps/api/core';
+import { DeviceKeyStore } from './device-key.ts';
 
 export interface DeviceIdentity {
+  /**
+   * The id the server assigned to this machine's key. Empty until the handshake is acknowledged:
+   * the agent does not get to name itself, it only reports the key it holds.
+   */
   id: string;
   name: string;
   platform: 'windows';
   hostname: string;
   arch: string;
-  publicKey?: string | undefined;
 }
 
 /**
- * Fetches the device identity from the Rust/Tauri backend command 'get_device_identity'.
- * If running outside Tauri (e.g. test environment or browser mock), falls back safely.
+ * Reads what the machine can honestly report about itself. The id is deliberately absent — the
+ * server derives it from the device key during the handshake.
  */
-export async function fetchDeviceIdentity(): Promise<DeviceIdentity> {
+export async function fetchDeviceIdentity(): Promise<Omit<DeviceIdentity, 'id'>> {
   try {
-    const identity = await invoke<DeviceIdentity>('get_device_identity');
-    if (identity && identity.id) {
-      return identity;
-    }
+    const identity = await invoke<Omit<DeviceIdentity, 'id'>>('get_device_identity');
+    if (identity?.name) return identity;
   } catch {
     // Fallback when invoked outside of Tauri runtime
   }
 
   return {
-    id: 'win-dev-local',
     name: 'Windows Agent (Local)',
     platform: 'windows',
     hostname: 'localhost',
@@ -33,16 +34,16 @@ export async function fetchDeviceIdentity(): Promise<DeviceIdentity> {
 }
 
 export class DeviceIdentityManager {
+  readonly keys = new DeviceKeyStore();
   private identity: DeviceIdentity;
 
   constructor(customIdentity?: Partial<DeviceIdentity>) {
     this.identity = {
-      id: customIdentity?.id ?? 'win-dev-local',
+      id: customIdentity?.id ?? '',
       name: customIdentity?.name ?? 'Windows Agent (Local)',
       platform: 'windows',
       hostname: customIdentity?.hostname ?? 'localhost',
       arch: customIdentity?.arch ?? 'x64',
-      publicKey: customIdentity?.publicKey ?? undefined,
     };
   }
 
@@ -50,17 +51,19 @@ export class DeviceIdentityManager {
     return { ...this.identity };
   }
 
-  setIdentity(identity: DeviceIdentity): void {
-    this.identity = { ...identity };
+  /** Called with the id the server issued once it has verified the handshake signature. */
+  setServerDeviceId(deviceId: string): DeviceIdentity {
+    this.identity = { ...this.identity, id: deviceId };
+    return this.getIdentity();
   }
 
   setDeviceName(name: string): void {
-    this.identity.name = name;
+    this.identity = { ...this.identity, name };
   }
 
   async syncWithTauri(): Promise<DeviceIdentity> {
     const fetched = await fetchDeviceIdentity();
-    this.identity = fetched;
+    this.identity = { ...this.identity, ...fetched };
     return this.getIdentity();
   }
 }

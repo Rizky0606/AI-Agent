@@ -309,8 +309,10 @@ export const createAgentStore = (
         serverUrl: state.serverUrl,
         token: state.authToken,
         identity: state.device,
+        keyStore: identityMgr.keys,
         executor: exec,
         onStatusChange: (status) => set({ connectionStatus: status }),
+        onDeviceId: (deviceId) => set({ device: identityMgr.setServerDeviceId(deviceId) }),
         onLogMessage: (level, msg) => get().addLog(level, msg),
           onChatMessage: (frame) => set((current) => {
             const conversationId = frame.conversationId ?? current.activeConversationId;

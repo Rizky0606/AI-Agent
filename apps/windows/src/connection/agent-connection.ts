@@ -1,6 +1,7 @@
 import type { ICommandExecutor } from '../security/types.ts';
 import type { CapabilityName } from '../security/capability-registry.ts';
 import type { DeviceIdentity } from './device-identity.ts';
+import type { DeviceKeyStore } from './device-key.ts';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
@@ -19,12 +20,16 @@ export interface AgentConnectionOptions {
   serverUrl: string;
   token: string;
   identity: DeviceIdentity;
+  /** Holds the P-256 key this agent signs the server's challenge with. */
+  keyStore: DeviceKeyStore;
   executor: ICommandExecutor;
   heartbeatIntervalMs?: number | undefined;
   maxReconnectAttempts?: number | undefined;
   onStatusChange?: ((status: ConnectionStatus) => void) | undefined;
   onLogMessage?: ((level: 'info' | 'warn' | 'error', message: string) => void) | undefined;
   onChatMessage?: ((message: ChatFrame) => void) | undefined;
+  /** Receives the id the server assigned to this device key. */
+  onDeviceId?: ((deviceId: string) => void) | undefined;
 }
 
 export interface InboundServerMessage {
@@ -36,7 +41,22 @@ export interface InboundServerMessage {
   action?: string | undefined;
   cwd?: string | undefined;
   timeoutMs?: number | undefined;
+  challenge?: string | undefined;
+  deviceId?: string | undefined;
+  code?: string | undefined;
+  message?: string | undefined;
 }
+
+/** Server codes that a retry cannot fix: the credential or the key is wrong, not the network. */
+const FATAL_HANDSHAKE_CODES = new Set([
+  'UNAUTHORIZED',
+  'DEVICE_KEY_INVALID',
+  'DEVICE_SIGNATURE_INVALID',
+  'DEVICE_SIGNATURE_MISSING',
+  'DEVICE_NAME_INVALID',
+  'DEVICE_PLATFORM_INVALID',
+]);
+
 
 export class AgentConnection {
   private options: AgentConnectionOptions;
@@ -75,9 +95,10 @@ export class AgentConnection {
 
     try {
       const httpBase = this.options.serverUrl.replace(/\/+$/, '');
+      // No deviceId here: the server issues it after verifying the key, and refuses a claimed one.
       const wsUrl =
         httpBase.replace(/^http(s?):/i, 'ws$1:') +
-        `/v1/agent/ws?token=${encodeURIComponent(this.options.token)}&deviceId=${encodeURIComponent(this.options.identity.id)}&platform=windows`;
+        `/v1/agent/ws?token=${encodeURIComponent(this.options.token)}`;
 
       this.log('info', `Initiating outbound WSS connection to ${httpBase}...`);
 
@@ -85,18 +106,7 @@ export class AgentConnection {
 
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
-        this.setStatus('connected');
-        this.log('info', `Successfully connected to server as device ${this.options.identity.id}`);
-
-        // Send device registration handshake
-        this.send({
-          type: 'device.handshake',
-          device: this.options.identity,
-          capabilities: this.options.executor.getCapabilityRegistry().getAllRules(),
-          allowedRoots: this.options.executor.getPathValidator().getAllowedRoots(),
-        });
-
-        this.startHeartbeat();
+        this.log('info', 'Socket open; waiting for the server challenge to sign');
       };
 
       this.ws.onmessage = (event: MessageEvent) => {
@@ -136,6 +146,23 @@ export class AgentConnection {
 
   private async handleServerMessage(msg: InboundServerMessage): Promise<void> {
     switch (msg.type) {
+      case 'device.challenge':
+        await this.answerChallenge(msg.challenge);
+        break;
+
+      case 'device.handshake_ack':
+        if (msg.deviceId) {
+          this.log('info', `Server registered this device as ${msg.deviceId}`);
+          this.options.onDeviceId?.(msg.deviceId);
+        }
+        this.setStatus('connected');
+        this.startHeartbeat();
+        break;
+
+      case 'device.error':
+        this.handleHandshakeError(msg);
+        break;
+
       case 'ping':
         this.send({ type: 'pong', timestamp: Date.now() });
         break;
@@ -155,6 +182,47 @@ export class AgentConnection {
       default:
         this.log('warn', `Received unhandled message type: ${msg.type}`);
     }
+  }
+
+  /** Signs the server's nonce with the device key and reports the public half back. */
+  private async answerChallenge(challenge: string | undefined): Promise<void> {
+    if (!challenge) {
+      this.log('error', 'Server sent a challenge without a nonce');
+      return;
+    }
+
+    try {
+      const [publicKey, signature] = await Promise.all([
+        this.options.keyStore.publicKey(),
+        this.options.keyStore.sign(challenge),
+      ]);
+      this.send({
+        type: 'device.handshake',
+        publicKey,
+        signature,
+        name: this.options.identity.name,
+        platform: this.options.identity.platform,
+        hostname: this.options.identity.hostname,
+        capabilities: this.options.executor.getCapabilityRegistry().getAllRules(),
+        allowedRoots: this.options.executor.getPathValidator().getAllowedRoots(),
+      });
+    } catch (err) {
+      this.log(
+        'error',
+        `Could not sign the device challenge: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private handleHandshakeError(msg: InboundServerMessage): void {
+    const code = msg.code ?? 'DEVICE_HANDSHAKE_FAILED';
+    this.log('error', `Device handshake refused (${code}): ${msg.message ?? 'no detail'}`);
+    if (FATAL_HANDSHAKE_CODES.has(code)) {
+      // Reconnecting with the same rejected credential would only repeat the failure.
+      this.isClosedExplicitly = true;
+      this.setStatus('disconnected');
+    }
+    this.ws?.close();
   }
 
   private async handleExecuteCommand(msg: InboundServerMessage): Promise<void> {

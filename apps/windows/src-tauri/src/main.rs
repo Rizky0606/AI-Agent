@@ -127,37 +127,26 @@ fn write_allowed_file(path: String, content: String, state: State<'_, AppState>)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceIdentity {
-    pub id: String,
     pub name: String,
     pub platform: String,
     pub hostname: String,
     pub arch: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key: Option<String>,
 }
 
+/// Reports what this machine can honestly say about itself. The device id is deliberately absent:
+/// the server derives it from the P-256 key the agent signs the handshake challenge with, so an id
+/// computed here (it used to be `win-dev-<hostname hash>`) would only be a claim.
 #[tauri::command]
 fn get_device_identity() -> DeviceIdentity {
     let hostname = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "localhost".to_string());
-    let username = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_string());
-    let arch = std::env::consts::ARCH.to_string();
-
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    format!("{}-windows-{}-{}", hostname, arch, username).hash(&mut hasher);
-    let hash_val = hasher.finish();
-    let machine_hash = format!("{:016x}", hash_val);
 
     DeviceIdentity {
-        id: format!("win-dev-{}", machine_hash),
         name: format!("Windows Agent ({})", hostname),
         platform: "windows".to_string(),
         hostname,
-        arch,
-        public_key: None,
+        arch: std::env::consts::ARCH.to_string(),
     }
 }
 
