@@ -143,6 +143,40 @@ export class DeviceConnectionManager {
   }
 
   /**
+   * Waits for a device session to (re)appear, up to `timeoutMs`.
+   *
+   * Sessions live in this process, so an API restart drops every one of them. Without a grace
+   * window, a task approved moments earlier fails instantly even though the agent reconnects
+   * seconds later, and the user has to approve the same command again. Resolves `true` as soon as
+   * a matching session exists, `false` when the window closes.
+   */
+  async waitForConnection(
+    deviceId: string,
+    timeoutMs: number,
+    userId?: string | undefined,
+  ): Promise<boolean> {
+    const existing = this.sessions.get(deviceId);
+    if (existing && (userId === undefined || existing.userId === userId)) return true;
+    if (timeoutMs <= 0) return false;
+
+    return new Promise<boolean>((resolve) => {
+      const finish = (connected: boolean): void => {
+        clearTimeout(timer);
+        this.emitter.off('status', onStatus);
+        resolve(connected);
+      };
+      const onStatus = (event: { deviceId: string; status: 'online' | 'offline' }): void => {
+        const session = this.sessions.get(deviceId);
+        if (event.status !== 'online' || event.deviceId !== deviceId || !session) return;
+        if (userId !== undefined && session.userId !== userId) return;
+        finish(true);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this.emitter.on('status', onStatus);
+    });
+  }
+
+  /**
    * Routes a device's `command.result` frame back to the dispatch waiting for it. The frame is
    * parsed here rather than cast at the call site: the socket is on the far side of a trust
    * boundary, and a device that reports success without an exit code must not be able to turn a

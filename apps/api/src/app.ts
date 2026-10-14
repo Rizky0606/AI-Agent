@@ -42,6 +42,8 @@ export type AppDependencies = {
    * are not mounted at all, so dispatch fails closed instead of running unauthenticated.
    */
   internalBridgeToken?: string | undefined;
+  /** Overrides how long a device dispatch waits for the agent to (re)connect. */
+  deviceReconnectGraceMs?: number | undefined;
   listDevices?:
     | ((userId: string) => Promise<
         Array<{
@@ -437,6 +439,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       registerDeviceCommandRoutes(app, {
         deviceManager: dependencies.deviceManager,
         token: dependencies.internalBridgeToken,
+        reconnectGraceMs: dependencies.deviceReconnectGraceMs,
       });
     }
   }

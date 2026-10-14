@@ -167,6 +167,15 @@ export class TaskExecutor {
     // A task that targets a device must reach a real one. Presence is asked of the API, which
     // owns the Windows agent sessions; when nothing is connected the task fails transparently
     // instead of being reported as work the device never performed.
+    //
+    // An approved resume is exempt: the command was already authorised, and the agent's session
+    // lives in the API process, so a restart between approval and resume would otherwise burn the
+    // approval on a device that is seconds away from dialling back in. Dispatch waits for the
+    // reconnect instead.
+    const resumedWithApproval =
+      task.checkpoint?.actionState?.approved === true &&
+      (typeof task.checkpoint?.actionState?.approvalId === 'string' ||
+        typeof task.payload?.['approvalId'] === 'string');
     const targetDevice =
       typeof task.payload?.['targetDevice'] === 'string' ? task.payload['targetDevice'] : undefined;
     const isWindowsTarget =
@@ -175,11 +184,12 @@ export class TaskExecutor {
       task.payload?.['platform'] === 'windows' ||
       task.kind.startsWith('windows');
 
-    const onlineDeviceIds = isWindowsTarget
-      ? ((await this.deviceDispatcher?.listOnlineDevices(task.userId, 'windows')) ?? [])
-      : [];
+    const onlineDeviceIds =
+      isWindowsTarget && !resumedWithApproval
+        ? ((await this.deviceDispatcher?.listOnlineDevices(task.userId, 'windows')) ?? [])
+        : [];
 
-    if (isWindowsTarget) {
+    if (isWindowsTarget && !resumedWithApproval) {
       const isOnline =
         targetDevice === undefined
           ? onlineDeviceIds.length > 0

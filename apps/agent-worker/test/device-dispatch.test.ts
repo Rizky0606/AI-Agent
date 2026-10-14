@@ -228,6 +228,35 @@ test('Device task: an approval for one command does not authorise a different on
   assert.ok(!swapped.events.some((e) => e.eventType === 'task.completed'));
 });
 
+test('Device task: an approved command still runs when the agent reconnects after an API restart', async () => {
+  const dispatched: Array<Record<string, unknown>> = [];
+  // Sessions live in the API process, so a restart makes every device look offline until the agent
+  // dials back in. The command was already authorised; failing here would burn the approval and
+  // make the user approve the same command twice.
+  let online = ['win-1'];
+  const dispatcher: DeviceDispatcher = {
+    listOnlineDevices: async () => online,
+    dispatchCommand: async (request) => {
+      dispatched.push(request);
+      return hostnameOutput;
+    },
+  };
+
+  const first = new RecordingTaskRepo({ targetDevice: 'win-1', command: 'hostname' });
+  const { executor, created } = makeExecutor(first, dispatcher);
+  await executor.execute(job);
+
+  online = [];
+  const resumed = new RecordingTaskRepo({ targetDevice: 'win-1', command: 'hostname' });
+  resumed.markApproved('appr-approved');
+  const approved = makeExecutor(resumed, dispatcher, [created[0]!.fingerprint]);
+  await approved.executor.execute(job);
+
+  assert.equal(dispatched.length, 1, 'the approved command must reach the device exactly once');
+  assert.equal((await resumed.getTask())?.status, 'completed');
+  assert.ok(!resumed.events.some((e) => e.eventType === 'task.failed'));
+});
+
 test('Device task: a non-zero exit fails the task instead of reporting the command as done', async () => {
   const dispatched: Array<Record<string, unknown>> = [];
   const dispatcher: DeviceDispatcher = {

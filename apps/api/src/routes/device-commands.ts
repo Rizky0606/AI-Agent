@@ -14,12 +14,21 @@ import {
 export interface DeviceCommandRouteOptions {
   deviceManager: DeviceConnectionManager;
   token: string;
+  /** Overrides `RECONNECT_GRACE_MS`; `0` reports an absent device immediately. */
+  reconnectGraceMs?: number | undefined;
 }
 
 /** Mirrors `MAX_TIMEOUT_MS` in the Windows agent, which clamps whatever it is told to wait. */
 const MAX_DEVICE_TIMEOUT_MS = 120_000;
 /** The device answers before its own timeout fires, so the server waits a little longer. */
 const DISPATCH_GRACE_MS = 10_000;
+/**
+ * How long a dispatch waits for the target device to (re)connect before reporting it offline.
+ * Sessions are in-memory, so an API restart leaves an already-approved command with nowhere to go;
+ * the agent usually dials back within seconds, and failing instantly would cost the user another
+ * approval for the same command.
+ */
+const RECONNECT_GRACE_MS = Number(process.env.DEVICE_RECONNECT_GRACE_MS ?? 30_000);
 
 interface DeviceCommandBody {
   userId: string;
@@ -101,6 +110,13 @@ export const registerDeviceCommandRoutes = (
       const timeoutMs = body.timeoutMs ?? 60_000;
 
       try {
+        const connected = await options.deviceManager.waitForConnection(
+          body.deviceId,
+          options.reconnectGraceMs ?? RECONNECT_GRACE_MS,
+          body.userId,
+        );
+        if (!connected) throw new DeviceOfflineError(body.deviceId);
+
         const result = await options.deviceManager.dispatchCommand(
           body.deviceId,
           {

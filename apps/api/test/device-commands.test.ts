@@ -3,7 +3,11 @@ import test from 'node:test';
 import { buildApp } from '../src/app.ts';
 import { InMemoryAuthRepository, createAuthService } from '../src/auth/service.ts';
 import { DeviceConnectionManager } from '../src/services/device-connection-manager.ts';
-import { connectDeviceAgent, type DeviceAgentSession } from './support/device-agent.ts';
+import {
+  connectDeviceAgent,
+  waitForDeviceOffline,
+  type DeviceAgentSession,
+} from './support/device-agent.ts';
 
 const secret = 'test-secret-at-least-thirty-two-chars-long';
 const bridgeToken = 'internal-bridge-token-for-device-command-tests';
@@ -33,6 +37,9 @@ test('Internal device routes: token-guarded presence and command dispatch over t
     auth,
     deviceManager,
     internalBridgeToken: bridgeToken,
+    // A never-connected device must be reported immediately; the reconnect window is exercised by
+    // the dedicated test below.
+    deviceReconnectGraceMs: 0,
     registerAgent: async (_userId, input) => ({ id: crypto.randomUUID(), ...input }),
   });
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -116,6 +123,70 @@ test('Internal device routes: token-guarded presence and command dispatch over t
     assert.equal(silent.json().error.code, 'DEVICE_DISPATCH_FAILED');
   } finally {
     session?.close();
+    await app.close();
+  }
+});
+
+test('Internal device routes: a dispatch waits for the agent to reconnect instead of losing an approved command', async () => {
+  const auth = createAuthService(new InMemoryAuthRepository(), secret);
+  const deviceManager = new DeviceConnectionManager();
+  const owner = await auth.register('device-reconnect@example.com', 'ValidPassword123!');
+
+  // Same key -> same device, exactly as the repository does. Without this the reconnect would
+  // come back as a different device and the pending dispatch would have nothing to wait for.
+  const rows: Array<{ id: string; publicKey: string }> = [];
+  const app = await buildApp({
+    auth,
+    deviceManager,
+    internalBridgeToken: bridgeToken,
+    deviceReconnectGraceMs: 5_000,
+    registerAgent: async (_userId, input) => {
+      const existing = rows.find((row) => row.publicKey === input.publicKey);
+      if (existing) return { id: existing.id, ...input };
+      const row = { id: crypto.randomUUID(), publicKey: input.publicKey };
+      rows.push(row);
+      return { id: row.id, ...input };
+    },
+  });
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const { port } = app.server.address() as { port: number };
+
+  // Sessions are in-memory, so an API restart drops them; the agent keeps its key and gets the same
+  // deviceId back when it dials in again.
+  let first: DeviceAgentSession | null = null;
+  let second: DeviceAgentSession | null = null;
+
+  try {
+    first = await connectDeviceAgent({ port, token: owner.accessToken, name: 'Reconnect Target' });
+    const deviceId = first.deviceId;
+    const keyPair = first.keyPair;
+    first.close();
+    await waitForDeviceOffline(deviceManager, deviceId);
+    first = null;
+
+    // Dispatch while nothing is connected: it must hold the door open for the reconnect.
+    const pending = app.inject({
+      method: 'POST',
+      url: '/v1/internal/device-commands',
+      headers: { 'x-internal-token': bridgeToken },
+      payload: { userId: owner.user.id, deviceId, command: 'hostname', timeoutMs: 5_000 },
+    });
+
+    second = await connectDeviceAgent({
+      port,
+      token: owner.accessToken,
+      name: 'Reconnect Target',
+      keyPair,
+      onCommandExecute: answerFirstCommand('AFTER-RESTART\r\n'),
+    });
+    assert.equal(second.deviceId, deviceId, 'the same key must come back as the same device');
+
+    const dispatched = await pending;
+    assert.equal(dispatched.statusCode, 200);
+    assert.equal(dispatched.json().result.result.stdout, 'AFTER-RESTART\r\n');
+  } finally {
+    first?.close();
+    second?.close();
     await app.close();
   }
 });
