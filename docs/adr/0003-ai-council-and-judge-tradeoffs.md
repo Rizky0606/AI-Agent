@@ -32,3 +32,7 @@ Namun, pada lingkungan komputasi riil:
 - Menghemat konsumsi token dan menjaga latensi pada batas wajar di VPS 2 OCPU.
 - Mencegah loop perdebatan tanpa akhir (_infinite debate loops_).
 - Menjamin setiap keputusan berisiko tinggi selalu bersandar pada bukti nyata (_evidence over opinion_), selaras dengan aturan kerja nomor 7 pada `AGENTS.md`.
+
+## Amendemen 2026-10-14
+
+Keputusan di atas bertahan, tetapi implementasinya tidak. `AiCouncil` dan `SelfHealingEngine` punya test yang lulus dan **nol pemanggil** di `apps/` maupun di paket lain — jadi keduanya dihapus, bukan disambungkan: subdirektori `council/` dan `healing/` di dalam paket `agent-core`, dua baris `export *` di `packages/agent-core/src/index.ts`, dan kedua file test-nya (test paket 40 → 31). Poin 1 (tunda untuk alur rutin) dan poin 4 (self-healing berdiri sendiri) kini ditegakkan oleh ketiadaan kode, bukan oleh kebijakan; poin 2 dan 3 tetap berlaku sebagai batasan bila council dibangun ulang, dan poin 3 sudah dipegang jalur yang ada — `GenericEvaluator` menilai bukti nyata sebelum `completed` (lihat `docs/assessment-2026-10-13.md` M3).

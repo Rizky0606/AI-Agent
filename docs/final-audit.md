@@ -95,8 +95,8 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 - **Persyaratan**: Pemilihan model, runtime adapter, dan tool dipandu oleh analisis niat, matriks kapabilitas, dan health check runtime dengan graceful fallback.
 - **Bukti File Relatif**:
   - `packages/agent-core/src/router/agent-router.ts`: Menganalisis niat task (coding/research/general) dan memilih model/runtime yang sehat.
-  - `packages/agent-core/src/runtimes/runtime-manager.ts`: Memonitor runtime adapter terpasang (OMP dan Pi) serta status kesehatannya.
-  - `packages/agent-core/src/runtimes/unverified-adapter.ts`: Isolasi runtime yang belum terverifikasi agar tidak dieksekusi di luar policy.
+  - `packages/agent-core/src/runtimes/runtime-manager.ts`: Memonitor runtime adapter terpasang serta status kesehatannya, dan membatasi laju/konkurensi eksekusi per runtime.
+  - `packages/agent-core/src/runtimes/remote-adapter.ts`: Satu-satunya adapter yang didaftarkan produksi — meneruskan eksekusi ke `apps/runtime-bridge` di host.
 - **Bukti Test & Output**:
   - Test: `packages/agent-core/test/agent-router.test.ts`: Routing berbasis niat dan kapabilitas.
   - Test: `packages/agent-core/test/runtimes.test.ts`: Runtime health check dan fallback saat runtime primer gagal.
@@ -249,7 +249,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 
 ### Butir 11: Windows Agent Terautentikasi dan Capability-Limited
 
-- **Status**: **SEBAGIAN** (sebelumnya dinyatakan LULUS). Identitas kriptografis dan dispatch sudah nyata; sisa cacat adalah allowlist teks-perintah/biner dan sesi in-memory.
+- **Status**: **SEBAGIAN** (sebelumnya dinyatakan LULUS). Identitas kriptografis, dispatch, dan allowlist teks-perintah/biner sudah nyata; sisa cacat adalah sesi koneksi in-memory.
 - **Persyaratan**: Windows Agent beroperasi sebagai remote worker dengan identitas perangkat kriptografis, koneksi outbound WSS terautentikasi, allowlist command, dan penanganan status offline.
 - **Bukti File Relatif**:
   - `apps/api/src/services/device-identity.ts`: Parsing JWK publik, thumbprint RFC 7638, dan verifikasi tanda tangan P-256 challenge handshake.
@@ -258,6 +258,8 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
   - `apps/windows/src/connection/device-identity.ts`: Identitas perangkat (name/platform/hostname/arch) tanpa id buatan sendiri.
   - `apps/windows/src/connection/agent-connection.ts`: Koneksi WSS outbound ke `/v1/agent/ws` dengan handshake dan reconnect otomatis.
   - `apps/windows/src/security/capability-registry.ts`: Pendaftaran kapabilitas yang diizinkan (default powershell non-aktif kecuali diaktifkan eksplisit).
+  - `apps/windows/src/security/command-allowlist.ts`: Parser teks perintah + allowlist biner bawaan (`DEFAULT_ALLOWED_COMMANDS`), deny by default.
+  - `apps/windows/src-tauri/src/command_allowlist.rs`: Cermin aturan yang sama di sisi Rust, dipanggil sebelum `execute_powershell`.
   - `apps/windows/src/security/command-executor.ts`: Eksekusi command dalam batas direktori kerja yang divalidasi.
   - `apps/windows/src-tauri/src/main.rs`: Backend Tauri Rust yang membatasi akses native OS.
 - **Yang benar-benar bekerja**:
@@ -283,8 +285,9 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 - **Cacat identitas perangkat yang tersisa**:
   - Sesi koneksi perangkat disimpan in-memory (`device-connection-manager.ts`), sehingga hilang saat API restart — baris `devices` dan `public_key` tetap ada, tetapi agent harus reconnect sebelum task bisa dikirim.
   - Private key agent disimpan di `localStorage` webview, bukan OS keystore. Ini platform facility yang tersedia tanpa menambah dependency Rust; lebih kuat dari string id sebelumnya, lebih lemah dari keystore OS. Batas ini ditulis di `apps/windows/src/connection/device-key.ts`.
-- **Cacat allowlist**: tidak ada allowlist teks-perintah atau allowlist biner. Penegakan hanya pada capability, action, dan `cwd`, sehingga perintah PowerShell apa pun dapat dijalankan di dalam direktori kerja yang diizinkan begitu satu kapabilitas diaktifkan.
-- **Tidak ada pemetaan** capability Windows ke capability Personal AI OS. Direktori `runtimes/{pi,omp,hermes,openhands}-adapter` juga tidak ada di repository; Hermes dan OpenHands hanya `UnverifiedRuntimeAdapter` yang menolak eksekusi (`packages/agent-core/src/runtimes/unverified-adapter.ts`).
+- **Allowlist teks-perintah/biner — SELESAI (2026-10-14)**: `apps/windows/src/security/command-allowlist.ts` mem-parse teks perintah, mengekstrak program yang dipanggil, dan menolak apa pun di luar allowlist lokal dengan kode non-generik `COMMAND_NOT_ALLOWED` yang menyebut token pelanggarnya (`CommandNotAllowedError.token`, `.reason`). Deny by default: `DEFAULT_ALLOWED_COMMANDS` berisi `hostname` (dipakai smoke M4) plus program yang diuji paket ini sendiri (`dir`, `Get-ChildItem`, `Get-Date`, `Write-Output`, `Start-Sleep`, `ForEach-Object`); kapabilitas tanpa allowlist (mis. `git`) menolak semua teks perintah. Konfigurasinya memakai kanal yang sudah ada — `CapabilityRule.allowedCommands` lewat `setGranularRule`, dibaca `getAllowedCommands` (`apps/windows/src/security/capability-registry.ts`) — dan cermin Rust `CapabilityConfig.allowed_commands` dengan perintah Tauri `get_allowed_commands`/`set_allowed_commands`. Bypass yang ditolak dengan alasan bernama: `;`, `&&`, `||`, `|`, newline, `$(...)`/backtick/subshell (`SUBSHELL`), `&` call operator (`CALL_OPERATOR`), `-EncodedCommand`/`-enc`/`-encodedc` (`ENCODED_COMMAND`), `Invoke-Expression`/`iex` (`DYNAMIC_EXECUTION`), shell wrapper `cmd /c`, `cmd.exe /c`, `powershell(.exe) -Command`, `pwsh`, `wsl` (`SHELL_WRAPPER`, ditolak walau di-allowlist), dan program bernama path/ekstensi `C:\...\evil.exe`, `./`, `..\`, UNC, `.ps1` (`PATH_QUALIFIED_COMMAND`). Penegakan ada di tiga jalur: `apps/windows/src/security/command-executor.ts:53` dan `apps/windows/src/security/tauri-executor.ts:37` (sebelum spawn/invoke) serta `apps/windows/src-tauri/src/main.rs:227-228` (sebelum `executor::execute_powershell`) — Rust adalah jalur produksi karena `apps/windows/src/state/agent-store.ts:305-306` memasang `TauriCommandExecutor`, sementara `CommandExecutor` hanya dipakai test. Payload server tidak bisa memperlebarnya: `handleExecuteCommand` hanya membaca `command`/`cwd`/`capability`/`action`/`timeoutMs` dan mengabaikan field `allowedCommands` dari wire (diuji di `apps/windows/test/command-allowlist.test.ts`).
+- **Bukti test allowlist**: `apps/windows/test/command-allowlist.test.ts` 13 test lulus (biner yang diizinkan lolos, biner terlarang ditolak dan disebut namanya, tiap bentuk bypass ditolak, allowlist dapat dikonfigurasi/dikurangi/dikosongkan, `CommandExecutor` menolak sebelum spawn dengan `getActiveExecutionCount() === 0`, frame `command.execute` dari wire tidak dapat memperlebar allowlist). Suite paket lengkap: `node --test --experimental-strip-types test/*.test.ts` di `apps/windows` → 35 test, 31 lulus, 4 skip (4 test PowerShell lama yang butuh Windows). Sisi Rust: `cargo test --offline` di `apps/windows/src-tauri` → 5 test lulus di `command_allowlist::tests`. **Batas bukti: jalur perangkat Windows nyata (hardware) TIDAK dijalankan untuk allowlist ini** — yang diamati hanya unit/integration test di atas; bukti live dispatch di Butir 11 berasal dari perintah `hostname` sebelum allowlist ini ada.
+- **Tidak ada pemetaan** capability Windows ke capability Personal AI OS. Direktori `runtimes/{pi,omp,hermes,openhands}-adapter` juga tidak ada di repository. **Dikoreksi 2026-10-14**: adapter stub `UnverifiedRuntimeAdapter`/`HermesRuntimeAdapter`/`OpenHandsRuntimeAdapter` yang dulu mengklaim Hermes dan OpenHands menolak eksekusi sudah **dihapus** — jalur produksi satu-satunya adalah `RemoteRuntimeAdapter` ke `apps/runtime-bridge` (`RuntimeId = 'omp' | 'hermes'`), dan keduanya terverifikasi live (`docs/verification/runtimes-live.md`). Hanya OpenHands yang benar-benar belum ada: tanpa adapter, tanpa entri bridge, tanpa slot allowlist.
 
 ---
 
@@ -359,7 +362,7 @@ Setiap butir dievaluasi dengan status **LULUS**, **SEBAGIAN**, atau **GAGAL** be
 | **Routing berbasis capability**                  | **LULUS**    | `AgentRouter` di `packages/agent-core/src/router/agent-router.ts` memetakan intent ke `RuntimeManager` (OMP, Pi) dan `NineRouterGateway`.                                                      |
 | **Memory & context ber-budget**                  | **SEBAGIAN** | **Persistensi diperbaiki 2026-10-13**: migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)`, dan fallback senyap ke `InMemoryMemoryStore` dihapus. Bukti live: create → `count=1` → restart API → `count=1`. Sisa: pencarian semantik tidak aktif karena 9Router tidak menyediakan provider embedding (`No credentials for provider: openai`), dan belum ada sweeper retensi. Lihat Butir 5. |
 | **Queue / cancel / checkpoint / recovery**       | **LULUS**    | Queue, cancel, dan checkpoint bekerja. **Recovery diperbaiki 2026-10-13**: `createAgentWorker` kini membuat `BullMqTaskQueue` dan mengembalikannya sebagai `queue`, `startWorkerProcess` melewatkannya ke `recoverInterruptedTasks`, dan parameter itu menjadi wajib sehingga panggilan tanpa queue tidak lagi dikompilasi. Bukti live: task `running`/40 tanpa job di Redis → restart worker → `recoveredCount: 1` → `completed`/100. Lihat Butir 3. |
-| **Windows device identity + allowlist**          | **SEBAGIAN** | **Identitas kriptografis SELESAI 2026-10-14**: agent membuktikan kepemilikan keypair P-256 atas challenge server, `deviceId` diterbitkan server (query string `deviceId` ditolak `DEVICE_IDENTITY_REQUIRED`), dan `devices.public_key` diisi serta diverifikasi. **Dispatch diperbaiki 2026-10-13**: `dispatchCommand` kini dipanggil dari jalur task dengan approval HIGH per perintah dan bukti live task → perangkat → hasil (lihat Butir 11). Path allowlist dan capability registry nyata dan ditegakkan. Sisa: tidak ada allowlist teks-perintah/biner, sesi koneksi in-memory. |
+| **Windows device identity + allowlist**          | **SEBAGIAN** | **Identitas kriptografis SELESAI 2026-10-14**: agent membuktikan kepemilikan keypair P-256 atas challenge server, `deviceId` diterbitkan server (query string `deviceId` ditolak `DEVICE_IDENTITY_REQUIRED`), dan `devices.public_key` diisi serta diverifikasi. **Dispatch diperbaiki 2026-10-13**: `dispatchCommand` kini dipanggil dari jalur task dengan approval HIGH per perintah dan bukti live task → perangkat → hasil (lihat Butir 11). Path allowlist, capability registry, dan **allowlist teks-perintah/biner (SELESAI 2026-10-14)** nyata dan ditegakkan. Sisa: sesi koneksi in-memory. |
 | **MCP / tools / browser ber-permission & audit** | **LULUS** | Semua eksekusi melewati `SecuredCapabilityGuard` (`packages/permissions/src/guard.ts`), dan MCP live terbukti `waiting_approval` → approve → `completed`. **Audit diperbaiki 2026-10-14**: setiap pemanggilan guard menulis satu baris `audit_logs` dengan aktor, action, resource, `decision`, dan `metadata.outcome` (`success`/`failure`) + `durationMs`/`error`; artifact write lewat `ArtifactManager.auditSink`. Tool call (`web:fetch`/`web:search`), MCP call (`tool:mcp_echo_echo`, `resource_type: external_mcp`), browser action (`browser:navigate`), dan artifact write (`artifact:write`) semua tercatat di produksi; audit MCP tidak lagi hanya `console.log`. Bukti live di §8.E "Cacat 5". |
 | **Evaluator menentukan completion**              | **SEBAGIAN** | Evaluator dipanggil pada keempat jalur (coding, research, standard, tool). **Jalur tool diperbaiki 2026-10-13**: `executeRegisteredTool` menjalankan `GenericEvaluator` atas hasil tool sebelum menulis `completed`, dan tidak melampirkan bukti palsu bila tool mengembalikan `null`/`undefined` (`apps/agent-worker/src/task-executor.ts:637-674`). **Bukti coding kini nyata**: `LocalCodingEnvironment` menjalankan `node --run lint/typecheck/test/build` di workspace per task; bukti live task `3f5aeee2-…` → `failed` (`score 0.71`, lint keluar 1), task `a5776358-…` → `completed` (`score 1`). **Bukti research kini nyata**: `ResearchAgent` mencari dan membuka halaman sungguhan; bukti live task `46098f3e-…` → `completed` (`score 1`, 5 sumber nyata), task `c38ae271-…` → `failed` (`score 0`, tanpa sumber). Sisa: acceptance criteria belum dipersist sebelum eksekusi, dan klaim research belum disintesis model. Lihat Butir 7 dan 8. |
 | **Approval terikat aksi spesifik**               | **LULUS**    | Model approval mencakup `action`, `resource`, `riskLevel`, `consequence` di `apps/api/src/routes/approvals.ts`.                                                                                |
@@ -404,7 +407,7 @@ Dibagi dua: cacat fungsional yang dapat diperbaiki sekarang, dan gap operasional
 8. **Audit tidak menyeluruh — SELESAI (2026-10-14)**. `SecuredCapabilityGuard` menulis satu baris `audit_logs` per pemanggilan setelah hasil diketahui (`metadata.outcome` + `durationMs` + `error`), guard diberi `auditLogger` di API dan worker, artifact write diaudit lewat `ArtifactManager.auditSink`, dan `audit_logs.resource_id` menjadi `varchar(512)` (migrasi `0010`). Bukti live: §8.E "Cacat 5".
 9. **Identitas perangkat tidak kriptografis — SELESAI (2026-10-14)**. `/v1/agent/ws` menerbitkan challenge acak; agent menandatanganinya dengan private key P-256 dan server memverifikasi sebelum membuat sesi. `deviceId` dari query string ditolak (`DEVICE_IDENTITY_REQUIRED`), id perangkat adalah uuid yang diterbitkan server, dan `devices.public_key` diisi dengan JWK kanonik (unique parsial `devices_public_key_uq`, migrasi `0008_device_key_identity.sql`). Bukti live di §8.E. Sisa: private key disimpan di `localStorage` webview, bukan OS keystore.
 10. **Skema menyimpang dari migrasi — SELESAI (2026-10-14)**. `memories` kini punya migrasi dan tabel `artifacts` yang tidak terpakai sudah dihapus dari `schema.ts`. Pemeriksaan paritas otomatis ditambahkan: `apps/api/test/schema-parity.test.ts` membuat database sementara, menerapkan **seluruh** migrasi `apps/api/src/db/migrations/` dari nol, mengintrospeksi hasilnya (`pg_attribute` + `format_type`), lalu membandingkannya dengan setiap tabel di `schema.ts` (`getTableConfig`). Test gagal bila `schema.ts` mendeklarasikan tabel/kolom yang tidak dibuat migrasi, atau bila tipe kolom menyimpang. Diverifikasi menangkap dua arah: kolom `ghost_column` yang hanya ada di `schema.ts` → gagal; `resource_id` dikembalikan ke `uuid` (kondisi sebelum migrasi 0010) → gagal dengan `column audit_logs.resource_id is varchar(512) after the migrations but uuid in schema.ts`.
-11. **Dead code produksi** — `AiCouncil` (`packages/agent-core/src/council/`) dan `SelfHealingEngine` (`packages/agent-core/src/healing/`) tidak dipanggil dari `apps/`.
+11. **Dead code produksi — SELESAI (2026-10-14)**. `AiCouncil` dan `SelfHealingEngine` punya test tetapi nol pemanggil di `apps/` maupun di paket lain, jadi keduanya **dihapus, bukan disambungkan**: subdirektori `council/` dan `healing/` di dalam paket `agent-core`, dua baris `export *` di `packages/agent-core/src/index.ts`, serta dua file test `council.test.ts` dan `self-healing.test.ts`. Test paket turun dari 40 menjadi 31 (9 test milik kedua modul itu), `tsc --build` tetap bersih, dan tidak ada satu pun importer yang tersisa.
 
 ### 5.2 Gap operasional (menunggu lingkungan atau kredensial)
 
@@ -439,24 +442,24 @@ Diurutkan berdasarkan dampak terhadap kepercayaan pengguna. **Kedelapan butir P0
 2. **Buat memory persisten — SELESAI untuk persistensi (2026-10-13)**. Migrasi `0007_memories.sql` membuat tabel `memories` + `vector(1536)` + index, dan fallback diam-diam ke `InMemoryMemoryStore` dihapus. `:id` pada route memory kini divalidasi sebagai uuid, sehingga `GET`/`DELETE /v1/memories/search` menjawab `400`, bukan `500`. Sisa: provider embedding (9Router belum menyediakan; `No credentials for provider: openai`) dan sweeper retensi.
 3. **Buat evaluator menilai bukti nyata — SELESAI (2026-10-13)**. `createDefaultEnvironment()` diganti `LocalCodingEnvironment` (perintah nyata, timeout, output terpotong) dan `executeRegisteredTool` digerbangi evaluator. Sisa yang belum selesai dari butir ini: acceptance criteria harus dipersist sebelum eksekusi agar evaluator menilai terhadap kriteria task, bukan kriteria default.
 4. **Beri research jalur pencarian nyata — SELESAI (2026-10-13)**. Provider pencarian nyata (DuckDuckGo HTML, tanpa API key) terdaftar di `createDefaultToolRegistry` (`packages/tools/src/builtin/web-search.ts`, `packages/tools/src/registry/create-default-tool-registry.ts:20-21`); `LocalResearchEnvironment` mencari dan membuka halaman lewat `ToolRegistry` ber-permission; sumber dan claim hardcoded dihapus. Sisa yang belum selesai dari butir ini: sintesis klaim lintas sumber oleh `ModelGateway`, dan `ResearchEvaluator` belum mem-fetch URL untuk memverifikasi isi sitasi.
-5. **Sambungkan dispatch perintah ke Windows Agent — SELESAI (2026-10-13 dispatch, 2026-10-14 identitas)**. `dispatchCommand` terhubung ke jalur task dengan approval HIGH per perintah, verdict dari exit code perangkat, dan bukti live task → perangkat → hasil. Identitas perangkat kriptografis menyusul: `devices.public_key` diisi dari handshake bertanda tangan dan `deviceId` diterbitkan server (lihat butir 9). Sisa dari butir ini: tidak ada allowlist teks-perintah/biner, dan sesi perangkat in-memory sehingga hilang saat API restart.
+5. **Sambungkan dispatch perintah ke Windows Agent — SELESAI (2026-10-13 dispatch, 2026-10-14 identitas + allowlist)**. `dispatchCommand` terhubung ke jalur task dengan approval HIGH per perintah, verdict dari exit code perangkat, dan bukti live task → perangkat → hasil. Identitas perangkat kriptografis menyusul: `devices.public_key` diisi dari handshake bertanda tangan dan `deviceId` diterbitkan server (lihat butir 9). **Allowlist teks-perintah/biner SELESAI 2026-10-14**: parser lokal menolak program di luar allowlist (`COMMAND_NOT_ALLOWED`) beserta `;`/`&&`/`||`/`|`, subshell, `-EncodedCommand`, `Invoke-Expression`/`iex`, shell wrapper, dan program bernama path; dikonfigurasi lewat capability registry yang sama (lihat Butir 11). Sisa dari butir ini: sesi perangkat in-memory sehingga hilang saat API restart.
 6. **Perbaiki notifikasi dan FCM — SELESAI (2026-10-14)**. `NotificationEngine` di API memakai `SqlNotificationRepository`, dan `fcm-provider.ts` memperoleh access token OAuth2 nyata dari service account (`ServiceAccountTokenSource`, JWT RS256 → `token_uri`). Literal `dummy-env-token` dihapus; service account tak lengkap → `DisabledFcmProvider`. Bukti live di §8.E "Cacat 6". Sisa: pengiriman ke Google belum pernah terjadi (Gap 2), dan push yang gagal `maxAttempts` tidak masuk dead-letter queue.
 7. **Perluas audit — SELESAI (2026-10-14)**. Tool call, MCP call, browser action, dan artifact write kini menulis baris `audit_logs` (bukan hanya keputusan approval). `SecuredCapabilityGuard` menulis satu baris per pemanggilan setelah hasil diketahui; artifact lewat `ArtifactManager.auditSink`; `resource_id` menjadi `varchar(512)` (migrasi `0010_audit_resource_id_text.sql`). Bukti live di §8.E "Cacat 5".
 8. **Tambahkan pemeriksaan paritas schema ↔ migrasi — SELESAI (2026-10-14)**. `apps/api/test/schema-parity.test.ts` membuat database sementara, menerapkan seluruh migrasi dari nol, dan membandingkan tabel/kolom/tipe hasilnya dengan `schema.ts`; test itu bagian dari suite API (`node --test test/*.test.ts`), jadi berjalan di CI setelah langkah `sh scripts/migrate-db.sh`. Bukti negatif: kolom hantu di `schema.ts` dan `resource_id` yang dikembalikan ke `uuid` keduanya menggagalkan test.
 
 ### Prioritas P1 (kebersihan dan pengerasan)
 
-1. **Hapus atau sambungkan dead code** — `AiCouncil` (`packages/agent-core/src/council/`) dan `SelfHealingEngine` (`packages/agent-core/src/healing/`) tidak dipanggil dari `apps/`. Putuskan: pakai atau buang.
-2. **Streaming upload artifact** — `POST /v1/artifacts` saat ini menerima JSON string dengan batas efektif 1 MiB (`bodyLimit` Fastify default); `getArtifactStream` ada tetapi tidak dipakai. Validasi MIME juga masih berdasarkan deklarasi klien tanpa magic bytes.
-3. **Sweeper retention** — `retention` pada memori dan artifact hanya field tersimpan; tidak ada yang menghapus data kedaluwarsa.
-4. **Rate limit dan timeout pada jalur tool** — pastikan batas berlaku juga untuk pemanggilan MCP dan runtime.
+1. **Hapus atau sambungkan dead code — SELESAI (2026-10-14)**. Diputuskan **dibuang**, bukan disambungkan: `AiCouncil` dan `SelfHealingEngine` tidak dipanggil dari `apps/`, dan menyambungkannya berarti menambah subsistem yang tidak diminta. Subdirektori `council/` dan `healing/` di dalam paket `agent-core` dihapus bersama dua baris `export *` di `packages/agent-core/src/index.ts` dan kedua file test-nya. Test paket turun 40 → 31.
+2. **Streaming upload artifact — SELESAI (2026-10-14)**. Route baru `POST /v1/artifacts/stream` menerima byte mentah (`application/octet-stream`, parser khusus supaya Fastify tidak membuffer) dengan `filename`/`mimeType` sebagai query parameter dan batas 25 MiB, lalu mengalirkannya ke `storage.putStream` (tulis ke file temporer + `rename`). Route JSON lama tetap ada untuk klien kecil. Validasi MIME kini membandingkan **magic bytes** isi unggahan dengan tipe yang dideklarasikan (`magic-bytes.ts`; PNG/JPEG/GIF/WebP/PDF/ZIP + fallback teks/JSON) dan menolak ketidakcocokan dengan `InvalidMimeTypeError`; `GET /v1/artifacts/:id/download` kini memakai `getArtifactStream` sehingga unduhan juga tidak dibuffer. Bukti: `packages/tools/test/artifacts.test.ts` dan `apps/api/test/artifacts.test.ts`, ditambah unggahan 2 MiB live ke API produksi (sha256 unduhan cocok).
+3. **Sweeper retention — SELESAI (2026-10-14) untuk artifact**. `apps/api/src/services/artifact-retention-sweeper.ts` menghapus artifact sesuai enum `ArtifactRetention`: `ephemeral` setelah TTL (`ARTIFACT_EPHEMERAL_TTL_MS`, default 24 jam), `task_duration` begitu task-nya terminal atau barisnya hilang, `project_lifetime` begitu project-nya hilang, `permanent` tidak pernah. Sweep berjalan periodik di proses API (`ARTIFACT_RETENTION_SWEEP_INTERVAL_MS`; kosong/0 = mati) dan memakai `ArtifactManager.listAllArtifacts()`. Bukti live: artifact `ephemeral` → `404` pada poll ketiga, `permanent` tetap `200`. **Sisa**: retensi memori (`memories.retention`) belum punya sweeper; enum-nya (`ephemeral`/`session`/`30d`/`90d`/`permanent`) belum dipetakan ke penghapusan.
+4. **Rate limit dan timeout pada jalur tool — SELESAI (2026-10-14)**. Timeout per tool sudah ada (`tool-registry.ts` menegakkan `tool.timeoutMs`), dan `registerTool` kini menormalkan nilai tak finit ke default 30 dtk sehingga setiap tool terdaftar punya batas. Batas laju/konkurensi baru (`ExecutionLimiter`, `packages/tools/src/execution-limiter.ts`) ditegakkan di dalam `ToolRegistry.executeTool` — jadi berlaku untuk tool bawaan maupun tool hasil registrasi MCP (`mcp_<server>_<tool>`) — dan di `RuntimeManager.execute` untuk jalur bridge runtime yang sebelumnya melewati registry. Pemanggilan melebihi batas gagal cepat dengan `ExecutionLimitExceededError` (tanpa antrean). Bukti: `packages/tools/test/execution-limiter.test.ts` (5 test), `packages/mcp/test/registry-limits.test.ts` (tool MCP nyata lewat `echo-server.mjs`), `packages/agent-core/test/runtime-limits.test.ts` (2 test). Knob: `TOOL_MAX_IN_FLIGHT`, `TOOL_MAX_STARTS_PER_MINUTE`, `RUNTIME_MAX_IN_FLIGHT`, `RUNTIME_MAX_STARTS_PER_MINUTE` (`.env.example`).
 
 ### Prioritas P2 (operasional dan peningkatan)
 
 1. **Konfigurasi FCM Push Notification Live** — menempatkan service account key pada direktori terisolasi server dan menetapkan `FCM_SERVICE_ACCOUNT_JSON`. Jalur kode sudah siap (P0 nomor 6 selesai); yang kurang hanya kredensial Google itu sendiri, dan tanpa kredensial provider aktif adalah `DisabledFcmProvider` yang jujur.
 2. **Restore drill terjadwal** — prosedur pemulihan sudah lulus sekali terhadap arsip nyata, tetapi belum dijalankan sebagai rutinitas berkala.
 3. **Integrasi OpenTelemetry Collector Eksternal** — menghubungkan `/metrics` di `apps/api/src/app.ts` ke Prometheus/Grafana untuk pemantauan jangka panjang dan alerting.
-4. **Pengujian adapter runtime tambahan** — `runtimes/{pi,omp,hermes,openhands}-adapter` belum ada; Hermes dan OpenHands masih `UnverifiedRuntimeAdapter`.
+4. **Pengujian adapter runtime tambahan — DIKOREKSI 2026-10-14**. Klaim lama ("Hermes dan OpenHands masih `UnverifiedRuntimeAdapter`") hanya benar untuk OpenHands. Jalur produksi runtime adalah `RemoteRuntimeAdapter` (`packages/agent-core/src/runtimes/remote-adapter.ts`) → HTTP → `apps/runtime-bridge` (unit systemd di host) → binary host, dengan `RuntimeId = 'omp' | 'hermes'` (`apps/runtime-bridge/src/index.ts:10`); keduanya **sudah terverifikasi live** (`docs/verification/runtimes-live.md`: OMP 18.6.1 mode JSONL, Hermes 0.20.5 `-z`). Adapter stub `UnverifiedRuntimeAdapter`/`HermesRuntimeAdapter`/`OpenHandsRuntimeAdapter` **dihapus 2026-10-14** karena nol pemanggil produksi dan menyesatkan. Yang benar-benar belum ada hanya OpenHands: tanpa adapter, tanpa entri bridge, tanpa slot allowlist.
 5. **Verifikasi perangkat fisik** — jalankan NSIS installer di Windows dan pasang APK di perangkat Android.
 
 ---
@@ -487,26 +490,28 @@ Time:     ~28s
 `pnpm test` di root **tidak dapat dipakai**: task `scheduler:test` menggantung pada `ECONNREFUSED 127.0.0.1:6379`. Suite dijalankan per paket:
 
 ```text
-@personal-ai-os/tools          35/35
-@personal-ai-os/mcp            17/17
-@personal-ai-os/agent-worker   39/39
+@personal-ai-os/tools          44/44
+@personal-ai-os/mcp            18/18
+@personal-ai-os/agent-worker   43/43
 @personal-ai-os/memory          7/7
 @personal-ai-os/permissions     6/6
-@personal-ai-os/agent-core     40/40
+@personal-ai-os/agent-core     33/33
 @personal-ai-os/evaluator       9/9
-API (in-container)             63/63, 0 skipped
+API (in-container)             66/66, 0 skipped
 scheduler (in-container)       25/25, 0 skipped
 android                        19/19
-windows                        18/22, 4 skipped (eksekusi PowerShell butuh Windows)
+windows                        35 tests, 31 lulus, 4 skipped (eksekusi PowerShell butuh Windows)
 ```
+
+Angka di atas adalah keadaan setelah M9–M14 (2026-10-14). Perubahan dari revisi sebelumnya: `agent-core` 40 → 33 (9 test `council`/`self-healing` hilang bersama dead code-nya, 2 test batas runtime bertambah), `tools` 35 → 44, `mcp` 17 → 18, `agent-worker` 39 → 43, `windows` 18/22 → 35 test, API 63 → 66.
 
 Suite API dijalankan di dalam image `personal-ai-os-api:latest`; image `node:22-bookworm-slim` polos gagal satu test karena tidak memiliki `git`, yang dibutuhkan `prepareWorkspace`.
 
 ### D. Verifikasi Referensi Path Dokumen (`pnpm verify:audit`)
 
 ```text
-[Verify Audit Refs] Memeriksa 176 referensi path dari docs/final-audit.md...
-[Verify Audit Refs] Berhasil memverifikasi 106 path unik yang valid.
+[Verify Audit Refs] Memeriksa 204 referensi path dari docs/final-audit.md...
+[Verify Audit Refs] Berhasil memverifikasi 122 path unik yang valid.
 [SUKSES] Semua referensi path file dalam docs/final-audit.md 100% valid dan ada di filesystem.
 ```
 
@@ -693,4 +698,75 @@ SSRF 169.254.169.254 -> failed
 #     -> not ok: 'column audit_logs.resource_id is varchar(512) after the migrations but uuid in schema.ts'
 #   Keduanya dijalankan lewat image personal-ai-os-api:latest pada network Docker internal;
 #   setelah selesai tidak ada database sisa (SELECT datname FROM pg_database WHERE datname LIKE 'schema_parity%' -> 0 baris).
+```
+
+### F. Bukti live M9–M14 (2026-10-14)
+
+Semua dijalankan terhadap produksi yang sedang berjalan (`docker compose`, image dibangun ulang dari working tree). Skrip bukti ada di `/tmp` host dan disalin ke dalam container.
+
+```text
+# Cacat 10 (DIPERBAIKI 2026-10-14): dead code produksi
+# Sebelum: AiCouncil + SelfHealingEngine + 2 file test, nol pemanggil di apps/.
+# Sesudah: subdirektori council/ dan healing/ dihapus, dua baris export * dibuang dari
+#          packages/agent-core/src/index.ts; grep lima nama kelas adapter lama -> 0 match;
+#          agent-core 40 -> 33 test; npx tsc --build --force -> exit 0.
+#          Adapter runtime palsu (UnverifiedRuntimeAdapter/HermesRuntimeAdapter/OpenHandsRuntimeAdapter)
+#          juga dihapus: Hermes sudah nyata lewat apps/runtime-bridge, jadi stub itu menyesatkan.
+#
+# Cacat 11 (DIPERBAIKI 2026-10-14): batas laju/konkurensi jalur tool
+# Dijalankan di dalam container worker, memakai bundle dist yang benar-benar dikirim:
+#   docker exec -e TOOL_MAX_IN_FLIGHT=1 -e TOOL_MAX_STARTS_PER_MINUTE=2 personal-ai-os-worker-1 \
+#     node /tmp/live-limits.mjs
+#   concurrent same tool -> ExecutionLimitExceededError(in_flight) | body invocations = 1
+#   other tool -> allowed
+#   after 2 starts -> ExecutionLimitExceededError(starts_per_interval)
+#   unknown runtime -> {"status":"failed","untrusted":true}
+# MCP mewarisi batas yang sama (server stdio nyata, tool mcp_echo_echo):
+#   registered: mcp_echo_echo, mcp_echo_boom
+#   second concurrent MCP call -> ExecutionLimitExceededError(in_flight, key=mcp_echo_echo)
+#   first MCP call -> success {"content":"<untrusted_content source=\"mcp:echo/echo\" is_instruction=\"false\">…
+#
+# Cacat 12 (DIPERBAIKI 2026-10-14): healthcheck worker tidak memprobe apa pun
+# Sebelum: file /tmp/healthy disentuh pada timer; Redis mati pun worker tetap "healthy".
+# Sesudah: docker compose stop redis; 75 detik -> health=healthy (file masih segar);
+#          195 detik -> health=unhealthy running=true restarts=0, dan
+#          16 log {"event":"healthcheck_failed","error":"Reached the max retries per request limit…"}
+#          docker compose start redis; 60 detik -> health=healthy, restarts=0 (worker tidak keluar).
+#
+# Cacat 13 (DIPERBAIKI 2026-10-14): upload artifact tidak streaming, MIME dari deklarasi klien,
+#                                   retention tanpa sweeper
+# Upload 2 MiB byte mentah lewat POST /v1/artifacts/stream (di dalam container API; tepi publik
+# Caddy/nginx menolak body besar lebih dulu, 413):
+#   upload status = 201 declared size = 2097152 stored size = 2097152
+#   download status = 200 bytes = 2097152 sha256 match = true
+# Magic bytes menolak deklarasi yang bertentangan dengan isi:
+#   real.png as image/png     -> 201 id=903d1674-5e8a-4b4f-ae90-53bae708aa56
+#   liar.txt as text/plain    -> 400 Tipe MIME 'text/plain' tidak diizinkan dalam kebijakan penyimpanan artefak.
+#   garbage.png as image/png  -> 400 Tipe MIME 'image/png' tidak diizinkan dalam kebijakan penyimpanan artefak.
+# Sweeper retention (ARTIFACT_RETENTION_SWEEP_INTERVAL_MS=2000, ARTIFACT_EPHEMERAL_TTL_MS=3000):
+#   created ephemeral 7f987204-2be7-4c3a-805b-6df7af828607 permanent c2b32682-55c6-4d4c-a33d-0a707399eca4
+#   poll 1 ephemeral 200 permanent 200
+#   poll 2 ephemeral 200 permanent 200
+#   poll 3 ephemeral 404 permanent 200
+#   poll 4 ephemeral 404 permanent 200
+#   poll 5 ephemeral 404 permanent 200
+#
+# Cacat 14 (DIPERBAIKI 2026-10-14): approval perangkat terbakar saat agent reconnect
+# Sebelum: sesi device in-memory; API restart membuat agent tampak offline, dispatch gagal seketika,
+#          dan approval yang baru diberikan harus diulang.
+# Sesudah (agent palsu dengan keypair P-256 nyata, dispatch lewat route internal ber-token):
+#   handshake ok, deviceId = b79ab6bd-aaa4-4abb-8532-c5e48119a4ea
+#   [socket ditutup, lalu dispatch dikirim saat tidak ada sesi]
+#   reconnected, same deviceId = true b79ab6bd-aaa4-4abb-8532-c5e48119a4ea
+#   received frame: {"type":"command.execute","commandId":"b15f7bd4-…","command":"hostname","timeoutMs":10000}
+#   dispatch status = 200 stdout = "AFTER-RECONNECT\r\n"
+# Kontrol negatif dengan DEVICE_RECONNECT_GRACE_MS=0 (API di-restart ulang, env dikembalikan sesudahnya):
+#   status = 404 elapsedMs = 13
+#   {"error":{"code":"DEVICE_OFFLINE","message":"Device \"b55ae55b-…\" is offline or unreachable"}}
+#
+# Cacat 15 (DIPERBAIKI 2026-10-14, tanpa bukti perangkat): allowlist teks-perintah Windows
+#   apps/windows/test/command-allowlist.test.ts 13 test lulus; suite paket 35 test, 31 lulus, 4 skip;
+#   cargo test --offline di apps/windows/src-tauri -> 5 test lulus.
+#   BATAS BUKTI: tidak ada perangkat Windows di lingkungan ini, jadi jalur nyata (hardware) belum
+#   pernah dijalankan untuk allowlist ini.
 ```
