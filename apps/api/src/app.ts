@@ -68,6 +68,14 @@ export type AppDependencies = {
     userId: string,
     input: { name: string; platform: string },
   ) => Promise<{ id: string; name: string; platform: string }> | undefined;
+
+  /**
+   * Stores the FCM registration token for one of the caller's devices. Scoped by `userId`, so a
+   * token cannot be attached to a device the caller does not own.
+   */
+  setDevicePushToken?:
+    | ((userId: string, deviceId: string, pushToken: string) => Promise<boolean>)
+    | undefined;
   chat?:
     | {
         chatRepo: ChatRepository;
@@ -385,6 +393,39 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       devices: registered.map((device) => ({ ...device, isOnline: online.has(device.id) })),
     });
   });
+
+  // Push token registration for FCM delivery. Scoped to the caller's own device row.
+  app.post(
+    '/v1/devices/:deviceId/push-token',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['pushToken'],
+          properties: { pushToken: { type: 'string', minLength: 1, maxLength: 4096 } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: { deviceId: string } }>, reply) => {
+      const user = await userFromRequest(request, dependencies.auth);
+      if (!dependencies.setDevicePushToken)
+        return reply.code(503).send({
+          error: {
+            code: 'NOT_CONFIGURED',
+            message: 'push token registration unavailable',
+            requestId: request.id,
+          },
+        });
+      const { pushToken } = request.body as { pushToken: string };
+      const stored = await dependencies.setDevicePushToken(user.id, request.params.deviceId, pushToken);
+      if (!stored) {
+        return reply
+          .code(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Perangkat tidak ditemukan' } });
+      }
+      return reply.code(204).send();
+    },
+  );
 
   if (dependencies.deviceManager) {
     registerAgentWsRoute(app, {

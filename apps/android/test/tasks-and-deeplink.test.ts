@@ -81,14 +81,17 @@ test('Deep link parser correctly resolves custom scheme and HTTPS URLs', () => {
 
 test('FCM integration point: registers device push token and dispatches notifications', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(
+  const calls: Array<{ url: string; body: string | undefined }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: input.toString(), body: typeof init?.body === 'string' ? init.body : undefined });
+    return new Response(
       JSON.stringify({ device: { id: 'dev-1', name: 'Android', platform: 'android' } }),
       {
         status: 201,
         headers: { 'Content-Type': 'application/json' },
       },
     );
+  };
 
   try {
     const storage = new InMemoryTokenStorage();
@@ -103,6 +106,11 @@ test('FCM integration point: registers device push token and dispatches notifica
     // 1. Register FCM token
     await fcm.registerToken('fcm-token-test-123456789');
     assert.equal(useUiStore.getState().fcmToken, 'fcm-token-test-123456789');
+    assert.deepEqual(
+      calls.map((call) => call.url),
+      ['http://test-server.local/v1/devices', 'http://test-server.local/v1/devices/dev-1/push-token'],
+    );
+    assert.deepEqual(JSON.parse(calls[1]?.body ?? '{}'), { pushToken: 'fcm-token-test-123456789' });
 
     // 2. Dispatch notification
     fcm.dispatchNotification({

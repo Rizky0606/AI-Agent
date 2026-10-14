@@ -120,3 +120,50 @@ test('Devices & Agent WSS: the server names the device, tracks presence, and dro
     await app.close();
   }
 });
+
+test('Push token registration is scoped to the caller own device rows', async () => {
+  const authRepo = new InMemoryAuthRepository();
+  const auth = createAuthService(authRepo, secret);
+  const owner = await auth.register('push-owner@example.com', 'ValidPassword123!');
+  const stranger = await auth.register('push-stranger@example.com', 'ValidPassword123!');
+  const stored: Array<{ userId: string; deviceId: string; pushToken: string }> = [];
+
+  const app = await buildApp({
+    auth,
+    listDevices: async () => [],
+    setDevicePushToken: async (userId, deviceId, pushToken) => {
+      if (deviceId !== 'device-owned-by-owner' || userId !== owner.user.id) return false;
+      stored.push({ userId, deviceId, pushToken });
+      return true;
+    },
+  });
+
+  const accepted = await app.inject({
+    method: 'POST',
+    url: '/v1/devices/device-owned-by-owner/push-token',
+    headers: { authorization: `Bearer ${owner.accessToken}` },
+    payload: { pushToken: 'fcm-token-abc' },
+  });
+  assert.equal(accepted.statusCode, 204);
+  assert.deepEqual(stored, [
+    { userId: owner.user.id, deviceId: 'device-owned-by-owner', pushToken: 'fcm-token-abc' },
+  ]);
+
+  const foreign = await app.inject({
+    method: 'POST',
+    url: '/v1/devices/device-owned-by-owner/push-token',
+    headers: { authorization: `Bearer ${stranger.accessToken}` },
+    payload: { pushToken: 'fcm-token-abc' },
+  });
+  assert.equal(foreign.statusCode, 404);
+
+  const invalid = await app.inject({
+    method: 'POST',
+    url: '/v1/devices/device-owned-by-owner/push-token',
+    headers: { authorization: `Bearer ${owner.accessToken}` },
+    payload: { pushToken: '' },
+  });
+  assert.equal(invalid.statusCode, 400);
+
+  await app.close();
+});

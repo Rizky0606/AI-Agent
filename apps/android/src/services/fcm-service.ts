@@ -101,8 +101,9 @@ export class FcmService {
 
     useUiStore.getState().setFcmToken(token);
     try {
-      // Register or update device record with active push token
-      await this.client.registerDevice(`Android Device (${token.slice(0, 8)})`, 'android');
+      // The server needs the token on the device row it owns; the local copy alone cannot be pushed to.
+      const { device } = await this.client.registerDevice(`Android Device (${token.slice(0, 8)})`, 'android');
+      await this.client.registerPushToken(device.id, token);
     } catch {
       // non-fatal
     }

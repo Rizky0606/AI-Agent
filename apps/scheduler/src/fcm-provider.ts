@@ -1,3 +1,4 @@
+import { createSign } from 'node:crypto';
 import * as fs from 'node:fs';
 import type { FcmPushPayload } from './types.ts';
 
@@ -58,25 +59,110 @@ export class MockFcmProvider implements FcmProvider {
   }
 }
 
+export interface FcmAccessTokenSource {
+  getAccessToken(now?: number): Promise<string>;
+}
+
+export interface ServiceAccountCredentials {
+  clientEmail: string;
+  privateKey: string;
+  tokenUri: string;
+}
+
+const FCM_MESSAGING_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+const DEFAULT_TOKEN_URI = 'https://oauth2.googleapis.com/token';
+const TOKEN_REFRESH_MARGIN_MS = 60_000;
+const ASSERTION_LIFETIME_SECONDS = 3600;
+
+/**
+ * Menukar service account Google menjadi access token OAuth2 lewat grant
+ * `urn:ietf:params:oauth:grant-type:jwt-bearer` dan menyimpannya sampai mendekati kedaluwarsa.
+ * Token yang gagal ditukar melempar error; tidak ada token literal pengganti.
+ */
+export class ServiceAccountTokenSource implements FcmAccessTokenSource {
+  private readonly credentials: ServiceAccountCredentials;
+  private cachedToken: { value: string; expiresAt: number } | undefined;
+
+  constructor(credentials: ServiceAccountCredentials) {
+    this.credentials = credentials;
+  }
+
+  private createAssertion(now: number): string {
+    const issuedAt = Math.floor(now / 1000);
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+    const claims = Buffer.from(
+      JSON.stringify({
+        iss: this.credentials.clientEmail,
+        scope: FCM_MESSAGING_SCOPE,
+        aud: this.credentials.tokenUri,
+        iat: issuedAt,
+        exp: issuedAt + ASSERTION_LIFETIME_SECONDS,
+      }),
+    ).toString('base64url');
+    const signingInput = `${header}.${claims}`;
+    const signature = createSign('RSA-SHA256')
+      .update(signingInput)
+      .sign(this.credentials.privateKey);
+    return `${signingInput}.${signature.toString('base64url')}`;
+  }
+
+  async getAccessToken(now = Date.now()): Promise<string> {
+    if (this.cachedToken && this.cachedToken.expiresAt - now > TOKEN_REFRESH_MARGIN_MS) {
+      return this.cachedToken.value;
+    }
+
+    const response = await fetch(this.credentials.tokenUri, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: this.createAssertion(now),
+      }).toString(),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Penukaran token OAuth FCM gagal: HTTP ${response.status} ${await response.text()}`,
+      );
+    }
+
+    const payload = (await response.json()) as { access_token?: string; expires_in?: number };
+    if (!payload.access_token) {
+      throw new Error('Penukaran token OAuth FCM tidak mengembalikan access_token.');
+    }
+
+    this.cachedToken = {
+      value: payload.access_token,
+      expiresAt: now + (payload.expires_in ?? ASSERTION_LIFETIME_SECONDS) * 1000,
+    };
+    return this.cachedToken.value;
+  }
+}
+
 export class HttpFcmProvider implements FcmProvider {
   private readonly projectId: string;
-  private readonly accessToken: string;
+  private readonly tokenSource: FcmAccessTokenSource;
   private readonly baseUrl: string;
 
-  constructor(options: { projectId: string; accessToken: string; baseUrl?: string | undefined }) {
+  constructor(options: {
+    projectId: string;
+    tokenSource: FcmAccessTokenSource;
+    baseUrl?: string | undefined;
+  }) {
     this.projectId = options.projectId;
-    this.accessToken = options.accessToken;
+    this.tokenSource = options.tokenSource;
     this.baseUrl =
       options.baseUrl ?? `https://fcm.googleapis.com/v1/projects/${this.projectId}/messages:send`;
   }
 
   async sendPushNotification(deviceToken: string, payload: FcmPushPayload): Promise<FcmSendResult> {
     try {
+      const accessToken = await this.tokenSource.getAccessToken();
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           message: {
@@ -144,6 +230,7 @@ export interface FcmServiceAccountData {
   project_id?: string;
   client_email?: string;
   private_key?: string;
+  token_uri?: string;
 }
 
 export const createFcmProviderFromEnv = (): FcmProvider => {
@@ -179,10 +266,18 @@ export const createFcmProviderFromEnv = (): FcmProvider => {
         'Format FCM_SERVICE_ACCOUNT_JSON tidak valid: field "project_id" tidak ditemukan. Pengiriman dinonaktifkan.',
       );
     }
-    // If accessToken or mock URL is provided, or initialize HttpFcmProvider
+    if (!parsed.client_email || !parsed.private_key) {
+      return new DisabledFcmProvider(
+        'Format FCM_SERVICE_ACCOUNT_JSON tidak valid: field "client_email" atau "private_key" tidak ditemukan. Pengiriman dinonaktifkan.',
+      );
+    }
     return new HttpFcmProvider({
       projectId: parsed.project_id,
-      accessToken: 'dummy-env-token',
+      tokenSource: new ServiceAccountTokenSource({
+        clientEmail: parsed.client_email,
+        privateKey: parsed.private_key,
+        tokenUri: parsed.token_uri ?? DEFAULT_TOKEN_URI,
+      }),
     });
   } catch (err: unknown) {
     return new DisabledFcmProvider(

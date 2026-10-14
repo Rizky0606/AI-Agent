@@ -23,13 +23,13 @@ capabilities:
     proof: apps/agent-worker/test/worker.test.ts; apps/agent-worker/test/live-worker-execution.test.ts
     limitation: health file is touched on a timer rather than probing database/Redis
   scheduler:
-    status: partial
-    code: apps/scheduler/src/index.ts; apps/scheduler/src/scheduler-engine.ts
+    status: implemented
+    code: apps/scheduler/src/index.ts; apps/scheduler/src/scheduler-engine.ts; apps/api/src/services/task-notifications.ts; apps/api/src/db/notification-repository.ts
     permission_boundary: PermissionEngine; schedule ownership
     clients: android notifications
-    proof: apps/scheduler/test/scheduler.test.ts
+    proof: apps/scheduler/test/scheduler.test.ts; apps/scheduler/test/notifications.test.ts; apps/scheduler/test/fcm-provider.test.ts; apps/api/test/task-notifications.test.ts
     limitation: |
-      Live PostgreSQL/Redis process proof is environment-dependent. The API builds `SchedulerEngine` with `SqlScheduleRepository` (`apps/api/src/index.ts:181-183`) but never calls `tick()` there, and the dispatcher only calls `taskQueue.enqueue` without inserting into `tasks` (`:190-191`), so the in-memory Map remains the tick source of truth in the scheduler process. Notifications have never been delivered: `notifications` holds 0 rows in production, `NotificationEngine` is constructed without storage in the API (`apps/api/src/index.ts:209`), `SqlNotificationRepository` is never instantiated, and no production code path bridges task events to notifications. `apps/scheduler/src/fcm-provider.ts:185` injects `accessToken: 'dummy-env-token'` hardcoded, so delivery would fail with 401 even with a valid service account. There is no signature verification on inbound events and `registerRule` is never called in production.
+      The API registers schedules in `schedules` only; `tick()` runs solely in the `scheduler` container, which inserts the `tasks` row and enqueues BullMQ (the duplicate API dispatcher that enqueued without inserting was deleted 2026-10-14). Notification delivery is now durable and observed live: task completion, task failure, and a `task.waiting_approval` event on `personal-ai-os:events:all` each produced a `notifications` row with `delivery_state` and `deep_link`, and both rows and preferences survived an API restart. `NotificationEngine` uses `SqlNotificationRepository` and `createFcmProviderFromEnv()`. FCM uses a real OAuth2 access token from the service account (`ServiceAccountTokenSource`, RS256 JWT exchanged at `token_uri`); the hardcoded `dummy-env-token` is gone. Push tokens live in `devices.push_token` (migration `0009_device_push_token.sql`, partial unique index) and are registered per install through `POST /v1/devices/:deviceId/push-token`. Remaining: `FCM_SERVICE_ACCOUNT_JSON` is not provisioned, so the active provider is `DisabledFcmProvider` and no real Google send has been observed; a push that exhausts `maxAttempts` ends `failed` with no dead-letter queue; incoming events carry no signature verification and `registerRule` is never called in production.
   universal_agent_execution:
     status: implemented
     code: apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts

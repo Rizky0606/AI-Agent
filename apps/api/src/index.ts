@@ -8,7 +8,12 @@ import {
 import { ManifestValidator, SkillLoader } from '@personal-ai-os/agent-core';
 import { InactiveEmbeddingProvider } from '@personal-ai-os/memory';
 import { ArtifactManager, DiskArtifactStorage, createDefaultToolRegistry } from '@personal-ai-os/tools';
-import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
+import {
+  EventEngine,
+  NotificationEngine,
+  SchedulerEngine,
+  createFcmProviderFromEnv,
+} from '@personal-ai-os/scheduler';
 import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
 
 import { buildApp } from './app.ts';
@@ -25,10 +30,12 @@ import { SqlAuditRepository } from './db/audit-repository.ts';
 import { DrizzleMemoryRepository } from './db/memory-repository.ts';
 import { SqlSkillRepository } from './db/skill-repository.ts';
 import { SqlScheduleRepository } from './db/schedule-repository.ts';
+import { SqlNotificationRepository } from './db/notification-repository.ts';
 import { DeviceConnectionManager } from './services/device-connection-manager.ts';
 import { ModelRouter } from './services/model-router.ts';
 import { BullMqTaskQueue } from './services/task-queue.ts';
 import { RedisTaskEventBroadcaster } from './services/event-broadcaster.ts';
+import { createTaskNotificationListener } from './services/task-notifications.ts';
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -179,36 +186,19 @@ try {
   );
 }
 
-// Schedules & Events Subsystem with database-backed persistence (Migration 0005)
+// Schedules & Events Subsystem with database-backed persistence (Migration 0005).
+// Proses API hanya mendaftarkan jadwal ke tabel `schedules`; slot dijalankan oleh container
+// `scheduler`, yang punya dispatcher durable sendiri (INSERT tasks + BullMQ).
 const scheduleRepository = new SqlScheduleRepository(db);
-const schedulerEngine = new SchedulerEngine({
-  storage: scheduleRepository,
-  dispatcher: async (execution) => {
-    const userId =
-      (execution.taskPayload.input['userId'] as string) ?? '00000000-0000-0000-0000-000000000000';
-    const projectId =
-      (execution.taskPayload.input['projectId'] as string) ??
-      '00000000-0000-0000-0000-000000000000';
-    await taskQueue.enqueue({
-      id: execution.idempotencyKey,
-      userId,
-      projectId,
-      kind: execution.taskPayload.kind,
-      status: 'queued',
-      progress: 0,
-      priority: execution.taskPayload.priority ?? 0,
-      attempt: 0,
-      maxAttempts: 3,
-      payload: execution.taskPayload.input,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-  },
-});
+const schedulerEngine = new SchedulerEngine({ storage: scheduleRepository });
 await schedulerEngine.init();
 
 const eventEngine = new EventEngine();
-const notificationEngine = new NotificationEngine();
+const notificationEngine = new NotificationEngine({
+  storage: new SqlNotificationRepository(db),
+  fcmProvider: createFcmProviderFromEnv(),
+  resolveDeviceTokens: (userId) => deviceRepository.listPushTokens(userId),
+});
 
 // Assemble and build Fastify application with all modules wired
 const auth = createAuthService(new SqlAuthRepository(db), jwtSecret);
@@ -226,6 +216,8 @@ const app = await buildApp({
   listDevices: (userId) => deviceRepository.listByUser(userId),
   registerDevice: (userId, input) => deviceRepository.create(userId, input),
   registerAgent: (userId, input) => deviceRepository.registerAgent(userId, input),
+  setDevicePushToken: (userId, deviceId, pushToken) =>
+    deviceRepository.setPushToken(userId, deviceId, pushToken),
   chat: {
     chatRepo: chatRepository,
     router: modelRouter,
@@ -272,6 +264,16 @@ const app = await buildApp({
     notificationEngine,
   },
 });
+
+// Event task dari worker (Redis) menjadi baris notifications durable di proses API.
+broadcaster.subscribe(
+  createTaskNotificationListener({
+    notificationEngine,
+    onError: (err, event) => {
+      app.log.error({ err, taskId: event.taskId, eventType: event.eventType }, 'notifikasi task gagal');
+    },
+  }),
+);
 
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, 'shutting down');

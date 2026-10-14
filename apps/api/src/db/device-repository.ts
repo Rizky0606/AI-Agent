@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull, ne } from 'drizzle-orm';
 import { devices } from './schema.ts';
 import type { Database } from './client.ts';
 
@@ -69,5 +69,38 @@ export class SqlDeviceRepository {
       })
       .from(devices)
       .where(eq(devices.userId, userId));
+  }
+
+  /**
+   * Records the FCM registration token for one of the user's devices. Scoped by `userId` so a token
+   * cannot be attached to a device the caller does not own. A token belongs to one install, so it is
+   * moved off any other row of the same user in the same transaction; returns false when the target
+   * device does not belong to the caller.
+   */
+  async setPushToken(userId: string, deviceId: string, pushToken: string): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const updated = await tx
+        .update(devices)
+        .set({ pushToken })
+        .where(and(eq(devices.id, deviceId), eq(devices.userId, userId)))
+        .returning({ id: devices.id });
+      if (updated.length === 0) return false;
+
+      await tx
+        .update(devices)
+        .set({ pushToken: null })
+        .where(
+          and(eq(devices.userId, userId), ne(devices.id, deviceId), eq(devices.pushToken, pushToken)),
+        );
+      return true;
+    });
+  }
+
+  async listPushTokens(userId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ pushToken: devices.pushToken })
+      .from(devices)
+      .where(and(eq(devices.userId, userId), isNotNull(devices.pushToken)));
+    return rows.flatMap((row) => (row.pushToken ? [row.pushToken] : []));
   }
 }

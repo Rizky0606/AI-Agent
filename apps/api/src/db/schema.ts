@@ -38,6 +38,7 @@ export const devices = pgTable(
     name: varchar('name', { length: 120 }).notNull(),
     platform: varchar('platform', { length: 32 }).notNull(),
     publicKey: text('public_key'),
+    pushToken: text('push_token'),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     ...created,
   },
@@ -48,6 +49,9 @@ export const devices = pgTable(
     uniqueIndex('devices_public_key_uq')
       .on(table.publicKey)
       .where(sql`public_key IS NOT NULL`),
+    uniqueIndex('devices_push_token_uq')
+      .on(table.pushToken)
+      .where(sql`push_token IS NOT NULL`),
   ],
 );
 

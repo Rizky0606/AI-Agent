@@ -106,14 +106,15 @@ Sisa temuan lain di bagian ini yang belum diperbaiki:
 ### 3.6 Scheduler, event, notifikasi
 
 - Jadwal durable di PostgreSQL (`schedules`, migrasi `0005`), tetapi Map in-memory tetap source-of-truth tick (`apps/scheduler/src/scheduler-engine.ts`); kegagalan write di-swallow.
-- `SchedulerEngine` di API dibuat dengan `SqlScheduleRepository` (`apps/api/src/index.ts:183-185`) tetapi `tick()` tidak pernah dipanggil di API; dispatcher-nya hanya `taskQueue.enqueue` tanpa INSERT ke `tasks` (`:192-193`).
+- `SchedulerEngine` di API hanya mendaftarkan jadwal ke tabel `schedules`; dispatcher duplikatnya (yang meng-enqueue BullMQ tanpa `INSERT` ke `tasks`) **dihapus 2026-10-14**. `tick()` dimiliki container `scheduler` (`apps/scheduler/src/index.ts`), yang menulis baris `tasks` lalu meng-enqueue BullMQ.
 - Idempotency slot = `sched:<jobId>:<ISO>` di Set in-memory + unique index DB hanya di jalur proses scheduler.
 - Ketiga missed-run policy (`skip`/`run_once`/`catch_up`) ada. Timezone hand-rolled via `Intl.DateTimeFormat` (`apps/scheduler/src/cron-parser.ts`), tanpa library cron/tz.
 - EventEngine **tidak bisa** dispatch tanpa PermissionEngine (gate di `apps/scheduler/src/event-engine.ts:137`). Namun tidak ada verifikasi signature, dan `registerRule` tidak pernah dipanggil di produksi.
-- `NotificationEngine` di API dibuat **tanpa storage**: `new NotificationEngine()` (`apps/api/src/index.ts:211`). `SqlNotificationRepository` tidak pernah diinstansiasi.
-- `notifications` = **0 baris** di produksi. Tidak ada jembatan task-event → notification di kode produksi.
-- Retry notifikasi 3× sinkron; habis → state `failed` tanpa dead-letter.
-- `apps/scheduler/src/fcm-provider.ts:185` menyuntikkan `accessToken: 'dummy-env-token'` hardcoded ketika kredensial ada → akan selalu 401. Tanpa kredensial → `DisabledFcmProvider` dengan log jujur.
+- `NotificationEngine` di API dibuat dengan `SqlNotificationRepository` (`apps/api/src/index.ts`) dan `createFcmProviderFromEnv()`; seluruh baca/tulis notifikasi dan preferensi lewat storage durable.
+- `broadcaster.subscribe(createTaskNotificationListener(...))` (`apps/api/src/services/task-notifications.ts`) mengubah event task dari Redis (`task.completed`, `task.failed`, `task.waiting_approval`) menjadi baris `notifications` dengan `delivery_state` dan `deep_link`. **SELESAI 2026-10-14.**
+- Dispatcher duplikat di proses API **dihapus** (tidak pernah menulis baris `tasks`); container `scheduler` adalah satu-satunya pemanggil `tick()`.
+- Retry notifikasi dibatasi `maxAttempts` (default 3) per perangkat; habis → state `failed` + `last_error`, tanpa dead-letter queue.
+- `apps/scheduler/src/fcm-provider.ts` memakai `ServiceAccountTokenSource`: JWT RS256 ditandatangani dengan `client_email`/`private_key` dan ditukar ke `token_uri` (grant `jwt-bearer`), lalu di-cache sampai mendekati `expires_in`. **Literal `dummy-env-token` sudah dihapus 2026-10-14.** Tanpa kredensial → `DisabledFcmProvider` dengan log jujur.
 
 ### 3.7 Artifact dan skills
 
@@ -159,7 +160,7 @@ Keduanya punya test, keduanya lolos, dan keduanya tidak pernah dijalankan oleh s
 | Coding/research menghasilkan bukti | **Tidak** | Evaluator membaca boolean; research tanpa search |
 | Evaluator menentukan completion | **Tidak** | Evaluator tidak mengeksekusi apa pun; satu jalur `completed` tanpa evaluator |
 | Approval mengikat tindakan | **Bekerja** | Fingerprint, action, resource, expiry ada |
-| Scheduler/event/notification | Sebagian | Notifikasi 0 baris; FCM token dummy; API tanpa storage |
+| Scheduler/event/notification | **Bekerja** | Notifikasi durable terkirim (task selesai/gagal/approval), preferensi bertahan restart; FCM memakai access token OAuth2 dari service account. Sisa: kredensial Google belum disuntikkan (Gap 2), tanpa verifikasi signature event, tanpa dead-letter |
 | Windows Agent capability-limited | Sebagian | Dispatch dan identitas kriptografis sudah nyata; sisa: tidak ada allowlist teks-perintah/biner, sesi device in-memory |
 | Tanpa secret di klien/log/repo | **Bekerja** | APK bersih; logger meredaksi |
 | PostgreSQL/Redis tidak publik | **Bekerja** | Terverifikasi `ss -tulpn` |
@@ -173,7 +174,7 @@ Keduanya punya test, keduanya lolos, dan keduanya tidak pernah dijalankan oleh s
 2. **Kehilangan memori diam-diam.** Pengguna dapat menulis memori, menerima `201`, dan kehilangannya tanpa peringatan. Tidak ada error, tidak ada log.
 3. **Task menggantung permanen.** Setiap restart worker berpotensi meninggalkan task di `running` selamanya tanpa retry, timeout, atau eskalasi.
 4. **Klaim completion palsu.** Sistem dapat melaporkan coding task `completed` tanpa menjalankan satu pun test.
-5. **FCM token hardcoded.** Begitu kredensial nyata disuntikkan, provider akan mengirim dengan token literal `dummy-env-token` dan gagal 401 — kegagalan yang tampak seperti masalah kredensial eksternal, bukan bug kode.
+5. **FCM token hardcoded — DITUTUP 2026-10-14.** Provider kini memperoleh access token OAuth2 nyata dari service account; literal `dummy-env-token` dihapus. Sisa: kredensial Google belum disuntikkan, jadi provider aktif adalah `DisabledFcmProvider` yang jujur.
 6. **Device identity dipalsukan — DITUTUP 2026-10-14.** `deviceId` dari query string kini ditolak dan `public_key` diverifikasi terhadap challenge bertanda tangan. Sisa risiko: private key agent ada di `localStorage` webview, jadi kompromi webview berarti kompromi identitas perangkat itu.
 7. **Tabel `artifacts` dan `memories` tanpa migrasi** menunjukkan tidak ada yang memverifikasi paritas schema↔migrasi. Tabel lain mungkin menyimpang tanpa terdeteksi.
 8. **VPS 2 OCPU / 11 GiB tanpa swap** dengan worker 2048m + Chromium. Belum ada bukti beban puncak.
@@ -191,7 +192,7 @@ Setiap milestone harus menghasilkan bukti yang dapat diulang. Tidak ada mileston
 | **M2. Memory durable** | **SELESAI untuk persistensi (2026-10-13).** Migrasi `0007_memories.sql` + `vector(1536)` + 5 index; memori bertahan setelah restart API (create → restart → list masih 1, terverifikasi live). Fallback senyap ke `InMemoryMemoryStore` dihapus. `:id` divalidasi uuid, jadi `GET`/`DELETE /v1/memories/search` → `400`, bukan `500`. **Belum**: provider embedding (9Router tidak menyediakan) dan sweeper retention. |
 | **M3. Evaluator berbasis bukti** | **SELESAI (2026-10-13).** `LocalCodingEnvironment` (`packages/agent-core/src/coding/local-environment.ts`) menjalankan `node --run lint/typecheck/test/build` di workspace per task; `createDefaultEnvironment()` yang mengembalikan `{passed:true}` dihapus. Worker memberi setiap task coding workspace git sendiri di `CODING_WORKSPACE_ROOT=/app/data/workspaces` (named volume `coding-workspaces`). `executeRegisteredTool` menjalankan `GenericEvaluator` sebelum `completed`. Bukti live: workspace dengan `lint` keluar 1 → `failed` (`score 0.71`); workspace dengan script lulus → `completed` (`score 1`, artifact diff nyata). **Belum**: acceptance criteria belum dipersist sebelum eksekusi, sehingga `GenericEvaluator` pada jalur tool masih memakai kriteria default. |
 | **M4. Windows dispatch + identitas perangkat** | **SELESAI (2026-10-13 dispatch, 2026-10-14 identitas).** Task dengan `payload.targetDevice` mengirim `command.execute` melalui WSS ke device yang online, menerima hasil, dan menyimpannya sebagai artifact: `TaskExecutor` (`apps/agent-worker/src/task-executor.ts:167-205`, `:663-884`) meminta presence lewat `DeviceDispatcher.listOnlineDevices`, worker memakai `HttpDeviceDispatcher` (`apps/agent-worker/src/device-dispatcher.ts:59`) ke route internal ber-token `POST /v1/internal/device-commands` (`apps/api/src/routes/device-commands.ts:43`) — Caddy menutup `/v1/internal/*` dengan `404`, jadi hanya terjangkau dari network Docker internal. Aksi `device:command` berisiko HIGH dan tidak diizinkan tanpa approval (`packages/permissions/src/engine.ts:127`); fingerprint memuat teks perintah + `deviceId`, jadi satu approval tidak mengotorisasi perintah lain. **Identitas kriptografis (2026-10-14)**: agent menandatangani `device.challenge` dengan keypair P-256, `deviceId` diterbitkan server (`DEVICE_IDENTITY_REQUIRED` bila agent mengklaim sendiri), `devices.public_key` diisi JWK kanonik, dan key yang sama selalu memetakan ke baris device yang sama (migrasi `0008_device_key_identity.sql`). **Belum**: allowlist teks-perintah/biner, sesi device in-memory. |
-| **M5. Notifikasi + scheduler** | `NotificationEngine` memakai storage durable; task selesai/gagal menghasilkan baris `notifications` dengan delivery state. Scheduler tick jalan di salah satu proses dengan bukti slot idempoten di DB. FCM memakai token OAuth nyata dari service account, bukan literal. |
+| **M5. Notifikasi + scheduler** | **SELESAI (2026-10-14).** `NotificationEngine` di API memakai `SqlNotificationRepository` + `createFcmProviderFromEnv()`; `broadcaster.subscribe(createTaskNotificationListener(...))` (`apps/api/src/services/task-notifications.ts`) mengubah event task Redis menjadi baris `notifications` durable dengan `delivery_state`/`deep_link`. Bukti live: task selesai terjadwal → `task_completed`/`delivered`; task gagal (device offline) → `task_failed`/`failed` + `last_error` jujur; event `task.waiting_approval` di channel `personal-ai-os:events:all` → `approval_required`/`failed` deep link approval; preferensi bertahan `docker compose restart api`; `devices.push_token` terisi lewat `POST /v1/devices/:id/push-token` (204/404/400). FCM memakai access token OAuth2 dari service account (`ServiceAccountTokenSource`, JWT RS256 → `token_uri`), literal `dummy-env-token` dihapus. Dispatcher duplikat di API dihapus; `tick()` hanya di container `scheduler`. **Belum**: pengiriman sungguhan ke Google (`FCM_SERVICE_ACCOUNT_JSON` belum diisi), tanpa dead-letter, tanpa verifikasi signature event. |
 | **M6. Research** | **SELESAI (2026-10-13).** Provider pencarian nyata terdaftar: `duckDuckGoSearch` (`packages/tools/src/builtin/web-search.ts`) di `createDefaultToolRegistry` (`packages/tools/src/registry/create-default-tool-registry.ts:20-21`), tanpa API key. `LocalResearchEnvironment` (`packages/agent-core/src/research/local-environment.ts`) mencari lewat `web_search` dan membuka setiap hasil lewat `web_fetch`, keduanya melalui `ToolRegistry` ber-permission (`web:search`/`web:fetch`). Sumber dan claim hardcoded dihapus; klaim terikat ke URL yang benar-benar di-fetch. Bukti live: query nyata → `completed` (`score 1`, 5 sumber nyata, 5 klaim tertaut); query tanpa hasil → `failed` (`score 0`, `No valid sources provided`). **Belum**: sintesis klaim lintas sumber oleh `ModelGateway` — klaim masih kutipan awal halaman, sehingga relevansi terhadap pertanyaan belum dinilai; `ResearchEvaluator` juga belum mem-fetch URL sendiri. |
 | **M7. Audit menyeluruh** | Setiap tool call, MCP call, browser action, dan artifact write menulis baris `audit_logs` dengan aktor, action, resource, hasil. Bukan `console.log`. |
 
@@ -219,9 +220,21 @@ docker exec personal-ai-os-postgres-1 psql -U personal_ai_os -d personal_ai_os \
 docker exec personal-ai-os-postgres-1 psql -U personal_ai_os -d personal_ai_os \
   -c "SELECT action, count(*) FROM audit_logs GROUP BY action;"
 
-# 5. Notifikasi belum pernah terkirim
+# 5. Notifikasi durable terkirim (M5, 2026-10-14)
 docker exec personal-ai-os-postgres-1 psql -U personal_ai_os -d personal_ai_os \
-  -c "SELECT count(*) FROM notifications;"
+  -c "SELECT type, delivery_state, attempts, deep_link FROM notifications ORDER BY created_at DESC;"
+#   -> task_completed | delivered | 0 | personal-ai://tasks/<taskId terjadwal smoke.echo>
+#   -> task_failed    | failed    | 1 | personal-ai://tasks/<taskId windows_command device offline>
+#      last_error "Pengiriman dinonaktifkan: FCM_SERVICE_ACCOUNT_JSON tidak dikonfigurasi…"
+# Event approval lewat Redis (channel nyata personal-ai-os:events:all):
+#   redis-cli PUBSUB CHANNELS '*' -> personal-ai-os:events:all
+#   publish {eventType:"task.waiting_approval", payload:{approvalId:"appr-proof-1"}} -> 1 receiver
+#   -> baris approval_required | failed | personal-ai://approvals/appr-proof-1
+# Push token perangkat: POST /v1/devices -> 201; POST /v1/devices/<id>/push-token -> 204;
+#   SELECT push_token FROM devices -> terisi; body kosong -> 400; device milik user lain -> 404
+# Durabilitas: docker compose restart api; GET /v1/notifications -> jumlah sama, delivery_state sama;
+#   GET /v1/notifications/preferences -> nilai sama
+# FCM OAuth nyata diuji terhadap stub HTTP: node --test apps/scheduler/test/fcm-provider.test.ts (4/4)
 
 # 6. Katalog tool produksi
 #    GET /v1/catalog -> {"tools":[{"name":"web_fetch"},{"name":"web_search"}]}

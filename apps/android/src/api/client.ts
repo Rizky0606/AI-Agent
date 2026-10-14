@@ -216,6 +216,16 @@ export class ApiClient {
     return res;
   }
 
+  /**
+   * Attaches this install's FCM token to a device row the caller owns, so the server can push to it.
+   */
+  async registerPushToken(deviceId: string, pushToken: string): Promise<void> {
+    await this.request<void>(`/v1/devices/${encodeURIComponent(deviceId)}/push-token`, {
+      method: 'POST',
+      body: JSON.stringify({ pushToken }),
+    });
+  }
+
   // --- Projects ---
   async listProjects(): Promise<{ projects: Project[] }> {
     return this.request<{ projects: Project[] }>('/v1/projects');

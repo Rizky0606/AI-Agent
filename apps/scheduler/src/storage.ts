@@ -3,6 +3,7 @@ import {
   type DeliveryState,
   type MissedRunPolicy,
   type NotificationData,
+  type NotificationPreferences,
   type NotificationRecord,
   type NotificationStorage,
   type NotificationType,
@@ -200,5 +201,25 @@ export class PostgresNotificationStorage implements NotificationStorage {
       ORDER BY created_at DESC
     `;
     return rows.map((r) => mapRowToNotification(r as Record<string, unknown>));
+  }
+
+  async getUserPreferences(userId: string): Promise<NotificationPreferences | null> {
+    const [row] = await this.sql`
+      SELECT preferences
+      FROM notification_preferences
+      WHERE user_id = ${userId}
+      LIMIT 1
+    `;
+    return row ? (row['preferences'] as NotificationPreferences) : null;
+  }
+
+  async saveUserPreferences(userId: string, preferences: NotificationPreferences): Promise<void> {
+    await this.sql`
+      INSERT INTO notification_preferences (user_id, preferences, created_at, updated_at)
+      VALUES (${userId}, ${this.sql.json(preferences as never)}, now(), now())
+      ON CONFLICT (user_id) DO UPDATE SET
+        preferences = EXCLUDED.preferences,
+        updated_at = now()
+    `;
   }
 }

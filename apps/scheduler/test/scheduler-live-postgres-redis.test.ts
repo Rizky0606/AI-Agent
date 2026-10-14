@@ -297,7 +297,7 @@ test('Live Postgres: Notification Engine persists delivery states in PostgreSQL 
   assert.match(notifInDb.lastError ?? '', /push delivery disabled/i);
 
   // Update notification state to 'read'
-  await engine.markAsReadAsync(notif.id);
+  await engine.markAsRead(notif.id);
   const updatedInDb = await notificationStorage.getNotification(notif.id);
   assert.equal(updatedInDb?.deliveryState, 'read');
   assert.ok(updatedInDb?.readAt);
