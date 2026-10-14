@@ -9,18 +9,6 @@ import { type DeviceIdentity, DeviceIdentityManager } from '../connection/device
 import { invoke } from '@tauri-apps/api/core';
 import { buildGoogleStartUrl, codeChallengeFor, parseCallbackQuery, randomBase64Url } from '../auth/google.ts';
 
-export interface LocalTaskEntry {
-  id: string;
-  command: string;
-  cwd: string;
-  capability: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-  startTime: string;
-  durationMs?: number | undefined;
-  exitCode?: number | undefined;
-  output?: string | undefined;
-  error?: string | undefined;
-}
 
 export interface DiagnosticLog {
   id: string;
@@ -84,11 +72,9 @@ export interface AgentState {
   refreshToken: string;
   userEmail: string;
   connectionStatus: ConnectionStatus;
-  lastConnectedAt: string | null;
   device: DeviceIdentity;
   capabilities: Record<CapabilityName, boolean>;
   allowedRoots: string[];
-  tasks: LocalTaskEntry[];
   logs: DiagnosticLog[];
   conversations: ChatConversation[];
   activeConversationId: string;
@@ -118,8 +104,6 @@ export interface AgentState {
   toggleCapability: (name: CapabilityName, enabled: boolean) => void;
   addAllowedRoot: (path: string) => void;
   removeAllowedRoot: (path: string) => void;
-  addTask: (task: LocalTaskEntry) => void;
-  updateTask: (id: string, updates: Partial<LocalTaskEntry>) => void;
   addLog: (level: 'info' | 'warn' | 'error', message: string) => void;
   clearLogs: () => void;
   resetAllDefaults: () => void;
@@ -228,13 +212,11 @@ export const createAgentStore = (
     refreshToken: storedSession.refreshToken,
     userEmail: storedSession.email,
     connectionStatus: 'disconnected',
-    lastConnectedAt: null,
 
     device: identityMgr.getIdentity(),
     capabilities: getInitialCapabilities(),
     allowedRoots: pathValidator.getAllowedRoots(),
 
-    tasks: [],
     logs: [],
     conversations: [{ id: '', title: 'New conversation', messages: [] }],
     activeConversationId: '',
@@ -387,11 +369,7 @@ export const createAgentStore = (
       set({ authToken: token });
     },
     setDevice: (device) => set({ device }),
-    setConnectionStatus: (status) =>
-      set((state) => ({
-        connectionStatus: status,
-        lastConnectedAt: status === 'connected' ? new Date().toISOString() : state.lastConnectedAt,
-      })),
+    setConnectionStatus: (status) => set({ connectionStatus: status }),
 
     syncDeviceIdentity: async () => {
       const updated = await identityMgr.syncWithTauri();
@@ -466,16 +444,6 @@ export const createAgentStore = (
       pathValidator.removeAllowedRoot(rootPath);
       set({ allowedRoots: pathValidator.getAllowedRoots() });
     },
-
-    addTask: (task) =>
-      set((state) => ({
-        tasks: [task, ...state.tasks].slice(0, 100), // keep latest 100
-      })),
-
-    updateTask: (id, updates) =>
-      set((state) => ({
-        tasks: state.tasks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
-      })),
 
     addLog: (level, message) =>
       set((state) => ({

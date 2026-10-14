@@ -828,5 +828,70 @@ Semua dijalankan terhadap produksi yang sedang berjalan (`docker compose`, image
 #   berlakunya (replay menghasilkan 200 lagi). Dampaknya kecil karena penukaran tetap menuntut
 #   codeVerifier PKCE yang hanya dipegang klien, tapi single-use akan lebih ketat; itu menuntut
 #   penyimpanan state yang sengaja dihindari (state saat ini ditandatangani, bukan disimpan).
+#
+# Cacat 17 (DIPERBAIKI 2026-10-14): login Google di agent Windows gagal VALIDATION_ERROR
+# Gejala: GET /v1/auth/google/start?redirect_uri=http://127.0.0.1:54810/auth ->
+#   400 VALIDATION_ERROR "querystring must have required property 'code_challenge'".
+# Sebab: apps/windows/src-tauri/src/main.rs open_in_browser menjalankan
+#   cmd /C start "" <url> lewat Command::args, jadi URL sampai ke cmd TANPA kutip. cmd memecah
+#   baris perintah di `&` yang tidak dikutip, sehingga hanya parameter pertama (redirect_uri) yang
+#   sampai ke server; code_challenge dan state hilang di sisi cmd, bukan di buildGoogleStartUrl.
+# Sesudah: URL dibungkus kutip oleh helper browser_command_line (`start "" "<url>"`), dan baris
+#   perintah dikirim utuh lewat raw_arg supaya Rust tidak meng-escape kutipnya sendiri.
+# Bukti: cargo test --offline di apps/windows/src-tauri -> 6 test lulus, termasuk
+#   browser_command_line_keeps_every_query_separator_inside_quotes yang menolak `&` di luar span
+#   terkutip. BATAS BUKTI: tidak ada perangkat Windows di lingkungan ini, jadi jalur browser nyata
+#   belum dijalankan ulang setelah perbaikan.
+#
+# Cacat 18 (DIPERBAIKI 2026-10-14): membuka tab Setting di aplikasi Android langsung menutup app
+# Gejala: tab Setting -> app keluar tanpa pesan.
+# Sebab: apps/android/src/api/client.ts checkHealth() membaca GET /health, tetapi /health hanya
+#   mengembalikan {"status":"ok","service":"api"}. SettingsScreen membaca health.database dan
+#   health.redis, jadi keduanya undefined, lalu StatusPill memanggil undefined.toLowerCase()
+#   saat render. Tidak ada error boundary, jadi satu field hilang mematikan seluruh aplikasi.
+#   Data yang benar ada di GET /ready: {"status":"ready","checks":{"database":true,"redis":true}}.
+# Sesudah: checkHealth() membaca /ready (200 maupun 503, karena 503 tetap membawa body yang sama)
+#   dan memetakan checks.database/checks.redis ke 'connected'/'disconnected'. StatusPill juga
+#   menormalkan status sekali di awal sehingga nilai yang hilang atau bukan string tidak melempar.
+#   Pill "API Gateway" tidak lagi mencetak "connected" hardcoded; ia mengikuti health.status.
+# Bukti: reproduksi sebelum perbaikan lewat kode lama HEAD -> checkHealth() memanggil /health,
+#   health.database undefined, dan h.database.toLowerCase() melempar
+#   "TypeError: Cannot read properties of undefined (reading 'toLowerCase')" — persis jalur yang
+#   mematikan app. Sesudah: apps/android suite 28 test lulus (termasuk 2 test kontrak health baru
+#   yang memastikan permintaan menuju /ready dan nilainya selalu string), tsc bersih, eslint bersih.
+#   Kesembilan layar Android dirender lewat react-dom/server dengan shim react-native dan semuanya
+#   selesai tanpa lemparan, termasuk StatusPill yang diuji dengan undefined/null/number/object.
+#   BATAS BUKTI: tidak ada emulator di lingkungan ini (/dev/kvm tidak ada), jadi tampilan di
+#   perangkat nyata belum dilihat.
+#
+# Perapian UI (2026-10-14): tampilan yang tidak penting dihapus, bukan ditambah.
+# Desktop (apps/windows/src/ui/App.tsx, 10 tab -> 7):
+#   - Tab "Dashboard" dihapus. Isinya (status koneksi, server target, perangkat, terakhir
+#     terhubung) sudah ada di header dan di Settings, jadi satu layar penuh hanya mengulang.
+#   - Tab "Local Tasks" dihapus. Tidak ada pemanggil addTask di seluruh repo, jadi tab itu
+#     selamanya kosong; LocalTaskEntry, addTask, updateTask, state tasks, dan lastConnectedAt
+#     yang ikut mati ikut dihapus dari apps/windows/src/state/agent-store.ts.
+#   - "Capabilities" dan "Path Allowlist" digabung jadi satu tab "Security" dua kolom.
+#   - "Uji Keamanan Path" dihapus: ia tidak memanggil pathValidator, hanya meniru validasi dengan
+#     pencocokan awalan string, lalu menampilkan vonis "DIIZINKAN/DITOLAK" seolah otoritatif.
+#     Verdict keamanan palsu lebih buruk daripada tidak ada verdict.
+#   - .nav-tabs dibiarkan wrap; pada lebar minimum jendela (800 px) sepuluh tab sebelumnya
+#     meluber sampai bodyScrollWidth 920 px sehingga "Diagnostics Logs" dan "Settings" terpotong.
+#     Sesudah: 7 tab, tanpa overflow di 800, 1024, dan 1280 px; ketujuh tab dirender tanpa error.
+# Android (apps/android/src/screens/):
+#   - "Titik Integrasi Deep Link & Push" dihapus dari SettingsScreen. Dua tombolnya memanggil
+#     deep link contoh (approvals/test-appr-123, tasks/test-task-456) — alat debug, bukan fitur.
+#     Prop onHandleDeepLink dan import DeepLinkService ikut dilepas; jalur push sungguhan di
+#     Navigator.tsx tidak disentuh.
+#   - Tombol "Unduh tidak tersedia" dihapus dari ArtifactsScreen: tombol mati yang hanya
+#     memunculkan toast.
+#   - "Attachments unavailable: upload service not configured." dihapus dari ChatScreen: baris
+#     permintaan maaf permanen di layar utama.
+#   - Tab "Workspace" dipertahankan meski terlihat sepi: TaskListScreen menolak mengirim tugas
+#     tanpa activeProjectId, jadi tab itu menopang alur utama.
+#
+# Gate setelah seluruh perubahan (2026-10-14):
+#   pnpm lint 14/14, pnpm build 14/14, apps/api suite 70/70 di container, apps/android 28/28,
+#   cargo test --offline 6/6, pnpm verify:audit 211 referensi / 128 path valid.
 ```
 

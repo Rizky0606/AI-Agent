@@ -71,7 +71,7 @@ export const ArtifactsScreen: React.FC = () => {
           <Text style={styles.artifactName}>{item.filename}</Text>
           <Text style={styles.artifactSize}>{item.mimeType} • {Math.ceil(item.size / 1024)} KB • {new Date(item.createdAt).toLocaleString()}</Text>
           {showingPreview && <View style={styles.preview}><Text style={styles.previewText}>{preview.content}{preview.truncated ? '\n… (pratinjau dipotong)' : ''}</Text></View>}
-          <View style={styles.actionsRow}><TouchableOpacity style={styles.openBtn} onPress={() => void openArtifact(item)}><Text style={styles.openBtnText}>{showingPreview ? 'Tutup' : 'Pratinjau'}</Text></TouchableOpacity><TouchableOpacity style={styles.downloadBtn} onPress={() => showToast('Unduhan belum tersedia; gunakan pratinjau metadata.')}><Text style={styles.downloadBtnText}>Unduh tidak tersedia</Text></TouchableOpacity></View>
+          <View style={styles.actionsRow}><TouchableOpacity style={styles.openBtn} onPress={() => void openArtifact(item)}><Text style={styles.openBtnText}>{showingPreview ? 'Tutup' : 'Pratinjau'}</Text></TouchableOpacity></View>
         </View>;
       }} />}
     </View>
@@ -96,8 +96,6 @@ const styles = StyleSheet.create({
   openBtn: { backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: theme.spacing.md, paddingVertical: 8, borderRadius: theme.borderRadius.sm, marginRight: theme.spacing.xs },
   error: { color: theme.colors.danger, textAlign: 'center' },
   openBtnText: { color: theme.colors.primary, fontSize: 12, fontWeight: '700' },
-  downloadBtn: { backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: theme.spacing.md, paddingVertical: 8, borderRadius: theme.borderRadius.sm },
-  downloadBtnText: { color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' },
   preview: { backgroundColor: theme.colors.background, borderRadius: theme.borderRadius.sm, padding: theme.spacing.sm, marginTop: theme.spacing.sm, maxHeight: 220 },
   previewText: { color: theme.colors.textPrimary, fontSize: 11, fontFamily: 'monospace' },
   state: { margin: theme.spacing.lg, alignItems: 'center' },

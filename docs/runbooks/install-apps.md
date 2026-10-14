@@ -107,6 +107,12 @@ in the webview's `localStorage` and access tokens are refreshed automatically on
 no token to paste and nothing to re-enter after expiry. Keep capabilities off by default, choose an
 allowed workspace folder, then connect. The optional manual token field remains for operators.
 
+The start URL is handed to the browser through `cmd /C start "" "<url>"` with the whole command
+line passed as one raw argument. `cmd` splits an unquoted command line on `&`, so dropping either
+quote truncates the query string to `redirect_uri` alone and the API answers
+`400 VALIDATION_ERROR "querystring must have required property 'code_challenge'"`. The Rust test
+`browser_command_line_keeps_every_query_separator_inside_quotes` pins that.
+
 Windows Agent connects as a local device agent. It does not run OMP/Hermes locally and does not receive Android coding-runtime tasks; those run on the VPS.
 
 ## Security and production

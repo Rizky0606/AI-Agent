@@ -12,6 +12,7 @@ import {
   type HealthResponse,
   type ModelCatalogResponse,
   type Project,
+  type ReadyResponse,
   type RefreshResponse,
   type User,
 } from './types.ts';
@@ -432,8 +433,22 @@ export class ApiClient {
   }
 
   // --- Health ---
+  /**
+   * Reads `GET /ready`, which reports PostgreSQL and Redis. `/health` only answers
+   * `{status, service}`, so reading dependency state from it silently produced `undefined`.
+   * A `503` here still carries the same body, so it is a reading rather than a failure.
+   */
   async checkHealth(): Promise<HealthResponse> {
-    return this.request<HealthResponse>('/health');
+    const response = await fetch(`${this.baseUrl}/ready`);
+    if (!response.ok && response.status !== 503) {
+      throw new ApiError(response.status, 'HEALTH_FAILED', `Health check failed (${response.status})`);
+    }
+    const ready = (await response.json()) as ReadyResponse;
+    return {
+      status: ready.status,
+      database: ready.checks.database ? 'connected' : 'disconnected',
+      redis: ready.checks.redis ? 'connected' : 'disconnected',
+    };
   }
 }
 

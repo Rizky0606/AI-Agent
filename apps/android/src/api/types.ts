@@ -104,9 +104,17 @@ export interface ArtifactPreview {
   truncated: boolean;
 }
 
+/** Body of `GET /ready`, the endpoint that actually reports dependency health. */
+export interface ReadyResponse {
+  status: 'ready' | 'not_ready';
+  checks: {
+    database: boolean;
+    redis: boolean;
+  };
+}
+
 export interface HealthResponse {
-  status: 'ok';
-  uptimeSeconds: number;
+  status: 'ready' | 'not_ready';
   database: 'connected' | 'disconnected';
   redis: 'connected' | 'disconnected';
 }

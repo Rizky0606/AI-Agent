@@ -13,23 +13,17 @@ import type { ModelCatalogResponse } from '../api/types.ts';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { theme } from '../components/Theme.ts';
 import { useHealth } from '../hooks/use-queries.ts';
-import { DeepLinkService } from '../services/deep-link.ts';
 import { defaultFcmService } from '../services/fcm-service.ts';
 import { useAuthStore } from '../state/auth-store.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
 export interface SettingsScreenProps {
   onNavigateToArtifacts?: () => void;
-  onHandleDeepLink?: (target: ReturnType<typeof DeepLinkService.parseUrl>) => void;
 }
 
-export const SettingsScreen: React.FC<SettingsScreenProps> = ({
-  onNavigateToArtifacts,
-  onHandleDeepLink,
-}) => {
+export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onNavigateToArtifacts }) => {
   const { user, device, serverUrl, logout } = useAuthStore();
-  const { fcmToken, pushNotificationsEnabled, setPushNotificationsEnabled, showToast } =
-    useUiStore();
+  const { fcmToken, pushNotificationsEnabled, setPushNotificationsEnabled } = useUiStore();
   const { data: health, isLoading: healthLoading } = useHealth();
   const [catalog, setCatalog] = useState<ModelCatalogResponse | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -38,14 +32,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     try { setCatalogError(null); setCatalog(await defaultApiClient.listModels()); } catch (error) { setCatalogError(error instanceof Error ? error.message : 'Model catalog unavailable'); }
   };
   useEffect(() => { void loadCatalog(); }, []);
-
-  const handleTestDeepLink = (path: string) => {
-    const target = DeepLinkService.parseUrl(`personal-ai://${path}`);
-    if (onHandleDeepLink) {
-      onHandleDeepLink(target);
-    }
-    showToast(`Deep link diproses: personal-ai://${path}`);
-  };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -99,8 +85,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             </View>
             <View style={styles.healthRow}>
               <Text style={styles.healthLabel}>API Gateway:</Text>
-              <StatusPill status="connected" />
-
+              <StatusPill status={health.status === 'ready' ? 'connected' : 'disconnected'} />
             </View>
           </View>
         ) : (
@@ -112,8 +97,16 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         <Text style={styles.infoTextMuted}>{catalog ? `Source: ${catalog.source}` : 'Loading model catalog...'}</Text>
         {catalogError ? <Text style={styles.offlineWarning}>{catalogError}</Text> : null}
         {catalog?.models.map((model) => <Text key={model.id} style={styles.infoText}>{model.id} · {model.capabilities.join(', ')}</Text>)}
-        <TouchableOpacity style={styles.deepLinkBtn} onPress={() => void defaultApiClient.refreshModels().then(setCatalog).catch((error) => setCatalogError(error instanceof Error ? error.message : 'Refresh failed'))}>
-          <Text style={styles.deepLinkBtnText}>Refresh models</Text>
+        <TouchableOpacity
+          style={styles.refreshBtn}
+          onPress={() =>
+            void defaultApiClient
+              .refreshModels()
+              .then(setCatalog)
+              .catch((error) => setCatalogError(error instanceof Error ? error.message : 'Refresh failed'))
+          }
+        >
+          <Text style={styles.refreshBtnText}>Muat ulang model</Text>
         </TouchableOpacity>
       </View>
 
@@ -183,26 +176,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           <Text style={styles.actionCardDesc}>Lihat file hasil tugas dan laporan analisis</Text>
         </TouchableOpacity>
       ) : null}
-
-      {/* Deep Link Simulator & Push Testing */}
-      <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Titik Integrasi Deep Link & Push</Text>
-        <Text style={styles.infoTextMuted}>Skema URL: personal-ai://</Text>
-        <View style={styles.deepLinkButtons}>
-          <TouchableOpacity
-            style={styles.deepLinkBtn}
-            onPress={() => handleTestDeepLink('approvals/test-appr-123')}
-          >
-            <Text style={styles.deepLinkBtnText}>Buka Approval</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deepLinkBtn}
-            onPress={() => handleTestDeepLink('tasks/test-task-456')}
-          >
-            <Text style={styles.deepLinkBtnText}>Buka Task</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
 
       {/* Logout */}
       <TouchableOpacity style={styles.logoutButton} onPress={logout}>
@@ -312,18 +285,14 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: 12,
   },
-  deepLinkButtons: {
-    flexDirection: 'row',
-    marginTop: theme.spacing.sm,
-  },
-  deepLinkBtn: {
+  refreshBtn: {
     backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: 6,
     borderRadius: theme.borderRadius.sm,
-    marginRight: theme.spacing.sm,
+    alignSelf: 'flex-start',
   },
-  deepLinkBtnText: {
+  refreshBtnText: {
     color: theme.colors.primary,
     fontSize: 12,
     fontWeight: '600',

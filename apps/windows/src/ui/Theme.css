@@ -123,6 +123,7 @@ body {
 /* Navigation Tabs */
 .nav-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 8px 24px 0 24px;
   background-color: var(--bg-secondary);

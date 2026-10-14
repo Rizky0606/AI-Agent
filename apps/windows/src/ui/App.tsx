@@ -244,29 +244,18 @@ const ArtifactPanel: React.FC = () => {
 };
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
-    | 'chat'
-    | 'dashboard'
-    | 'capabilities'
-    | 'allowlist'
-    | 'server-tasks'
-    | 'approvals'
-    | 'artifacts'
-    | 'tasks'
-    | 'logs'
-    | 'settings'
-  >('dashboard');
+    'chat' | 'tasks' | 'approvals' | 'artifacts' | 'security' | 'logs' | 'settings'
+  >('chat');
 
   const {
     device,
     connectionStatus,
-    lastConnectedAt,
     capabilities,
     toggleCapability,
     allowedRoots,
     addAllowedRoot,
     removeAllowedRoot,
-    tasks,
-    updateTask,
+    serverTasks,
     logs,
     clearLogs,
     serverUrl,
@@ -286,8 +275,6 @@ export const App: React.FC = () => {
   }, [syncDeviceIdentity]);
 
   const [newPathInput, setNewPathInput] = useState('');
-  const [testPathInput, setTestPathInput] = useState('');
-  const [testResult, setTestResult] = useState<{ allowed: boolean; message: string } | null>(null);
 
   // Settings drafts: commit to the store only after typing settles, otherwise every
   // keystroke refetches the model catalog, tasks, approvals, and artifacts.
@@ -310,20 +297,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleTestPath = () => {
-    if (!testPathInput.trim()) return;
-    const isAllowed = allowedRoots.some(
-      (root) =>
-        testPathInput.trim() === root ||
-        testPathInput.trim().startsWith(root.endsWith('\\') ? root : root + '\\'),
-    );
-    setTestResult({
-      allowed: isAllowed,
-      message: isAllowed
-        ? `Path diizinkan (berada di dalam allowlist)`
-        : `Path DITOLAK (berada di luar semua folder yang diizinkan)`,
-    });
-  };
 
   return (
     <div className="agent-container">
@@ -347,38 +320,14 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Tabs */}
+      {/* Tabs. Grouped so the bar stays readable at the 800px minimum window width. */}
       <nav className="nav-tabs">
         <button className={`tab-btn ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</button>
-        <button
-          className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          Dashboard
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'capabilities' ? 'active' : ''}`}
-          onClick={() => setActiveTab('capabilities')}
-        >
-          Capabilities ({activeCapsCount}/7)
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'allowlist' ? 'active' : ''}`}
-          onClick={() => setActiveTab('allowlist')}
-        >
-          Path Allowlist ({allowedRoots.length})
-        </button>
         <button
           className={`tab-btn ${activeTab === 'tasks' ? 'active' : ''}`}
           onClick={() => setActiveTab('tasks')}
         >
-          Local Tasks ({tasks.length})
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'server-tasks' ? 'active' : ''}`}
-          onClick={() => setActiveTab('server-tasks')}
-        >
-          Server Tasks
+          Tasks ({serverTasks.length})
         </button>
         <button
           className={`tab-btn ${activeTab === 'approvals' ? 'active' : ''}`}
@@ -393,10 +342,16 @@ export const App: React.FC = () => {
           Artifacts
         </button>
         <button
+          className={`tab-btn ${activeTab === 'security' ? 'active' : ''}`}
+          onClick={() => setActiveTab('security')}
+        >
+          Security ({activeCapsCount}/7 · {allowedRoots.length})
+        </button>
+        <button
           className={`tab-btn ${activeTab === 'logs' ? 'active' : ''}`}
           onClick={() => setActiveTab('logs')}
         >
-          Diagnostics Logs
+          Logs
         </button>
         <button
           className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
@@ -409,114 +364,12 @@ export const App: React.FC = () => {
       {/* Main Content Area */}
       <main className="agent-content">
         {activeTab === 'chat' && <ChatPanel />}
-        {activeTab === 'server-tasks' && <ServerTaskPanel />}
+        {activeTab === 'tasks' && <ServerTaskPanel />}
         {activeTab === 'approvals' && <ApprovalPanel />}
         {activeTab === 'artifacts' && <ArtifactPanel />}
-        {activeTab === 'dashboard' && (
+        {activeTab === 'security' && (
           <div className="grid-2">
             <div className="card">
-              <h2 className="card-title">Status Sistem & Koneksi</h2>
-              <p className="card-subtitle">
-                Koneksi WSS Outbound ke Control Plane VPS (Tanpa Port Masuk Terbuka)
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Status Koneksi:</span>
-                  <strong
-                    style={{
-                      color: `var(--status-${connectionStatus})`,
-                      textTransform: 'capitalize',
-                    }}
-                  >
-                    {connectionStatus}
-                  </strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Server Target:</span>
-                  <code>{serverUrl}</code>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Perangkat:</span>
-                  <span>
-                    {device.name} ({device.arch})
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Terakhir Terhubung:</span>
-                  <span>
-                    {lastConnectedAt
-                      ? new Date(lastConnectedAt).toLocaleTimeString()
-                      : 'Belum pernah'}
-                  </span>
-                </div>
-                <div
-                  style={{
-                    marginTop: 10,
-                    paddingTop: 10,
-                    borderTop: '1px solid var(--border-color)',
-                    display: 'flex',
-                    gap: 8,
-                  }}
-                >
-                  {connectionStatus === 'connected' ? (
-                    <button className="btn btn-danger btn-sm" onClick={disconnectFromServer}>
-                      Putuskan Koneksi WSS
-                    </button>
-                  ) : connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? (
-                    <button className="btn btn-secondary btn-sm" onClick={disconnectFromServer}>
-                      Batalkan ({connectionStatus})
-                    </button>
-                  ) : (
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => void connectToServer()}
-                    >
-                      Hubungkan WSS Outbound
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="card">
-              <h2 className="card-title">Ringkasan Keamanan & Sandbox</h2>
-              <p className="card-subtitle">Prinsip Least-Privilege & Validasi Ganda</p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Capability Aktif:</span>
-                  <strong
-                    style={{
-                      color: activeCapsCount > 0 ? 'var(--accent-cyan)' : 'var(--text-sub)',
-                    }}
-                  >
-                    {activeCapsCount} dari 7 aktif
-                  </strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Folder Terdaftar:</span>
-                  <strong>{allowedRoots.length} direktori</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Default Policy:</span>
-                  <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>
-                    DEFAULT OFF (Strict Deny)
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Proteksi Path Traversal:</span>
-                  <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>
-                    AKTIF (Canonical check)
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'capabilities' && (
-          <div className="card">
             <h2 className="card-title">Registry Kemampuan (Capability Registry)</h2>
             <p className="card-subtitle">
               Sesuai aturan keamanan: Setiap kemampuan <strong>DEFAULT OFF</strong> dan harus
@@ -585,10 +438,7 @@ export const App: React.FC = () => {
               })}
             </div>
           </div>
-        )}
-
-        {activeTab === 'allowlist' && (
-          <div className="card">
+            <div className="card">
             <h2 className="card-title">Daftar Folder Diizinkan (Path Allowlist)</h2>
             <p className="card-subtitle">
               Hanya direktori yang didaftarkan di sini yang dapat diakses oleh agent. Percobaan
@@ -641,154 +491,10 @@ export const App: React.FC = () => {
                 ))
               )}
             </div>
-
-            {/* Test Sandbox */}
-            <div
-              style={{ marginTop: 28, paddingTop: 16, borderTop: '1px solid var(--border-color)' }}
-            >
-              <h3 style={{ fontSize: 13, marginBottom: 4 }}>Uji Keamanan Path</h3>
-              <p style={{ fontSize: 11, color: 'var(--text-sub)', marginBottom: 8 }}>
-                Verifikasi apakah path atau upaya path traversal akan ditolak oleh sistem.
-              </p>
-              <div className="input-row">
-                <input
-                  type="text"
-                  className="text-input"
-                  placeholder="Contoh: C:\Coding\Project\my-app\..\..\Windows\System32"
-                  value={testPathInput}
-                  onChange={(e) => setTestPathInput(e.target.value)}
-                />
-                <button className="btn btn-primary" onClick={handleTestPath}>
-                  Uji Validasi
-                </button>
-              </div>
-              {testResult && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: '8px 12px',
-                    borderRadius: 6,
-                    background: testResult.allowed
-                      ? 'rgba(16, 185, 129, 0.1)'
-                      : 'rgba(244, 63, 94, 0.1)',
-                    border: `1px solid ${testResult.allowed ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`,
-                    color: testResult.allowed ? 'var(--accent-emerald)' : 'var(--accent-rose)',
-                    fontSize: 12,
-                    fontWeight: 600,
-                  }}
-                >
-                  {testResult.message}
-                </div>
-              )}
-            </div>
+          </div>
           </div>
         )}
 
-        {activeTab === 'tasks' && (
-          <div className="card">
-            <h2 className="card-title">Daftar Perintah & Tugas Lokal (Local Tasks)</h2>
-            <p className="card-subtitle">
-              Perintah yang didelegasikan dari Control Plane ke workstation Windows ini.
-            </p>
-
-            {tasks.length === 0 ? (
-              <p
-                style={{
-                  color: 'var(--text-sub)',
-                  fontStyle: 'italic',
-                  padding: 24,
-                  textAlign: 'center',
-                }}
-              >
-                Belum ada task yang dieksekusi secara lokal.
-              </p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
-                {tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    style={{
-                      background: 'var(--bg-secondary)',
-                      padding: 14,
-                      borderRadius: 8,
-                      border: '1px solid var(--border-color)',
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-cyan)' }}>
-                        {task.id}
-                      </span>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <span
-                          style={{
-                            fontSize: 11,
-                            padding: '2px 8px',
-                            borderRadius: 10,
-                            fontWeight: 600,
-                            background:
-                              task.status === 'completed'
-                                ? 'rgba(16, 185, 129, 0.2)'
-                                : task.status === 'running'
-                                  ? 'rgba(6, 182, 212, 0.2)'
-                                  : 'rgba(244, 63, 94, 0.2)',
-                            color:
-                              task.status === 'completed'
-                                ? 'var(--accent-emerald)'
-                                : task.status === 'running'
-                                  ? 'var(--accent-cyan)'
-                                  : 'var(--accent-rose)',
-                          }}
-                        >
-                          {task.status.toUpperCase()}
-                        </span>
-
-                        {task.status === 'running' && (
-                          <button
-                            className="btn btn-danger btn-sm"
-                            onClick={() => updateTask(task.id, { status: 'cancelled' })}
-                          >
-                            Batalkan
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <pre
-                      style={{
-                        margin: '8px 0',
-                        padding: 8,
-                        background: '#070a0f',
-                        borderRadius: 4,
-                        fontSize: 11,
-                        color: 'var(--text-main)',
-                      }}
-                    >
-                      {task.command}
-                    </pre>
-
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        fontSize: 11,
-                        color: 'var(--text-sub)',
-                      }}
-                    >
-                      <span>CWD: {task.cwd}</span>
-                      <span>{task.durationMs ? `${task.durationMs}ms` : ''}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
         {activeTab === 'logs' && (
           <div className="card">

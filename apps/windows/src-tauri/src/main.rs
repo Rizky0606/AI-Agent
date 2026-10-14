@@ -295,11 +295,24 @@ async fn read_loopback_query(listener: &tokio::net::TcpListener) -> Result<Strin
     Ok(query)
 }
 
+/// The `cmd` command line that opens `url` in the default browser.
+///
+/// `cmd` treats an unquoted `&` as a command separator, so an unquoted start URL loses every
+/// query parameter after the first one — which is how `code_challenge` and `state` used to vanish
+/// and the API answered `VALIDATION_ERROR`. The leading `""` is the window title `start` expects;
+/// without it the URL itself would be consumed as the title.
+fn browser_command_line(url: &str) -> String {
+    format!("start \"\" \"{url}\"")
+}
+
 #[cfg(windows)]
 fn open_in_browser(url: &str) -> Result<(), String> {
-    // `start` needs an empty title argument, otherwise a quoted URL is taken as the window title.
+    use std::os::windows::process::CommandExt;
+    // Rust escapes embedded quotes when it builds a Windows command line, which would turn the
+    // quotes above into `\"` and hand `cmd` a broken argument, so the line is appended verbatim.
     std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
+        .arg("/C")
+        .raw_arg(browser_command_line(url))
         .spawn()
         .map(|_child| ())
         .map_err(|error| format!("Could not open the browser: {error}"))
@@ -370,4 +383,22 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_command_line;
+
+    #[test]
+    fn browser_command_line_keeps_every_query_separator_inside_quotes() {
+        let url = "https://ai.ojixx.my.id/v1/auth/google/start?redirect_uri=http://127.0.0.1:54810/auth&code_challenge=E9Melhoa&state=verify2";
+        let line = browser_command_line(url);
+
+        // Whatever `cmd` sees outside the quoted spans is syntax to it. An unquoted `&` would end
+        // the command there, which is exactly the bug this pins.
+        let unquoted: String = line.split('"').step_by(2).collect();
+        assert!(!unquoted.contains('&'), "unquoted `&` would split the command: {line}");
+        assert!(line.starts_with("start \"\" "), "`start` needs the empty title argument: {line}");
+        assert!(line.ends_with(&format!("\"{url}\"")), "the URL must be the last quoted argument: {line}");
+    }
 }

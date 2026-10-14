@@ -89,3 +89,51 @@ test('FCM Service: marks status as active when credentials are provided', () => 
   assert.equal(status.status, 'active');
   assert.match(status.reason, /aktif/i);
 });
+
+test('Health: reads dependency state from /ready, which is the endpoint that reports it', async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: string[] = [];
+  globalThis.fetch = async (input) => {
+    seen.push(input.toString());
+    // The real /ready body, captured from production.
+    return new Response(JSON.stringify({ status: 'ready', checks: { database: true, redis: true } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    const client = new ApiClient({ storage: new InMemoryTokenStorage(), baseUrl: 'http://test-server.local' });
+    const health = await client.checkHealth();
+
+    assert.deepEqual(seen, ['http://test-server.local/ready']);
+    assert.equal(health.status, 'ready');
+    assert.equal(health.database, 'connected');
+    assert.equal(health.redis, 'connected');
+    // A `StatusPill` rendered from these must always get a string; `undefined` used to throw.
+    assert.equal(typeof health.database, 'string');
+    assert.equal(typeof health.redis, 'string');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Health: a 503 from /ready is still a reading, not a thrown error', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ status: 'not_ready', checks: { database: true, redis: false } }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  try {
+    const client = new ApiClient({ storage: new InMemoryTokenStorage(), baseUrl: 'http://test-server.local' });
+    const health = await client.checkHealth();
+
+    assert.equal(health.status, 'not_ready');
+    assert.equal(health.database, 'connected');
+    assert.equal(health.redis, 'disconnected');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

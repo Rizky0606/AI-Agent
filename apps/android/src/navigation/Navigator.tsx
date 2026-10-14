@@ -145,12 +145,7 @@ export const AppNavigator: React.FC = () => {
         if (showingArtifacts) {
           return <ArtifactsScreen />;
         }
-        return (
-          <SettingsScreen
-            onNavigateToArtifacts={() => setShowingArtifacts(true)}
-            onHandleDeepLink={handleDeepLinkTarget}
-          />
-        );
+        return <SettingsScreen onNavigateToArtifacts={() => setShowingArtifacts(true)} />;
     }
   };
 

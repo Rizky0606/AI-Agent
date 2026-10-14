@@ -148,9 +148,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       <View style={styles.inputBar}>
         <View style={styles.inputControlsRow}>
-          <Text style={styles.attachmentUnavailable}>Attachments unavailable: upload service not configured.</Text>
-        </View>
-        <View style={styles.inputControlsRow}>
           <Text style={styles.selectorLabel}>Mode: {selectedMode}</Text>
           <TouchableOpacity onPress={() => setSelectedMode(selectedMode === 'auto' ? 'fast' : selectedMode === 'fast' ? 'coding' : selectedMode === 'coding' ? 'complex' : selectedMode === 'complex' ? 'research' : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity>
           <Text style={styles.selectorLabel}>Model: {selectedModel}</Text>
@@ -192,7 +189,6 @@ const styles = StyleSheet.create({
   cancelButtonText: { color: theme.colors.danger, fontSize: 11, fontWeight: '600' },
   inputBar: { backgroundColor: theme.colors.surface, borderTopWidth: 1, borderTopColor: theme.colors.surfaceBorder, padding: theme.spacing.sm },
   inputControlsRow: { flexDirection: 'row', alignItems: 'center' },
-  attachmentUnavailable: { color: theme.colors.textMuted, fontSize: 11 },
   selectorLabel: { color: theme.colors.textMuted, fontSize: 11, marginRight: theme.spacing.xs },
   selectorButton: { color: theme.colors.primary, fontSize: 11, marginRight: theme.spacing.sm },
   textInput: { flex: 1, backgroundColor: theme.colors.surfaceElevated, color: theme.colors.textPrimary, paddingHorizontal: theme.spacing.md, paddingVertical: 8, borderRadius: theme.borderRadius.full, maxHeight: 100, fontSize: 14 },
