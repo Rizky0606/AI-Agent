@@ -13,12 +13,21 @@ export interface ChatState {
   draftAttachments: MessageAttachment[];
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
   error: string | null;
+  isSending: boolean;
+  isCancelling: boolean;
+  pendingDraft: { text: string; attachments: MessageAttachment[] } | null;
   // Actions
   setModels: (models: ModelDescriptor[]) => void;
   setSelectedModel: (model: string) => void;
   setSelectedMode: (mode: ChatMode) => void;
   setConversationId: (id: string | null) => void;
+  remapConversationId: (id: string) => void;
   setMessages: (messages: ChatMessage[]) => void;
+  hydrateMessages: (conversationId: string, messages: ChatMessage[]) => void;
+  beginSend: () => void;
+  acknowledgeSend: () => void;
+  failSend: (error: string) => void;
+  requestCancellation: () => void;
   appendMessage: (message: ChatMessage) => void;
   startStreaming: (tempId: string) => void;
   appendDelta: (delta: string) => void;
@@ -48,32 +57,68 @@ export const createChatStore = () =>
     draftAttachments: [],
     connectionStatus: 'disconnected',
     error: null,
+    isSending: false,
+    isCancelling: false,
+    pendingDraft: null,
 
     setModels: (models) => set({ models }),
     setSelectedModel: (selectedModel) => set({ selectedModel }),
     setSelectedMode: (selectedMode) => set({ selectedMode }),
 
     setConversationId: (id) =>
-      set({ currentConversationId: id, messages: [], streamingDelta: '', isStreaming: false }),
+      set((state) => state.currentConversationId === id ? {} : {
+        currentConversationId: id, messages: [], streamingDelta: '', isStreaming: false,
+        streamingMessageId: null, isSending: false, isCancelling: false, error: null,
+      }),
+    remapConversationId: (id) => set({ currentConversationId: id }),
 
     setMessages: (messages) => set({ messages }),
+    hydrateMessages: (conversationId, messages) => set((state) => {
+      if (state.currentConversationId !== conversationId) return {};
+      const live = new Map(state.messages.map((message) => [message.id, message]));
+      return { messages: [
+        ...messages.map((message) => live.get(message.id) ?? message),
+        ...state.messages.filter((message) => !messages.some((item) => item.id === message.id)),
+      ] };
+    }),
+    beginSend: () => set((state) => ({
+      isSending: true, error: null,
+      pendingDraft: { text: state.draftText, attachments: state.draftAttachments },
+    })),
+    acknowledgeSend: () => set((state) => ({
+      draftText: state.draftText === state.pendingDraft?.text ? '' : state.draftText,
+      draftAttachments: state.draftAttachments === state.pendingDraft?.attachments ? [] : state.draftAttachments,
+    })),
+    failSend: (error) => set((state) => ({
+      error, isSending: false, pendingDraft: null,
+      draftText: state.pendingDraft
+        ? [state.pendingDraft.text, state.draftText === state.pendingDraft.text ? '' : state.draftText].filter(Boolean).join('\n') : state.draftText,
+      draftAttachments: state.pendingDraft
+        ? [...state.pendingDraft.attachments, ...state.draftAttachments.filter((attachment) => !state.pendingDraft!.attachments.includes(attachment))]
+        : state.draftAttachments,
+    })),
+    requestCancellation: () => set({ isCancelling: true }),
 
     appendMessage: (message) =>
       set((state) => ({
-        messages: [...state.messages, message],
+        messages: state.messages.some((m) => m.id === message.id)
+          ? state.messages.map((m) => m.id === message.id ? { ...m, ...message } : m)
+          : [...state.messages, message],
       })),
 
     startStreaming: (tempId) =>
-      set({
+      set((state) => ({
         isStreaming: true,
         streamingMessageId: tempId,
-        streamingDelta: '',
+        streamingDelta: state.messages.find((message) => message.id === tempId)?.content ?? '',
         error: null,
-      }),
+      })),
 
     appendDelta: (delta) =>
       set((state) => ({
         streamingDelta: state.streamingDelta + delta,
+        messages: state.messages.map((message) => message.id === state.streamingMessageId
+          ? { ...message, content: message.content + delta } : message),
       })),
 
     finishStreaming: (completedMessage) =>
@@ -85,31 +130,21 @@ export const createChatStore = () =>
         return {
           messages: [...filtered, completedMessage],
           isStreaming: false,
+          isSending: false,
+          isCancelling: false,
+          pendingDraft: null,
           streamingMessageId: null,
           streamingDelta: '',
         };
       }),
 
     cancelStreaming: () =>
-      set((state) => {
-        if (!state.isStreaming) return state;
-        // Keep partial delta if any
-        const partialMessage: ChatMessage | null = state.streamingMessageId
-          ? {
-              id: state.streamingMessageId,
-              conversationId: state.currentConversationId ?? '',
-              role: 'assistant',
-              content: state.streamingDelta + ' [cancelled]',
-              createdAt: new Date().toISOString(),
-            }
-          : null;
-
-        return {
-          messages: partialMessage ? [...state.messages, partialMessage] : state.messages,
-          isStreaming: false,
-          streamingMessageId: null,
-          streamingDelta: '',
-        };
+      set({
+        isStreaming: false,
+        isSending: false,
+        isCancelling: false,
+        streamingMessageId: null,
+        streamingDelta: '',
       }),
 
     setDraftText: (draftText) => set({ draftText }),

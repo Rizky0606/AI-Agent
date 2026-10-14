@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
 import { ApiClient, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor } from '../api/client.ts';
-import { type ConnectionStatus } from '../connection/agent-connection.ts';
+import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
 import { PathValidator } from '../security/path-validator.ts';
+import type { ICommandExecutor } from '../security/types.ts';
 import { type DeviceIdentity, DeviceIdentityManager } from '../connection/device-identity.ts';
 import { invoke } from '@tauri-apps/api/core';
 import { buildGoogleStartUrl, codeChallengeFor, parseCallbackQuery, randomBase64Url } from '../auth/google.ts';
@@ -114,6 +115,7 @@ export interface AgentState {
   cancelChat: () => void;
   retryChat: () => void;
   clearChatError: () => void;
+  refreshChat: () => Promise<void>;
   setSelectedModel: (model: string) => void;
   setSelectedMode: (mode: AgentState['selectedMode']) => void;
   refreshServerTasks: () => Promise<void>;
@@ -137,9 +139,12 @@ export const createAgentStore = (
   registry: CapabilityRegistry,
   pathValidator: PathValidator,
   identityMgr: DeviceIdentityManager,
-  executor?: import('../security/types.ts').ICommandExecutor,
+  executor?: ICommandExecutor,
 ) => {
-  let activeConnection: import('../connection/agent-connection.ts').AgentConnection | null = null;
+  let activeChatConnection: ChatConnection | null = null;
+  let pendingChat: { content: string; conversationId: string } | null = null;
+  let chatScope: string | null = null;
+  let activeConnection: AgentConnection | null = null;
   let loginInFlight = false;
   const getInitialCapabilities = (): Record<CapabilityName, boolean> => {
     const rules = registry.getAllRules();
@@ -237,13 +242,28 @@ export const createAgentStore = (
     models: [],
     modelCatalogStatus: null,
 
-    setServerUrl: (url) => set({ serverUrl: url }),
+    setServerUrl: (url) => { if (get().serverUrl === url) return; set({ serverUrl: url }); void get().refreshChat(); },
     setChatDraft: (chatDraft) => set({ chatDraft }),
     setActiveConversation: (activeConversationId) => set({ activeConversationId }),
-    newConversation: () => { const id = crypto.randomUUID(); set((state) => ({ conversations: [{ id, title: 'New conversation', messages: [] }, ...state.conversations], activeConversationId: id })); },
-    sendChat: () => { const state = get(); if (!state.chatDraft.trim() || !activeConnection) return; const id = state.activeConversationId || crypto.randomUUID(); set({ activeConversationId: id, chatDraft: '', chatStreaming: true }); activeConnection.sendChatMessage({ type: 'chat.send', conversationId: id, content: state.chatDraft.trim(), model: state.selectedModel === 'auto' ? undefined : state.selectedModel, mode: state.selectedMode }); },
-    cancelChat: () => { activeConnection?.cancelChat(); set({ chatStreaming: false }); },
-    retryChat: () => undefined,
+    newConversation: () => { const id = `draft-${crypto.randomUUID()}`; set((state) => ({ conversations: [{ id, title: 'New conversation', messages: [] }, ...state.conversations], activeConversationId: id, chatError: null })); },
+    sendChat: () => {
+      const state = get();
+      const content = state.chatDraft.trim();
+      if (!content || state.chatStreaming) return;
+      if (!state.authToken.trim() || !activeChatConnection) { set({ chatError: 'Sign in to send a message.' }); return; }
+      const id = state.activeConversationId || `draft-${crypto.randomUUID()}`;
+      pendingChat = { content, conversationId: id };
+      set((current) => ({ activeConversationId: id, chatDraft: '', chatStreaming: true, chatError: null, conversations: current.conversations.some((item) => item.id === id) ? current.conversations : [{ id, title: content.slice(0, 48), messages: [] }, ...current.conversations] }));
+      activeChatConnection.sendChatMessage({ type: 'chat.send', ...(!id.startsWith('draft-') ? { conversationId: id } : {}), content, model: state.selectedModel === 'auto' ? undefined : state.selectedModel, mode: state.selectedMode });
+    },
+    cancelChat: () => { activeChatConnection?.cancelChat(); },
+    retryChat: () => {
+      const pending = pendingChat;
+      if (get().chatStreaming) return;
+      if (!pending) { set({ chatError: 'No failed message to retry. Enter a message first.' }); return; }
+      set({ chatDraft: pending.content, activeConversationId: pending.conversationId });
+      get().sendChat();
+    },
     clearChatError: () => set({ chatError: null }),
     setSelectedModel: (selectedModel) => set({ selectedModel }),
     setSelectedMode: (selectedMode) => set({ selectedMode }),
@@ -365,8 +385,10 @@ export const createAgentStore = (
       }
     }),
     setAuthToken: (token) => {
+      if (get().authToken === token) return;
       persistSession({ accessToken: token, refreshToken: get().refreshToken, email: get().userEmail });
       set({ authToken: token });
+      void get().refreshChat();
     },
     setDevice: (device) => set({ device }),
     setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -386,7 +408,6 @@ export const createAgentStore = (
         activeConnection.disconnect();
       }
 
-      const { AgentConnection } = await import('../connection/agent-connection.ts');
       const { TauriCommandExecutor } = await import('../security/tauri-executor.ts');
       const exec = executor ?? new TauriCommandExecutor(registry, pathValidator);
 
@@ -399,30 +420,77 @@ export const createAgentStore = (
         onStatusChange: (status) => set({ connectionStatus: status }),
         onDeviceId: (deviceId) => set({ device: identityMgr.setServerDeviceId(deviceId) }),
         onLogMessage: (level, msg) => get().addLog(level, msg),
-          onChatMessage: (frame) => set((current) => {
-            const conversationId = frame.conversationId ?? current.activeConversationId;
-            const conversations = current.conversations.map((conversation) => {
-              if (conversation.id !== conversationId) return conversation;
-              const id = frame.messageId ?? `assistant-${Date.now()}`;
-              const existing = conversation.messages.find((message) => message.id === id);
-              const content = frame.delta ? `${existing?.content ?? ''}${frame.delta}` : frame.content ?? existing?.content ?? '';
-              return { ...conversation, messages: existing ? conversation.messages.map((message) => message.id === id ? { ...message, content } : message) : [...conversation.messages, { id, role: 'assistant' as const, content }] };
-            });
-            return { conversations, chatStreaming: frame.type === 'message.delta', chatError: frame.type === 'error' ? frame.message ?? frame.code ?? 'Chat error' : current.chatError };
-          }),
+        // Chat runs on its own account-authenticated socket.
       });
 
       await activeConnection.connect();
     },
 
+    refreshChat: async () => {
+      const state = get();
+      const scope = `${state.serverUrl}\n${state.authToken}`;
+      if (chatScope === scope && activeChatConnection) return;
+      chatScope = scope;
+      set({ conversations: [{ id: '', title: 'New conversation', messages: [] }], activeConversationId: '', chatStreaming: false, chatError: null });
+      activeChatConnection?.disconnect();
+      activeChatConnection = new ChatConnection({
+        serverUrl: state.serverUrl,
+        token: state.authToken,
+        onFrame: (frame) => set((current) => {
+          if (`${current.serverUrl}\n${current.authToken}` !== scope) return {};
+          if (frame.type === 'conversation.created' && frame.conversationId) {
+            const provisional = pendingChat?.conversationId;
+            if (pendingChat && provisional) pendingChat = { ...pendingChat, conversationId: frame.conversationId };
+            const conversations = current.conversations.map((conversation) => conversation.id === provisional ? { ...conversation, id: frame.conversationId! } : conversation);
+            if (current.activeConversationId === provisional) return { conversations, activeConversationId: frame.conversationId };
+            return { conversations };
+          }
+          const conversationId = frame.conversationId ?? current.activeConversationId;
+          const incoming = typeof frame.message === 'object' && frame.message !== null ? frame.message : undefined;
+          const id = frame.messageId ?? incoming?.id;
+          if (frame.type === 'error') return { chatStreaming: false, chatError: typeof frame.message === 'string' ? frame.message : frame.code ?? 'Chat error' };
+          if (!conversationId || !id) return current;
+          const role = incoming?.role ?? 'assistant';
+          const conversations = current.conversations.map((conversation) => {
+            if (conversation.id !== conversationId) return conversation;
+            const existing = conversation.messages.find((message) => message.id === id);
+            const content = frame.delta ? `${existing?.content ?? ''}${frame.delta}` : incoming?.content ?? frame.content ?? existing?.content ?? '';
+            const message = { id, role: role === 'system' ? 'assistant' : role, content, cancelled: Boolean(incoming?.cancelled || incoming?.metadata?.['cancelled']) } as ChatMessage;
+            return { ...conversation, messages: existing ? conversation.messages.map((item) => item.id === id ? { ...item, ...message } : item) : [...conversation.messages, message] };
+          });
+          const done = frame.type === 'message.completed' || frame.type === 'message.cancelled';
+          if (done) pendingChat = null;
+          return { conversations, chatStreaming: !done };
+        }),
+      });
+      pendingChat = null;
+      if (!state.authToken.trim()) { activeChatConnection.disconnect(); activeChatConnection = null; return; }
+      try {
+        const history = await api().listConversations();
+        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Conversation', messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']) }] : []) })));
+        if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
+        set((current) => {
+          const merged = conversations.map((conversation) => {
+            const live = current.conversations.find((item) => item.id === conversation.id);
+            if (!live) return conversation;
+            return { ...conversation, messages: [...conversation.messages.map((message) => live.messages.find((item) => item.id === message.id) ?? message), ...live.messages.filter((message) => !conversation.messages.some((item) => item.id === message.id))] };
+          });
+          const live = current.conversations.filter((conversation) => conversation.id && !conversations.some((item) => item.id === conversation.id));
+          return { conversations: [...live, ...merged].length ? [...live, ...merged] : current.conversations, activeConversationId: current.activeConversationId || conversations[0]?.id || '' };
+        });
+      } catch (error) { set({ chatError: error instanceof Error ? error.message : String(error) }); }
+    },
+
     disconnectFromServer: () => {
+      activeChatConnection?.disconnect();
+      activeChatConnection = null;
       if (activeConnection) {
         activeConnection.disconnect();
         activeConnection = null;
       }
       eventsStream?.disconnect();
       eventsStream = null;
-      set({ connectionStatus: 'disconnected' });
+      set({ connectionStatus: 'disconnected', chatStreaming: false });
     },
 
     toggleCapability: (name, enabled) => {

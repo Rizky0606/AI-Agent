@@ -180,7 +180,9 @@ test('WebSocket /v1/chat/ws streams deltas, completes, and persists messages', a
 
   assert.ok(deltas.length >= 4);
   assert.ok(completed);
-  assert.equal(completed.content, 'Halo, saya adalah Personal AI OS.');
+  const completedMessage = completed.message as { id: string; content: string };
+  assert.equal(completedMessage.content, 'Halo, saya adalah Personal AI OS.');
+  assert.equal(completedMessage.id, completed.messageId);
 
   // Verify messages persisted
   const convCreated = events.find((e) => e.type === 'conversation.created');

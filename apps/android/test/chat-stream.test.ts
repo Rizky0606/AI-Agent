@@ -77,6 +77,7 @@ test('Chat streaming via WebSocket accumulates deltas into chatStore', async () 
     await new Promise((r) => setTimeout(r, 10));
     const mockWs = MockWebSocket.instances[0];
     assert.ok(mockWs);
+    mockWs.simulateServerMessage({ type: 'auth.ok' });
     assert.match(mockWs.url, /token=valid-chat-token/);
     assert.match(mockWs.url, /conversationId=conv-123/);
 
@@ -156,6 +157,7 @@ test('Chat streaming cancellation stops active stream', async () => {
     await new Promise((r) => setTimeout(r, 10));
     const mockWs = MockWebSocket.instances[0];
     assert.ok(mockWs);
+    mockWs.simulateServerMessage({ type: 'auth.ok' });
 
     // Start streaming message
     mockWs.simulateServerMessage({
@@ -178,6 +180,7 @@ test('Chat streaming cancellation stops active stream', async () => {
     const lastSent = JSON.parse(mockWs.sentPayloads[mockWs.sentPayloads.length - 1] ?? '{}');
     assert.equal(lastSent.type, 'chat.cancel');
     assert.equal(useChatStore.getState().isStreaming, false);
+    assert.equal(useChatStore.getState().messages.find((message) => message.id === 'msg-cancel-1')?.content, 'Bagian awal...');
 
     wsClient.disconnect();
   } finally {

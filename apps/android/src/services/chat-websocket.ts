@@ -13,11 +13,13 @@ export interface ChatWebSocketOptions {
 
 export class ChatWebSocketClient {
   private readonly client: ApiClient;
-  private readonly conversationId: string;
+  private conversationId: string;
   private ws: WebSocket | null = null;
   private isClosedExplicitly = false;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  private connectionGeneration = 0;
+  private authenticated = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private activeMessageId: string | null = null;
 
@@ -27,69 +29,55 @@ export class ChatWebSocketClient {
   }
 
   async connect(): Promise<void> {
+    const generation = ++this.connectionGeneration;
     this.isClosedExplicitly = false;
+    this.authenticated = false;
     const store = useChatStore.getState();
     store.setConnectionStatus('connecting');
-
     try {
       const token = await this.client.getStorage().getAccessToken();
-      if (!token) {
-        store.setConnectionStatus('disconnected');
-        store.setError('Unauthenticated: missing access token');
-        return;
-      }
-
-      const wsBase = this.client.getBaseWsUrl();
-      const wsUrl = `${wsBase}/v1/chat/ws?token=${encodeURIComponent(token)}&conversationId=${encodeURIComponent(this.conversationId)}`;
-
-      this.ws = new WebSocket(wsUrl);
-
-      this.ws.onopen = () => {
-        this.reconnectAttempts = 0;
-        useChatStore.getState().setConnectionStatus('connected');
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data as string);
-          this.handleFrame(data);
-        } catch {
-          // invalid JSON frame
-        }
-      };
-
-      this.ws.onerror = () => {
-        useChatStore.getState().setError('WebSocket connection error');
-      };
-
+      if (generation !== this.connectionGeneration) return;
+      if (!token) { store.setConnectionStatus('disconnected'); store.setError('Unauthenticated: missing access token'); return; }
+      this.ws = new WebSocket(`${this.client.getBaseWsUrl()}/v1/chat/ws?token=${encodeURIComponent(token)}&conversationId=${encodeURIComponent(this.conversationId)}`);
+      this.ws.onopen = () => { if (generation === this.connectionGeneration) this.reconnectAttempts = 0; };
+      this.ws.onmessage = (event) => { if (generation !== this.connectionGeneration) return; try { this.handleFrame(JSON.parse(event.data as string)); } catch { /* ignore malformed frame */ } };
+      this.ws.onerror = () => { if (generation === this.connectionGeneration) useChatStore.getState().setError('WebSocket connection error'); };
       this.ws.onclose = () => {
-        if (!this.isClosedExplicitly) {
-          this.scheduleReconnect();
-        } else {
-          useChatStore.getState().setConnectionStatus('disconnected');
-        }
+        if (generation !== this.connectionGeneration) return;
+        this.authenticated = false;
+        const current = useChatStore.getState();
+        if (current.isSending || current.isStreaming) { current.failSend('Chat connection closed. Retry your message.'); current.cancelStreaming(); }
+        if (!this.isClosedExplicitly) this.scheduleReconnect(); else current.setConnectionStatus('disconnected');
       };
-    } catch (err) {
-      store.setConnectionStatus('disconnected');
-      store.setError(err instanceof Error ? err.message : 'Failed to connect');
-    }
+    } catch (err) { store.setConnectionStatus('disconnected'); store.setError(err instanceof Error ? err.message : 'Failed to connect'); }
   }
 
   private handleFrame(frame: Record<string, unknown>): void {
     const store = useChatStore.getState();
-
     switch (frame['type']) {
+
+      case 'auth.ok':
+        this.authenticated = true;
+        store.setConnectionStatus('connected');
+        return;
+      case 'conversation.created': {
+        const id = frame['conversationId'];
+        if (typeof id === 'string') { this.conversationId = id; store.remapConversationId(id); }
+        return;
+      }
       case 'message.created': {
         const msg = frame['message'] as ChatMessage;
-        this.activeMessageId = msg.id;
         store.appendMessage(msg);
-        store.startStreaming(msg.id);
+        if (msg.role === 'user') store.acknowledgeSend();
+        if (msg.role === 'assistant') {
+          this.activeMessageId = msg.id;
+          store.startStreaming(msg.id);
+        }
         break;
       }
       case 'message.delta': {
-        if (typeof frame['delta'] === 'string') {
-          store.appendDelta(frame['delta']);
-        }
+        if (!this.authenticated) return;
+        if (typeof frame['delta'] === 'string') store.appendDelta(frame['delta']);
         break;
       }
       case 'message.completed': {
@@ -98,14 +86,16 @@ export class ChatWebSocketClient {
         this.activeMessageId = null;
         break;
       }
-      case 'message.error': {
-        const errObj = frame['error'] as { message?: string } | undefined;
-        store.setError(errObj?.message ?? 'Model stream error');
-        store.cancelStreaming();
+      case 'message.cancelled': {
+        const cancelledMsg = frame['message'] as ChatMessage | undefined;
+        if (cancelledMsg) store.finishStreaming(cancelledMsg);
+        else store.cancelStreaming();
         this.activeMessageId = null;
         break;
       }
-      case 'chat.cancelled': {
+      case 'error': {
+        store.setError(typeof frame['message'] === 'string' ? frame['message'] : 'Model stream error');
+        store.failSend(typeof frame['message'] === 'string' ? frame['message'] : 'Model stream error');
         store.cancelStreaming();
         this.activeMessageId = null;
         break;
@@ -120,12 +110,13 @@ export class ChatWebSocketClient {
     mode?: ChatMode | undefined;
     workspaceId?: string | undefined;
   }): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.authenticated) {
       throw new Error('Chat WebSocket is not connected');
     }
 
     const payload = {
       type: 'chat.send',
+      ...(this.conversationId ? { conversationId: this.conversationId } : {}),
       content: params.content,
       attachments: params.attachments ?? [],
       model: params.model,
@@ -138,11 +129,12 @@ export class ChatWebSocketClient {
   }
 
   cancelActiveStream(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    const store = useChatStore.getState();
+    store.cancelStreaming();
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.authenticated) {
+      store.requestCancellation();
       this.ws.send(JSON.stringify({ type: 'chat.cancel', messageId: this.activeMessageId }));
     }
-    useChatStore.getState().cancelStreaming();
-    this.activeMessageId = null;
   }
 
   private scheduleReconnect(): void {
@@ -163,7 +155,9 @@ export class ChatWebSocketClient {
   }
 
   disconnect(): void {
+    this.connectionGeneration++;
     this.isClosedExplicitly = true;
+    this.authenticated = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
       this.ws.close();

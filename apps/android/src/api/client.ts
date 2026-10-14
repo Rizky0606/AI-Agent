@@ -282,9 +282,6 @@ export class ApiClient {
   }
 
   // --- Conversations & Messages ---
-  async listConversations(): Promise<{ conversations: Conversation[] }> {
-    return this.request<{ conversations: Conversation[] }>('/v1/conversations');
-  }
 
   async getConversation(conversationId: string): Promise<{ conversation: Conversation }> {
     return this.request<{ conversation: Conversation }>(`/v1/conversations/${conversationId}`);
@@ -306,11 +303,6 @@ export class ApiClient {
     });
   }
 
-  async listMessages(conversationId: string): Promise<{ messages: ChatMessage[] }> {
-    return this.request<{ messages: ChatMessage[] }>(
-      `/v1/conversations/${conversationId}/messages`,
-    );
-  }
 
   async postMessage(
     conversationId: string,
@@ -326,6 +318,14 @@ export class ApiClient {
 
   async listModels(): Promise<ModelCatalogResponse> {
     return this.request<ModelCatalogResponse>('/v1/models');
+  }
+  async listConversations(projectId?: string): Promise<{ conversations: Conversation[] }> {
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    return this.request<{ conversations: Conversation[] }>(`/v1/conversations${query}`);
+  }
+
+  async listMessages(conversationId: string): Promise<{ messages: ChatMessage[] }> {
+    return this.request<{ messages: ChatMessage[] }>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`);
   }
 
   async refreshModels(): Promise<ModelCatalogResponse> {

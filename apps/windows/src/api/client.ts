@@ -59,6 +59,9 @@ export interface AuthSession {
   refreshToken: string;
   user: { id: string; email: string };
 }
+export interface WindowsChatMessage { id: string; conversationId: string; role: 'user' | 'assistant' | 'system'; content: string; metadata?: Record<string, unknown>; createdAt: string; cancelled?: boolean; }
+export interface WindowsConversation { id: string; title: string | null; projectId: string; createdAt: string; }
+
 
 export class ApiError extends Error {
   readonly status: number;
@@ -282,5 +285,13 @@ export class ApiClient {
   // --- Models ---
   async listModels(): Promise<ModelCatalogResponse> {
     return this.request<ModelCatalogResponse>('/v1/models');
+  }
+  async listConversations(projectId?: string): Promise<{ conversations: WindowsConversation[] }> {
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    return this.request<{ conversations: WindowsConversation[] }>(`/v1/conversations${query}`);
+  }
+
+  async listMessages(conversationId: string): Promise<{ messages: WindowsChatMessage[] }> {
+    return this.request<{ messages: WindowsChatMessage[] }>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`);
   }
 }

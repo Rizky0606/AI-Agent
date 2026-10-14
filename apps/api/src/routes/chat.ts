@@ -40,6 +40,26 @@ type IncomingWsMessage =
 
 export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependencies): void => {
 
+  app.get('/v1/conversations', async (request: FastifyRequest, reply) => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) throw new AuthError('UNAUTHENTICATED', 'authentication required');
+    const user = await deps.auth.authenticate(authHeader.slice(7));
+    const query = request.query as { projectId?: string };
+    const conversations = await deps.chatRepo.listConversations(user.id, query.projectId);
+    return reply.send({ conversations: conversations.map((conversation) => ({ ...conversation, createdAt: conversation.createdAt.toISOString() })) });
+  });
+
+  app.get('/v1/conversations/:conversationId/messages', async (request: FastifyRequest, reply) => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) throw new AuthError('UNAUTHENTICATED', 'authentication required');
+    const user = await deps.auth.authenticate(authHeader.slice(7));
+    const { conversationId } = request.params as { conversationId: string };
+    const conversation = await deps.chatRepo.getConversation(user.id, conversationId);
+    if (!conversation) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
+    const messages = await deps.chatRepo.getMessages(user.id, conversationId);
+    return reply.send({ messages: messages.map((message) => ({ ...message, createdAt: message.createdAt.toISOString() })) });
+  });
+
   // HTTP REST chat completion endpoint
   app.post(
     '/v1/chat',
@@ -62,7 +82,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
                 required: ['type', 'url'],
                 properties: {
                   type: { type: 'string', enum: ['image'] },
-                  url: { type: 'string', minLength: 1 },
+                  url: { type: 'string', minLength: 1, pattern: '^https?://' },
                 },
               },
             },
@@ -86,6 +106,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         content: string;
         attachments?: Array<{ type: 'image'; url: string }>;
       };
+      if (!body.content.trim()) return reply.code(400).send({ error: { code: 'INVALID_CONTENT', message: 'Message content cannot be blank' } });
       const hasVisionAttachments = Boolean(body.attachments && body.attachments.length > 0);
       const projectId = body.projectId ?? (await deps.chatRepo.getOrCreateDefaultProject(user.id));
       const sessionMetadata = {
@@ -184,25 +205,30 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         ? request.headers.authorization.slice(7)
         : undefined);
 
+    let authReady: Promise<void> | null = null;
     if (tokenCandidate) {
-      deps.auth
-        .authenticate(tokenCandidate)
-        .then((user) => {
-          currentUser = user;
-          send({ type: 'auth.ok', userId: user.id });
-        })
-        .catch(() => {
-          send({ type: 'error', code: 'UNAUTHENTICATED', message: 'Invalid authentication token' });
-          socket.close(1008, 'Authentication failed');
-        });
+      authReady = deps.auth.authenticate(tokenCandidate).then((user) => {
+        currentUser = user;
+        send({ type: 'auth.ok', userId: user.id });
+      }).catch(() => {
+        send({ type: 'error', code: 'UNAUTHENTICATED', message: 'Invalid authentication token' });
+        socket.close(1008, 'Authentication failed');
+      });
     }
 
     socket.on('message', async (raw: Buffer | string) => {
+      if (authReady && !currentUser) {
+        try { await authReady; } catch { return; }
+      }
       let data: IncomingWsMessage;
       try {
         data = JSON.parse(raw.toString()) as IncomingWsMessage;
       } catch {
         send({ type: 'error', code: 'INVALID_JSON', message: 'Malformed JSON payload' });
+        return;
+      }
+      if (!data || typeof data !== 'object' || !['ping', 'auth', 'chat.send', 'chat.cancel'].includes(data.type)) {
+        send({ type: 'error', code: 'INVALID_FRAME', message: 'Unsupported chat frame' });
         return;
       }
 
@@ -212,13 +238,16 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
       }
 
       if (data.type === 'auth') {
-        try {
-          currentUser = await deps.auth.authenticate(data.token);
-          send({ type: 'auth.ok', userId: currentUser.id });
-        } catch {
+        if (currentUser) { send({ type: 'auth.ok', userId: currentUser.id }); return; }
+        if (typeof data.token !== 'string' || !data.token) { send({ type: 'error', code: 'UNAUTHENTICATED', message: 'Authentication token required' }); return; }
+        authReady = deps.auth.authenticate(data.token).then((user) => {
+          currentUser = user;
+          send({ type: 'auth.ok', userId: user.id });
+        }).catch(() => {
           send({ type: 'error', code: 'UNAUTHENTICATED', message: 'Authentication failed' });
           socket.close(1008, 'Authentication failed');
-        }
+        });
+        await authReady;
         return;
       }
 
@@ -235,18 +264,28 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         if (data.messageId && activeStreams.has(data.messageId)) {
           const controller = activeStreams.get(data.messageId)!;
           controller.abort();
-          activeStreams.delete(data.messageId);
-        } else {
+        } else if (!data.messageId) {
           // Cancel all active streams for this socket if messageId is omitted
           for (const controller of activeStreams.values()) {
             controller.abort();
           }
-          activeStreams.clear();
         }
         return;
       }
 
       if (data.type === 'chat.send') {
+        if (typeof data.content !== 'string' || data.content.trim().length === 0 || data.content.length > 30000) {
+          send({ type: 'error', code: 'INVALID_CONTENT', message: 'Message content must be 1-30000 characters' });
+          return;
+        }
+        const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if ([data.conversationId, data.projectId, data.workspaceId].some((id) => id !== undefined && (typeof id !== 'string' || !uuid.test(id))) ||
+            data.model !== undefined && (typeof data.model !== 'string' || data.model.length === 0 || data.model.length > 200) ||
+            data.mode !== undefined && !['auto', 'fast', 'coding', 'complex', 'research'].includes(data.mode) ||
+            data.attachments !== undefined && (!Array.isArray(data.attachments) || data.attachments.some((attachment) => !attachment || attachment.type !== 'image' || typeof attachment.url !== 'string' || !/^https?:\/\//i.test(attachment.url)))) {
+          send({ type: 'error', code: 'INVALID_PAYLOAD', message: 'Invalid chat metadata or attachments' });
+          return;
+        }
         const hasVisionAttachments = Boolean(data.attachments && data.attachments.length > 0);
 
         const requirements = {
@@ -255,19 +294,23 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
           preferredModel: data.model,
           taskType: taskTypeForMode(data.mode),
         };
-        const resolution = await deps.router.resolveModel(requirements);
-        if (!resolution.ok) {
-          send({ type: 'error', code: resolution.error, message: resolution.message });
-          return;
-        }
 
+        if (activeStreams.size > 0) { send({ type: 'error', code: 'CHAT_BUSY', message: 'Wait for the active response before sending another message' }); return; }
         const user = currentUser;
         const assistantMessageId = randomUUID();
         const controller = new AbortController();
         activeStreams.set(assistantMessageId, controller);
 
         let conversationId = data.conversationId;
+        let accumulated = '';
         try {
+        try {
+          const resolution = await deps.router.resolveModel(requirements);
+          if (!resolution.ok) { send({ type: 'error', code: resolution.error, message: resolution.message }); return; }
+        } catch (error) {
+          send({ type: 'error', code: 'MODEL_ERROR', message: error instanceof Error ? error.message : 'Model unavailable' });
+          return;
+        }
           const projectId =
             data.projectId ?? (await deps.chatRepo.getOrCreateDefaultProject(user.id));
           const sessionMetadata = {
@@ -286,16 +329,40 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             await deps.chatRepo.updateConversation(user.id, conversationId, sessionMetadata);
           }
 
-          if (!data.conversationId) {
+          if (conversationId !== data.conversationId) {
             send({ type: 'conversation.created', conversationId });
           }
 
-          // Persist user prompt
-          await deps.chatRepo.appendMessage(user.id, conversationId, 'user', data.content, {
+          // Persist and announce the user message so every client renders the same transcript.
+          const savedUser = await deps.chatRepo.appendMessage(user.id, conversationId, 'user', data.content, {
             attachments: data.attachments,
             mode: data.mode ?? 'auto',
             model: data.model ?? null,
             workspaceId: data.workspaceId ?? null,
+          });
+          send({
+            type: 'message.created',
+            conversationId,
+            message: {
+              id: savedUser.id,
+              conversationId,
+              role: savedUser.role,
+              content: savedUser.content,
+              createdAt: savedUser.createdAt,
+              metadata: savedUser.metadata,
+            },
+          });
+
+          send({
+            type: 'message.created',
+            conversationId,
+            message: {
+              id: assistantMessageId,
+              conversationId,
+              role: 'assistant',
+              content: '',
+              createdAt: new Date().toISOString(),
+            },
           });
 
           // Fetch context messages
@@ -305,7 +372,6 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             content: m.content,
           }));
 
-          let accumulated = '';
           let lastUsage: Record<string, unknown> | undefined;
           let resolvedModel = 'default';
 
@@ -324,6 +390,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
               accumulated += chunk.delta;
               send({
                 type: 'message.delta',
+                conversationId,
                 messageId: assistantMessageId,
                 delta: chunk.delta,
               });
@@ -333,30 +400,46 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             }
           }
           if (controller.signal.aborted) {
-            await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
+            const savedAssistant = await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
               cancelled: true,
               resolvedModel,
               mode: data.mode ?? 'auto',
               model: data.model ?? null,
               workspaceId: data.workspaceId ?? null,
-            });
+            }, assistantMessageId);
             send({
               type: 'message.cancelled',
+              conversationId,
               messageId: assistantMessageId,
-              content: accumulated,
+              message: {
+                id: savedAssistant.id,
+                conversationId,
+                role: savedAssistant.role,
+                content: savedAssistant.content,
+                createdAt: savedAssistant.createdAt,
+                metadata: savedAssistant.metadata,
+              },
             });
           } else {
-            await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
+            const savedAssistant = await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
               usage: lastUsage,
               resolvedModel,
               mode: data.mode ?? 'auto',
               model: data.model ?? null,
               workspaceId: data.workspaceId ?? null,
-            });
+            }, assistantMessageId);
             send({
               type: 'message.completed',
+              conversationId,
               messageId: assistantMessageId,
-              content: accumulated,
+              message: {
+                id: savedAssistant.id,
+                conversationId,
+                role: savedAssistant.role,
+                content: savedAssistant.content,
+                createdAt: savedAssistant.createdAt,
+                metadata: savedAssistant.metadata,
+              },
               usage: lastUsage,
               resolvedModel,
               mode: data.mode ?? 'auto',
@@ -365,22 +448,34 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         } catch (err) {
           if (controller.signal.aborted) {
             if (conversationId) {
-              await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', '', {
+              const savedAssistant = await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
                 cancelled: true,
                 mode: data.mode ?? 'auto',
                 model: data.model ?? null,
                 workspaceId: data.workspaceId ?? null,
+              }, assistantMessageId);
+              send({
+                type: 'message.cancelled',
+                conversationId,
+                messageId: assistantMessageId,
+                message: {
+                  id: savedAssistant.id,
+                  conversationId,
+                  role: savedAssistant.role,
+                  content: savedAssistant.content,
+                  createdAt: savedAssistant.createdAt,
+                  metadata: savedAssistant.metadata,
+                },
               });
             }
-            send({
-              type: 'message.cancelled',
-              messageId: assistantMessageId,
-              content: '',
-            });
           } else {
             const code = err instanceof ModelGatewayError ? err.code : 'STREAM_ERROR';
             const message = err instanceof Error ? err.message : 'Chat streaming failed';
-            send({ type: 'error', code, message });
+            if (conversationId && accumulated) {
+              try { await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, { failed: true, error: message }, assistantMessageId); }
+              catch { /* Keep the stream error visible even if persistence also fails. */ }
+            }
+            send({ type: 'error', code, message, conversationId, messageId: assistantMessageId });
           }
         } finally {
           activeStreams.delete(assistantMessageId);

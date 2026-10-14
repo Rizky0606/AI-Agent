@@ -31,13 +31,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 }) => {
   const {
     messages,
-    setMessages,
+    hydrateMessages,
+    setConversationId,
     isStreaming,
-    streamingDelta,
+    isSending,
+    isCancelling,
     draftText,
     setDraftText,
-    clearDraft,
-    setConversationId,
+    beginSend,
+    failSend,
+    error,
     models,
     selectedModel,
     selectedMode,
@@ -46,7 +49,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setSelectedMode,
     connectionStatus,
   } = useChatStore();
-  const { data: initialMessages, isLoading: isLoadingInitial } = useMessages(conversationId);
+  const { data: initialMessages, isLoading: isLoadingInitial, error: historyError } = useMessages(conversationId);
   useEffect(() => {
     void defaultApiClient.listModels().then((catalog) => setModels(catalog.models)).catch(() => setModels([]));
   }, [setModels]);
@@ -65,31 +68,25 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   }, [conversationId, setConversationId]);
 
   useEffect(() => {
-    if (initialMessages) setMessages(initialMessages);
-  }, [initialMessages, messages.length, setMessages]);
-
+    if (initialMessages) hydrateMessages(conversationId, initialMessages);
+  }, [conversationId, initialMessages, hydrateMessages]);
   const handleSend = () => {
     const trimmed = draftText.trim();
     if (!trimmed || !wsClientRef.current) return;
-    useChatStore.getState().appendMessage({
-      id: `client-msg-${Date.now()}`,
-      conversationId,
-      role: 'user',
-      content: trimmed,
-      createdAt: new Date().toISOString(),
-    });
-    wsClientRef.current.sendMessage({
-      content: trimmed,
-      model: selectedModel === 'auto' ? undefined : selectedModel,
-      mode: selectedMode,
-    });
-    clearDraft();
+    beginSend();
+    try {
+      wsClientRef.current.sendMessage({
+        content: trimmed,
+        model: selectedModel === 'auto' ? undefined : selectedModel,
+        mode: selectedMode,
+      });
+    } catch (err) {
+      failSend(err instanceof Error ? err.message : 'Unable to send message');
+    }
   };
-
   const handleCancel = () => {
     if (wsClientRef.current) wsClientRef.current.cancelActiveStream();
   };
-
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -104,6 +101,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <StatusPill status={connectionStatus} />
         </View>
       </View>
+      {error || historyError ? <Text style={styles.errorText}>{error ?? (historyError instanceof Error ? historyError.message : 'Unable to load history')}</Text> : null}
 
       {isLoadingInitial && messages.length === 0 ? (
         <View style={styles.loadingContainer}><ActivityIndicator color={theme.colors.primary} /></View>
@@ -132,13 +130,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               </View>
             );
           }}
-          ListFooterComponent={isStreaming ? (
+          ListFooterComponent={isStreaming && !messages.some((message) => message.id === useChatStore.getState().streamingMessageId) ? (
             <View style={[styles.bubbleContainer, styles.assistantAlign]}>
               <View style={[styles.bubble, styles.assistantBubble]}>
-                {streamingDelta ? <Text style={[styles.bubbleText, styles.assistantText]}>{streamingDelta}</Text> : <ActivityIndicator size="small" color={theme.colors.primary} />}
+                <ActivityIndicator size="small" color={theme.colors.primary} />
                 <View style={styles.streamingIndicatorRow}>
                   <Text style={styles.streamingLabel}>Thinking…</Text>
-                  <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}><Text style={styles.cancelButtonText}>Stop</Text></TouchableOpacity>
                 </View>
               </View>
             </View>
@@ -155,8 +152,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </View>
         <View style={styles.inputControlsRow}>
           <TextInput style={styles.textInput} value={draftText} onChangeText={setDraftText} placeholder="Ketik pesan untuk asisten..." placeholderTextColor={theme.colors.textMuted} multiline maxLength={4000} />
-          <TouchableOpacity style={[styles.sendBtn, (!draftText.trim() || isStreaming) && styles.sendBtnDisabled]} onPress={handleSend} disabled={!draftText.trim() || isStreaming}><Text style={styles.sendBtnText}>↑</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.sendBtn, (!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected') && styles.sendBtnDisabled]} onPress={handleSend} disabled={!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected'}><Text style={styles.sendBtnText}>↑</Text></TouchableOpacity>
         </View>
+        {isStreaming ? <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}><Text style={styles.cancelButtonText}>Stop</Text></TouchableOpacity> : null}
       </View>
     </KeyboardAvoidingView>
   );
@@ -170,6 +168,7 @@ const styles = StyleSheet.create({
   headerTitleContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitle: { color: theme.colors.textPrimary, fontSize: 16, fontWeight: '600' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  errorText: { color: theme.colors.danger, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, fontSize: 12 },
   messageList: { padding: theme.spacing.md, paddingBottom: theme.spacing.xl },
   bubbleContainer: { width: '100%', marginBottom: theme.spacing.sm },
   userAlign: { alignItems: 'flex-end' },
