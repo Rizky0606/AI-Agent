@@ -121,8 +121,10 @@ test('Chat streaming via WebSocket accumulates deltas into chatStore', async () 
         role: 'assistant',
         content: 'Tentu, ini rencana sprint Anda.',
         createdAt: new Date().toISOString(),
+        metadata: { resolvedModel: 'claude-3-5-sonnet' },
       },
-      modelUsed: 'claude-3-5-sonnet',
+      resolvedModel: 'claude-3-5-sonnet',
+      mode: 'auto',
     });
 
     const storeState3 = useChatStore.getState();
@@ -131,6 +133,7 @@ test('Chat streaming via WebSocket accumulates deltas into chatStore', async () 
     const finalMsg = storeState3.messages.find((m) => m.id === 'msg-stream-1');
     assert.ok(finalMsg);
     assert.equal(finalMsg.content, 'Tentu, ini rencana sprint Anda.');
+    assert.equal(finalMsg.metadata?.['resolvedModel'], 'claude-3-5-sonnet');
 
     wsClient.disconnect();
   } finally {
