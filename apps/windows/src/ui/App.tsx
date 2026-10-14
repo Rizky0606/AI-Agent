@@ -272,6 +272,9 @@ export const App: React.FC = () => {
     serverUrl,
     setServerUrl,
     authToken,
+    userEmail,
+    googleLogin,
+    logout,
     setAuthToken,
     syncDeviceIdentity,
     connectToServer,
@@ -849,13 +852,43 @@ export const App: React.FC = () => {
 
               <div>
                 <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                  Device Access Token (JWT):
+                  Akun Google:
+                </label>
+                {userEmail ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 8,
+                      marginTop: 6,
+                    }}
+                  >
+                    <span style={{ fontSize: 13 }}>{userEmail}</span>
+                    <button className="btn btn-danger btn-sm" onClick={() => void logout()}>
+                      Keluar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="btn btn-primary btn-sm"
+                    style={{ marginTop: 6 }}
+                    onClick={() => void googleLogin()}
+                  >
+                    Masuk dengan Google
+                  </button>
+                )}
+              </div>
+
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--text-sub)' }}>
+                  Token manual (opsional):
                 </label>
                 <input
                   type="password"
                   className="text-input"
                   style={{ width: '100%', marginTop: 4 }}
-                  placeholder="Masukkan access token user..."
+                  placeholder="Tempel access token user..."
                   value={authTokenDraft}
                   onChange={(e) => setAuthTokenDraft(e.target.value)}
                 />

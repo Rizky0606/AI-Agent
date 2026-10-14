@@ -54,6 +54,11 @@ export interface ModelCatalogResponse {
   source: 'live' | 'persisted';
   models: ModelDescriptor[];
 }
+export interface AuthSession {
+  accessToken: string;
+  refreshToken: string;
+  user: { id: string; email: string };
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -70,6 +75,11 @@ export class ApiError extends Error {
 export interface ApiClientOptions {
   baseUrl: () => string;
   token: () => string;
+  /**
+   * Renews the session after a 401 and returns the new access token, or null when the session
+   * cannot be renewed (manual token, rejected refresh token). Called at most once per request.
+   */
+  refresh?: (() => Promise<string | null>) | undefined;
   fetchFn?: typeof fetch | undefined;
 }
 
@@ -95,7 +105,7 @@ export class ApiClient {
     return this.options.token();
   }
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
     const fetchFn = this.options.fetchFn ?? globalThis.fetch;
     const token = this.options.token();
     const headers: Record<string, string> = {
@@ -106,6 +116,12 @@ export class ApiClient {
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const response = await fetchFn(`${this.baseUrl}${path}`, { ...init, headers });
+
+    // One refresh-and-retry on 401; `retry=false` on the second pass keeps this from looping.
+    if (response.status === 401 && retry && this.options.refresh) {
+      const refreshed = await this.options.refresh();
+      if (refreshed) return this.request<T>(path, init, false);
+    }
 
     if (response.status === 204) return undefined as T;
 
@@ -126,6 +142,30 @@ export class ApiClient {
     }
 
     return body as T;
+  }
+
+  // --- Auth ---
+  async exchangeLoginCode(code: string, codeVerifier: string): Promise<AuthSession> {
+    return this.request<AuthSession>('/v1/auth/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ code, codeVerifier }),
+    });
+  }
+
+  async refreshSession(refreshToken: string): Promise<AuthSession> {
+    return this.request<AuthSession>(
+      '/v1/auth/refresh',
+      { method: 'POST', body: JSON.stringify({ refreshToken }) },
+      false,
+    );
+  }
+
+  async logout(refreshToken: string): Promise<void> {
+    return this.request<void>(
+      '/v1/auth/logout',
+      { method: 'POST', body: JSON.stringify({ refreshToken }) },
+      false,
+    );
   }
 
   // --- Projects ---
@@ -218,13 +258,17 @@ export class ApiClient {
     return response.blob();
   }
 
-  private async fetchArtifact(artifactId: string): Promise<Response> {
+  private async fetchArtifact(artifactId: string, retry = true): Promise<Response> {
     const fetchFn = this.options.fetchFn ?? globalThis.fetch;
     const token = this.options.token();
     const response = await fetchFn(
       `${this.baseUrl}/v1/artifacts/${encodeURIComponent(artifactId)}/download`,
       { headers: token ? { Authorization: `Bearer ${token}` } : {} },
     );
+    if (response.status === 401 && retry && this.options.refresh) {
+      const refreshed = await this.options.refresh();
+      if (refreshed) return this.fetchArtifact(artifactId, false);
+    }
     if (!response.ok) {
       throw new ApiError(
         response.status,

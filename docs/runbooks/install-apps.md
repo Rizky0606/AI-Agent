@@ -50,13 +50,48 @@ Four things the local path needs spelled out:
 
 On an ARM64 host the Android build-tools `aapt2` and the NDK's `clang++` are x86-64 binaries, so they need `binfmt_misc` with `qemu-x86_64-static` plus the amd64 loader (`libc6:amd64`); install both before running Gradle. `apps/android/android/` is generated output and is not committed.
 
+## Sign in
+
+Both clients sign in with Google. The browser round trip is Authorization Code + PKCE with the
+token exchange on the server (`apps/api/src/auth/google.ts`), so no client secret ships in an
+installer and neither app ever handles a Google credential:
+
+1. `GET /v1/auth/google/start?redirect_uri=…&code_challenge=…&state=…` signs a state blob holding
+   the redirect target, the client's own `state`, its PKCE challenge and a **server-side** PKCE
+   verifier, then redirects to Google.
+2. Google returns to `GET /v1/auth/google/callback`, which verifies the ID token against Google's
+   JWKS (issuer, audience, `email_verified`) and redirects back to the client's `redirect_uri` with
+   a one-minute login code bound to the client's challenge plus the echoed `state`.
+3. The client calls `POST /v1/auth/exchange` with `{code, codeVerifier}` and receives the same
+   `{accessToken, refreshToken, user}` a password login returns.
+
+Allowed `redirect_uri` values are `personal-ai://auth` (Android) and
+`http://127.0.0.1:<port>/auth` (Windows Agent, random port); anything else is refused with
+`INVALID_REDIRECT_URI`. Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+`GOOGLE_REDIRECT_URI` (see `.env.example`); with any of them unset the routes answer
+`503 NOT_CONFIGURED` and password login keeps working. The OAuth client must be of type **Web
+application** in the Google Cloud console with `GOOGLE_REDIRECT_URI` registered — no Android
+keystore SHA-1 is involved, so the debug keystore cannot cause `ApiException: 10`.
+
+Email/password login and a manual access token still work and are documented below.
+
 ## Android
 
-Transfer APK to device, allow installation from the source used to open it, install. Sign in or create an account. Server defaults to `https://ai.ojixx.my.id`. Updates require installing a later APK. APK sideloading is not Google Play distribution.
+Transfer APK to device, allow installation from the source used to open it, install. Tap **Masuk
+dengan Google**; the browser opens, and the app returns via the `personal-ai://auth` deep link. An
+email/password form sits below the button. Server defaults to `https://ai.ojixx.my.id`. Updates
+require installing a later APK. APK sideloading is not Google Play distribution.
 
 ## Windows
 
-Run the downloaded `.exe`, accept the Windows SmartScreen warning only after verifying it came from the repository's Actions artifact, then install. Open Personal AI OS — Windows Agent. Server defaults to `https://ai.ojixx.my.id`. Sign in is not built into Windows Agent: get a short-lived access token by signing into Android or calling `/v1/auth/login`, enter it in Settings, keep capabilities off by default, choose an allowed workspace folder, then connect. Token lifetime is short; reconnect after expiry with a fresh token. Do not save, share, or commit the token.
+Run the downloaded `.exe`, accept the Windows SmartScreen warning only after verifying it came from
+the repository's Actions artifact, then install. Open Personal AI OS — Windows Agent. Server
+defaults to `https://ai.ojixx.my.id`. In Settings press **Masuk dengan Google**: the agent binds
+`127.0.0.1` on an ephemeral port, opens the system browser, and captures the redirect on that
+loopback listener (`google_login` in `apps/windows/src-tauri/src/main.rs`). The session is stored
+in the webview's `localStorage` and access tokens are refreshed automatically on `401`, so there is
+no token to paste and nothing to re-enter after expiry. Keep capabilities off by default, choose an
+allowed workspace folder, then connect. The optional manual token field remains for operators.
 
 Windows Agent connects as a local device agent. It does not run OMP/Hermes locally and does not receive Android coding-runtime tasks; those run on the VPS.
 

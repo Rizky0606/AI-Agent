@@ -1,5 +1,6 @@
 import { type TokenStorage, defaultTokenStorage } from '../storage/secure-store.ts';
 import { deriveWsUrl, getInitialApiUrl, getInitialWsUrl } from './config.ts';
+import { GOOGLE_REDIRECT_URI } from './pkce.ts';
 import {
   type ApprovalRecord,
   type ArtifactItem,
@@ -167,6 +168,24 @@ export class ApiClient {
     const res = await this.request<AuthResponse>('/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+    });
+    await this.storage.setAccessToken(res.accessToken);
+    await this.storage.setRefreshToken(res.refreshToken);
+    return res;
+  }
+
+  googleStartUrl(codeChallenge: string, state: string): string {
+    const redirectUri = encodeURIComponent(GOOGLE_REDIRECT_URI);
+    return (
+      `${this.baseUrl}/v1/auth/google/start?redirect_uri=${redirectUri}` +
+      `&code_challenge=${encodeURIComponent(codeChallenge)}&state=${encodeURIComponent(state)}`
+    );
+  }
+
+  async exchangeLoginCode(code: string, codeVerifier: string): Promise<AuthResponse> {
+    const res = await this.request<AuthResponse>('/v1/auth/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ code, codeVerifier }),
     });
     await this.storage.setAccessToken(res.accessToken);
     await this.storage.setRefreshToken(res.refreshToken);

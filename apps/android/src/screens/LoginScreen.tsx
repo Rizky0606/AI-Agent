@@ -13,7 +13,16 @@ import { theme } from '../components/Theme.ts';
 import { useAuthStore } from '../state/auth-store.ts';
 
 export const LoginScreen: React.FC = () => {
-  const { login, register, serverUrl, setServerUrl, isLoading, error, clearError } = useAuthStore();
+  const {
+    login,
+    register,
+    loginWithGoogle,
+    serverUrl,
+    setServerUrl,
+    isLoading,
+    error,
+    clearError,
+  } = useAuthStore();
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,6 +41,14 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    clearError();
+    if (urlInput !== serverUrl) {
+      await setServerUrl(urlInput);
+    }
+    await loginWithGoogle();
+  };
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -48,6 +65,20 @@ export const LoginScreen: React.FC = () => {
             <Text style={styles.errorText}>{error}</Text>
           </View>
         ) : null}
+
+        <TouchableOpacity
+          style={[styles.googleButton, isLoading && styles.buttonDisabled]}
+          onPress={handleGoogleLogin}
+          disabled={isLoading}
+        >
+          <Text style={styles.googleButtonText}>Masuk dengan Google</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider}>
+          <View style={styles.dividerLine} />
+          <Text style={styles.dividerText}>atau</Text>
+          <View style={styles.dividerLine} />
+        </View>
 
         <TouchableOpacity
           onPress={() => setShowServerConfig(!showServerConfig)}
@@ -217,5 +248,33 @@ const styles = StyleSheet.create({
   toggleModeText: {
     color: theme.colors.textSecondary,
     fontSize: 13,
+  },
+  googleButton: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+    paddingVertical: 12,
+    borderRadius: theme.borderRadius.sm,
+    alignItems: 'center',
+  },
+  googleButtonText: {
+    color: theme.colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: theme.spacing.md,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: theme.colors.surfaceBorder,
+  },
+  dividerText: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    marginHorizontal: theme.spacing.sm,
   },
 });

@@ -240,6 +240,108 @@ async fn execute_local_command(
         .await
         .map_err(|e| e.to_string())
 }
+/// How long the loopback listener waits for the browser to come back before giving up.
+const GOOGLE_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Waits for exactly one request on the loopback listener, answers it with a static page, and
+/// returns the raw query string of the request target (`code=...&state=...`). The socket read is
+/// what blocks; there is no polling loop and no sleep.
+async fn read_loopback_query(listener: &tokio::net::TcpListener) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (mut socket, _peer) = listener
+        .accept()
+        .await
+        .map_err(|error| format!("Loopback accept failed: {error}"))?;
+
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = socket
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("Loopback read failed: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        // Request line + headers is all we need; stop at the blank line (or a sane cap).
+        if request.windows(4).any(|window| window == b"\r\n\r\n") || request.len() > 8192 {
+            break;
+        }
+    }
+
+    let request_line = String::from_utf8_lossy(&request);
+    let target = request_line.split_whitespace().nth(1).unwrap_or("");
+    let query = target
+        .split_once('?')
+        .map(|(_, query)| query.to_string())
+        .filter(|query| !query.is_empty())
+        .ok_or_else(|| "Malformed loopback request: no query string".to_string())?;
+
+    let body = "<!doctype html><meta charset=\"utf-8\"><title>Login selesai</title>\
+        <body style=\"font-family:system-ui;padding:48px\"><h1>Login selesai</h1>\
+        <p>Kamu bisa menutup tab ini dan kembali ke aplikasi.</p>";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    socket
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|error| format!("Loopback write failed: {error}"))?;
+    let _ = socket.flush().await;
+
+    Ok(query)
+}
+
+#[cfg(windows)]
+fn open_in_browser(url: &str) -> Result<(), String> {
+    // `start` needs an empty title argument, otherwise a quoted URL is taken as the window title.
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn()
+        .map(|_child| ())
+        .map_err(|error| format!("Could not open the browser: {error}"))
+}
+
+#[cfg(not(windows))]
+fn open_in_browser(_url: &str) -> Result<(), String> {
+    Err("Google login is only supported on Windows".into())
+}
+
+/// Runs the browser half of the Authorization Code + PKCE flow: binds a loopback port, hands the
+/// browser a start URL with `{redirect_uri}` filled in, and returns the raw query the server
+/// redirected back with.
+#[tauri::command]
+async fn google_login(start_url_template: String) -> Result<String, String> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| format!("Could not bind the loopback port: {error}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("Could not read the loopback address: {error}"))?
+        .port();
+    if !start_url_template.contains("{redirect_uri}") {
+        return Err("Start URL template is missing the {redirect_uri} placeholder".into());
+    }
+    let redirect_uri = format!("http://127.0.0.1:{port}/auth");
+    let url = start_url_template.replace("{redirect_uri}", &redirect_uri);
+    open_in_browser(&url)?;
+
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("Could not make the loopback listener non-blocking: {error}"))?;
+    let listener = tokio::net::TcpListener::from_std(listener)
+        .map_err(|error| format!("Could not prepare the loopback listener: {error}"))?;
+    tokio::time::timeout(GOOGLE_LOGIN_TIMEOUT, read_loopback_query(&listener))
+        .await
+        .map_err(|_| {
+            format!(
+                "Google login timed out after {}s. Try again.",
+                GOOGLE_LOGIN_TIMEOUT.as_secs()
+            )
+        })?
+}
 
 fn main() {
     let capabilities = Arc::new(CapabilityRegistry::new());
@@ -263,7 +365,8 @@ fn main() {
             list_allowed_tree,
             read_allowed_text,
             get_allowed_file_metadata,
-            write_allowed_file
+            write_allowed_file,
+            google_login
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

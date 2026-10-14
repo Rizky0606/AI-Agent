@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
-import { ApiClient, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type ModelDescriptor } from '../api/client.ts';
+import { ApiClient, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor } from '../api/client.ts';
 import { type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
 import { PathValidator } from '../security/path-validator.ts';
 import { type DeviceIdentity, DeviceIdentityManager } from '../connection/device-identity.ts';
+import { invoke } from '@tauri-apps/api/core';
+import { buildGoogleStartUrl, codeChallengeFor, parseCallbackQuery, randomBase64Url } from '../auth/google.ts';
 
 export interface LocalTaskEntry {
   id: string;
@@ -27,6 +29,40 @@ export interface DiagnosticLog {
   message: string;
 }
 
+/** Persisted session; `serverUrl` stays in-memory like it always has. */
+const SESSION_STORAGE_KEY = 'personal-ai-os.windows.session';
+
+interface StoredSession {
+  accessToken: string;
+  refreshToken: string;
+  email: string;
+}
+
+const readStoredSession = (): StoredSession => {
+  const empty: StoredSession = { accessToken: '', refreshToken: '', email: '' };
+  try {
+    const raw = globalThis.localStorage?.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw) as Partial<StoredSession>;
+    return {
+      accessToken: parsed.accessToken ?? '',
+      refreshToken: parsed.refreshToken ?? '',
+      email: parsed.email ?? '',
+    };
+  } catch {
+    // Storage unavailable (private mode, tests): the session lives in memory only.
+    return empty;
+  }
+};
+
+const persistSession = (session: StoredSession): void => {
+  try {
+    globalThis.localStorage?.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // Same as above: nothing to do when storage is unavailable.
+  }
+};
+
 export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; }
 export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; }
 
@@ -45,6 +81,8 @@ export interface ArtifactPreviewState {
 export interface AgentState {
   serverUrl: string;
   authToken: string;
+  refreshToken: string;
+  userEmail: string;
   connectionStatus: ConnectionStatus;
   lastConnectedAt: string | null;
   device: DeviceIdentity;
@@ -70,6 +108,8 @@ export interface AgentState {
   apiError: string | null;
   setServerUrl: (url: string) => void;
   setAuthToken: (token: string) => void;
+  googleLogin: () => Promise<void>;
+  logout: () => Promise<void>;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setDevice: (device: DeviceIdentity) => void;
   syncDeviceIdentity: () => Promise<void>;
@@ -116,6 +156,7 @@ export const createAgentStore = (
   executor?: import('../security/types.ts').ICommandExecutor,
 ) => {
   let activeConnection: import('../connection/agent-connection.ts').AgentConnection | null = null;
+  let loginInFlight = false;
   const getInitialCapabilities = (): Record<CapabilityName, boolean> => {
     const rules = registry.getAllRules();
     const map = {} as Record<CapabilityName, boolean>;
@@ -125,10 +166,35 @@ export const createAgentStore = (
     return map;
   };
   return create<AgentState>((set, get) => {
+    const applySession = (session: AuthSession): void => {
+      persistSession({
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        email: session.user.email,
+      });
+      set({
+        authToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        userEmail: session.user.email,
+      });
+    };
+    const clearSession = (): void => {
+      persistSession({ accessToken: '', refreshToken: '', email: '' });
+      set({ authToken: '', refreshToken: '', userEmail: '' });
+    };
     const api = (): ApiClient =>
-      new ApiClient({ baseUrl: () => get().serverUrl, token: () => get().authToken });
+      new ApiClient({
+        baseUrl: () => get().serverUrl,
+        token: () => get().authToken,
+        refresh: async () => {
+          const { refreshToken } = get();
+          if (!refreshToken) return null; // Manual token: let the 401 surface as-is.
+          const session = await api().refreshSession(refreshToken);
+          applySession(session);
+          return session.accessToken;
+        },
+      });
     let eventsStream: TaskEventsStream | null = null;
-
     const appendEvent = (event: TaskEventEnvelope): void => {
       set((state) => ({
         taskEvents: [
@@ -155,9 +221,12 @@ export const createAgentStore = (
         set({ apiError: error instanceof Error ? error.message : String(error) });
       }
     };
+    const storedSession = readStoredSession();
     return {
     serverUrl: import.meta.env.VITE_SERVER_URL ?? 'https://ai.ojixx.my.id',
-    authToken: '',
+    authToken: storedSession.accessToken,
+    refreshToken: storedSession.refreshToken,
+    userEmail: storedSession.email,
     connectionStatus: 'disconnected',
     lastConnectedAt: null,
 
@@ -278,7 +347,45 @@ export const createAgentStore = (
         modelCatalogStatus: `Source: ${catalog.source} · ${catalog.models.length} models`,
       });
     }),
-    setAuthToken: (token) => set({ authToken: token }),
+
+    googleLogin: () => run(async () => {
+      if (loginInFlight) return;
+      loginInFlight = true;
+      try {
+        const codeVerifier = randomBase64Url(32);
+        const state = randomBase64Url(16);
+        const startUrlTemplate = buildGoogleStartUrl(
+          get().serverUrl,
+          await codeChallengeFor(codeVerifier),
+          state,
+        );
+        const rawQuery = await invoke<string>('google_login', { startUrlTemplate });
+        const callback = parseCallbackQuery(rawQuery);
+        if (callback.state !== state) throw new Error('State OAuth tidak cocok — login dibatalkan.');
+        const session = await api().exchangeLoginCode(callback.code, codeVerifier);
+        applySession(session);
+        get().addLog('info', `Login Google berhasil sebagai ${session.user.email}`);
+      } finally {
+        loginInFlight = false;
+      }
+    }),
+
+    logout: () => run(async () => {
+      const { refreshToken } = get();
+      get().disconnectFromServer();
+      clearSession();
+      if (!refreshToken) return;
+      try {
+        await api().logout(refreshToken);
+      } catch (error) {
+        // The local session is already gone; a dead refresh token is the server's problem.
+        get().addLog('warn', `Logout server gagal (sesi lokal sudah dibersihkan): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }),
+    setAuthToken: (token) => {
+      persistSession({ accessToken: token, refreshToken: get().refreshToken, email: get().userEmail });
+      set({ authToken: token });
+    },
     setDevice: (device) => set({ device }),
     setConnectionStatus: (status) =>
       set((state) => ({
@@ -294,7 +401,7 @@ export const createAgentStore = (
     connectToServer: async () => {
       const state = get();
       if (!state.authToken.trim()) {
-        state.addLog('warn', 'Token autentikasi belum diisi. Masukkan token di tab Settings.');
+        state.addLog('warn', 'Belum masuk. Gunakan "Masuk dengan Google" di tab Settings.');
         return;
       }
       if (activeConnection) {

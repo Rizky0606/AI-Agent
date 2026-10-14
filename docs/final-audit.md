@@ -769,4 +769,40 @@ Semua dijalankan terhadap produksi yang sedang berjalan (`docker compose`, image
 #   cargo test --offline di apps/windows/src-tauri -> 5 test lulus.
 #   BATAS BUKTI: tidak ada perangkat Windows di lingkungan ini, jadi jalur nyata (hardware) belum
 #   pernah dijalankan untuk allowlist ini.
+#
+# Cacat 16 (DIPERBAIKI 2026-10-14): tidak ada login terfederasi — user harus menempel JWT manual
+# Sebelum: satu-satunya cara masuk adalah POST /v1/auth/login (email+sandi) atau /v1/auth/register,
+#          lalu access token ditempel manual di Settings Windows Agent. Access token berumur 900
+#          detik, jadi pemakaian normal berarti menempel ulang terus-menerus.
+# Sesudah: Authorization Code + PKCE dengan penukaran token di server
+#   (apps/api/src/auth/google.ts, apps/api/src/auth/service.ts, apps/api/src/app.ts):
+#     GET  /v1/auth/google/start?redirect_uri&code_challenge&state -> 302 ke Google
+#     GET  /v1/auth/google/callback  -> verifikasi id_token ke JWKS Google (issuer, audience,
+#          email_verified) -> 302 balik ke redirect_uri dengan login code 60 detik + state klien
+#     POST /v1/auth/exchange {code, codeVerifier} -> {accessToken, refreshToken, user}
+#   Migrasi 0011_user_identities.sql menambah tabel user_identities dan membuat
+#   users.password_hash nullable (akun yang hanya lewat provider tidak punya sandi).
+# Bukti live terhadap API produksi (image baru, kredensial Google dummy di container sementara,
+# tidak ada permintaan ke Google karena kode otorisasi palsu):
+#   tanpa kredensial -> 503 {"code":"NOT_CONFIGURED"}
+#   dengan kredensial:
+#     start personal-ai://auth            -> 302, location =
+#       https://accounts.google.com/o/oauth2/v2/auth?client_id=…&redirect_uri=https%3A%2F%2Fai.ojixx.my.id%2Fv1%2Fauth%2Fgoogle%2Fcallback
+#       &response_type=code&scope=openid+email&state=<JWT HS256>&code_challenge=<S256>&code_challenge_method=S256
+#       (code_challenge di state BERBEDA dari code_challenge klien — server punya leg PKCE sendiri)
+#     start https://evil.example/x           -> 400 INVALID_REDIRECT_URI
+#     start http://127.0.0.1:51000/auth      -> 302 (loopback agent Windows)
+#     callback state palsu                   -> 400 INVALID_OAUTH_STATE
+#     callback code Google palsu             -> 401 GOOGLE_EXCHANGE_FAILED (Google menolak kode itu)
+#     POST /v1/auth/exchange kode sampah     -> 400 INVALID_LOGIN_CODE
+# Suite: apps/api/test/auth-google.test.ts 4 test lulus (round trip penuh -> /v1/me, satu identitas
+#   = satu user lokal, redirect di luar allowlist ditolak, deployment tanpa kredensial 503);
+#   apps/api suite penuh 70 test lulus; test/schema-parity.test.ts lulus setelah migrasi 0011.
+#   apps/android/test/pkce.test.ts (26 test paket android) memverifikasi S256 terhadap vektor
+#   RFC 7636 lampiran B dan base64url terhadap Buffer.toString('base64url') untuk tiap panjang 0..40;
+#   apps/windows/test/google-auth.test.ts 4 test lulus; suite windows 39 test, 35 lulus, 4 skip.
+# Batas bukti: tidak ada kredensial Google nyata di lingkungan ini, jadi penukaran kode otorisasi
+#   Google yang sesungguhnya (langkah 2) belum pernah dijalankan sampai tuntas; yang terbukti adalah
+#   kontrak server, penolakan, dan reaksi terhadap respons gagal dari Google.
 ```
+

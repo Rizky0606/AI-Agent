@@ -18,6 +18,7 @@ import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permis
 
 import { buildApp } from './app.ts';
 import { createAuthService } from './auth/service.ts';
+import { createGoogleOAuthClient, googleOAuthConfigFromEnv } from './auth/google.ts';
 import { createDatabase } from './db/client.ts';
 import { SqlAuthRepository } from './db/sql-auth-repository.ts';
 import { SqlDeviceRepository } from './db/device-repository.ts';
@@ -207,10 +208,25 @@ const notificationEngine = new NotificationEngine({
   resolveDeviceTokens: (userId) => deviceRepository.listPushTokens(userId),
 });
 
+// Google sign-in is optional: with no credentials the routes answer 503 and password login is
+// unaffected, so a half-configured deployment never issues tokens it cannot verify.
+const googleConfig = googleOAuthConfigFromEnv();
+if (isProduction && !googleConfig)
+  console.warn('[WARN] GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI unset: Google sign-in is disabled.');
+
 // Assemble and build Fastify application with all modules wired
 const auth = createAuthService(new SqlAuthRepository(db), jwtSecret);
 const app = await buildApp({
   auth,
+  google: googleConfig
+    ? {
+        client: createGoogleOAuthClient(googleConfig),
+        allowedRedirectUris: (process.env.GOOGLE_ALLOWED_REDIRECT_URIS ?? 'personal-ai://auth')
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      }
+    : undefined,
   health: {
     database: async () => {
       await sql`select 1`;

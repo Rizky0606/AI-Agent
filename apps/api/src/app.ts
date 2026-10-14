@@ -1,9 +1,10 @@
 import type { ToolRegistry } from '@personal-ai-os/tools';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
-import { AuthError, type AuthService, type AuthUser } from './auth/service.ts';
+import { AuthError, pkceChallenge, type AuthService, type AuthUser } from './auth/service.ts';
+import type { GoogleOAuthClient } from './auth/google.ts';
 import type { ChatRepository } from './db/chat-repository.ts';
 import type { ModelConfigRepository } from './db/model-config-repository.ts';
 import type { ProjectRepository } from './db/project-repository.ts';
@@ -137,6 +138,17 @@ export type AppDependencies = {
     gateway: ModelGateway;
     providerBaseUrl: string;
   } | undefined;
+  /**
+   * Google sign-in. Unset leaves `/v1/auth/google/*` mounted but answering 503, so a deployment
+   * without credentials fails closed instead of half-working.
+   */
+  google?:
+    | {
+        client: GoogleOAuthClient;
+        /** Exact `redirect_uri` values the callback may hand a login code back to. */
+        allowedRedirectUris: string[];
+      }
+    | undefined;
 };
 
 const requestId = (request: { headers: Record<string, string | string[] | undefined> }): string => {
@@ -328,6 +340,105 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       await userFromRequest(request, dependencies.auth);
       await dependencies.auth.logout((request.body as { refreshToken: string }).refreshToken);
       return reply.code(204).send();
+    },
+  );
+  /**
+   * Google sign-in, Authorization Code + PKCE. The browser only ever sees one-time, verifier-bound
+   * codes: the `state` is signed by us, the Google leg is PKCE-protected with a verifier this
+   * process never discloses, and the value handed back to the client expires in a minute and is
+   * useless without the client's own verifier.
+   */
+  const google = dependencies.google;
+  const googleRedirectAllowed = (candidate: string): boolean =>
+    google !== undefined &&
+    (google.allowedRedirectUris.includes(candidate) ||
+      /^http:\/\/127\.0\.0\.1:\d{1,5}\/auth$/.test(candidate));
+  app.get(
+    '/v1/auth/google/start',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['redirect_uri', 'code_challenge', 'state'],
+          properties: {
+            redirect_uri: { type: 'string', minLength: 1, maxLength: 512 },
+            code_challenge: { type: 'string', minLength: 43, maxLength: 128 },
+            state: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        },
+      },
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    },
+    async (request, reply) => {
+      if (!google) return reply.code(503).send({ error: { code: 'NOT_CONFIGURED', message: 'Google sign-in is not configured', requestId: request.id } });
+      const query = request.query as { redirect_uri: string; code_challenge: string; state: string };
+      if (!googleRedirectAllowed(query.redirect_uri))
+        return reply.code(400).send({ error: { code: 'INVALID_REDIRECT_URI', message: 'redirect_uri is not allowed', requestId: request.id } });
+      const providerVerifier = randomBytes(32).toString('base64url');
+      const state = await dependencies.auth.createOAuthState({
+        redirectUri: query.redirect_uri,
+        clientState: query.state,
+        codeChallenge: query.code_challenge,
+        providerVerifier,
+      });
+      return reply.redirect(google.client.authorizationUrl(state, pkceChallenge(providerVerifier)));
+    },
+  );
+  app.get(
+    '/v1/auth/google/callback',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'state'],
+          properties: {
+            code: { type: 'string', minLength: 1, maxLength: 2048 },
+            state: { type: 'string', minLength: 1, maxLength: 4096 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!google) return reply.code(503).send({ error: { code: 'NOT_CONFIGURED', message: 'Google sign-in is not configured', requestId: request.id } });
+      const query = request.query as { code: string; state: string };
+      const pending = await dependencies.auth.readOAuthState(query.state);
+      // Re-checked here as well: the state is signed, but a stale allowlist change must not be
+      // bypassed by a state minted before it.
+      if (!googleRedirectAllowed(pending.redirectUri))
+        return reply.code(400).send({ error: { code: 'INVALID_REDIRECT_URI', message: 'redirect_uri is not allowed', requestId: request.id } });
+      const identity = await google.client.exchangeCode(query.code, pending.providerVerifier);
+      const { user } = await dependencies.auth.loginWithProvider(
+        'google',
+        identity.subject,
+        identity.email,
+      );
+      const target = new URL(pending.redirectUri);
+      target.searchParams.set('code', await dependencies.auth.createLoginCode(user.id, pending.codeChallenge));
+      target.searchParams.set('state', pending.clientState);
+      return reply.redirect(target.toString());
+    },
+  );
+  app.post(
+    '/v1/auth/exchange',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'codeVerifier'],
+          properties: {
+            code: { type: 'string', minLength: 1, maxLength: 4096 },
+            codeVerifier: { type: 'string', minLength: 43, maxLength: 128 },
+          },
+        },
+      },
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    },
+    async (request, reply) => {
+      const body = request.body as { code: string; codeVerifier: string };
+      return reply.send(await dependencies.auth.exchangeLoginCode(body.code, body.codeVerifier));
     },
   );
   app.get('/v1/me', async (request, reply) => {

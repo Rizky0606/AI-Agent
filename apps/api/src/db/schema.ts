@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -22,10 +23,28 @@ export const users = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     email: varchar('email', { length: 320 }).notNull(),
-    passwordHash: text('password_hash').notNull(),
+    // Null for accounts that only ever signed in through a provider.
+    passwordHash: text('password_hash'),
     ...created,
   },
   (table) => [uniqueIndex('users_email_uq').on(table.email)],
+);
+
+export const userIdentities = pgTable(
+  'user_identities',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    provider: varchar('provider', { length: 32 }).notNull(),
+    subject: varchar('subject', { length: 255 }).notNull(),
+    email: varchar('email', { length: 320 }).notNull(),
+    ...created,
+  },
+  (table) => [
+    primaryKey({ columns: [table.provider, table.subject] }),
+    index('user_identities_user_id_idx').on(table.userId),
+  ],
 );
 
 export const devices = pgTable(
