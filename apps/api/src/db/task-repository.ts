@@ -18,6 +18,7 @@ export interface CreateTaskParams {
   projectId: string;
   kind: string;
   payload: Record<string, unknown>;
+  conversationId?: string | null | undefined;
   idempotencyKey?: string | null | undefined;
   priority?: number | undefined;
   maxAttempts?: number | undefined;
@@ -26,7 +27,10 @@ export interface CreateTaskParams {
 export interface TaskRepository {
   createTask(params: CreateTaskParams): Promise<{ task: TaskRecord; isDuplicate: boolean }>;
   getTask(userId: string, taskId: string): Promise<TaskRecord | null>;
-  listTasks(userId: string, projectId?: string): Promise<TaskRecord[]>;
+  listTasks(
+    userId: string,
+    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+  ): Promise<TaskRecord[]>;
   updateTaskStatus(
     userId: string,
     taskId: string,
@@ -85,6 +89,7 @@ export class SqlTaskRepository implements TaskRepository {
         status: 'queued',
         kind: params.kind,
         payload: params.payload,
+        conversationId: params.conversationId ?? null,
         idempotencyKey: params.idempotencyKey ?? null,
         priority: params.priority ?? 0,
         maxAttempts: params.maxAttempts ?? 3,
@@ -108,10 +113,16 @@ export class SqlTaskRepository implements TaskRepository {
     return this.mapRow(row);
   }
 
-  async listTasks(userId: string, projectId?: string): Promise<TaskRecord[]> {
+  async listTasks(
+    userId: string,
+    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+  ): Promise<TaskRecord[]> {
     const conditions = [eq(tasks.userId, userId)];
-    if (projectId) {
-      conditions.push(eq(tasks.projectId, projectId));
+    if (filter?.projectId) {
+      conditions.push(eq(tasks.projectId, filter.projectId));
+    }
+    if (filter?.conversationId) {
+      conditions.push(eq(tasks.conversationId, filter.conversationId));
     }
 
     const rows = await this.db
@@ -277,6 +288,7 @@ export class SqlTaskRepository implements TaskRepository {
       status: row.status as TaskStatus,
       kind: row.kind,
       payload: row.payload as Record<string, unknown>,
+      conversationId: row.conversationId,
       progress: row.progress,
       attempt: row.attempt,
       maxAttempts: row.maxAttempts,
@@ -317,6 +329,7 @@ export class InMemoryTaskRepository implements TaskRepository {
       status: 'queued',
       kind: params.kind,
       payload: params.payload,
+      conversationId: params.conversationId ?? null,
       progress: 0,
       attempt: 0,
       maxAttempts: params.maxAttempts ?? 3,
@@ -338,9 +351,17 @@ export class InMemoryTaskRepository implements TaskRepository {
     return { ...task };
   }
 
-  async listTasks(userId: string, projectId?: string): Promise<TaskRecord[]> {
+  async listTasks(
+    userId: string,
+    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+  ): Promise<TaskRecord[]> {
     return [...this.tasks.values()]
-      .filter((t) => t.userId === userId && (!projectId || t.projectId === projectId))
+      .filter(
+        (t) =>
+          t.userId === userId &&
+          (!filter?.projectId || t.projectId === filter.projectId) &&
+          (!filter?.conversationId || t.conversationId === filter.conversationId),
+      )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((t) => ({ ...t }));
   }

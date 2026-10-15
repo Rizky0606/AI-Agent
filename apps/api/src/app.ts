@@ -96,6 +96,7 @@ export type AppDependencies = {
   task?:
     | {
         projectRepo: ProjectRepository;
+        chatRepo: ChatRepository;
         taskRepo: TaskRepository;
         taskQueue: TaskQueue;
         broadcaster: TaskEventBroadcaster;
@@ -580,6 +581,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     registerTaskRoutes(app, {
       auth: dependencies.auth,
       projectRepo: dependencies.task.projectRepo,
+      chatRepo: dependencies.task.chatRepo,
       taskRepo: dependencies.task.taskRepo,
       taskQueue: dependencies.task.taskQueue,
       broadcaster: dependencies.task.broadcaster,

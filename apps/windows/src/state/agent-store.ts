@@ -53,7 +53,7 @@ const persistSession = (session: StoredSession): void => {
 };
 
 export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; model?: string | null; }
-export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; }
+export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; projectId?: string; }
 export type ChatStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 export interface TaskEventEntry {
@@ -90,6 +90,9 @@ export interface AgentState {
   selectedTaskId: string | null;
   selectedTask: TaskRecord | null;
   taskEvents: TaskEventEntry[];
+  /** Tasks spawned from the active conversation, newest first. */
+  conversationTasks: TaskRecord[];
+  taskLaunchError: string | null;
   eventStreamStatus: StreamStatus;
   approvals: ApprovalRecord[];
   artifacts: ArtifactItem[];
@@ -120,6 +123,8 @@ export interface AgentState {
   refreshChat: () => Promise<void>;
   setSelectedModel: (model: string) => void;
   setSelectedMode: (mode: AgentState['selectedMode']) => void;
+  refreshConversationTasks: () => Promise<void>;
+  launchChatTask: (input: { kind: string; prompt: string }) => Promise<void>;
   refreshServerTasks: () => Promise<void>;
   selectServerTask: (taskId: string) => Promise<void>;
   refreshTaskEvents: () => Promise<void>;
@@ -186,6 +191,7 @@ export const createAgentStore = (
         },
       });
     let eventsStream: TaskEventsStream | null = null;
+    let chatEventsStream: TaskEventsStream | null = null;
     const appendEvent = (event: TaskEventEnvelope): void => {
       set((state) => ({
         taskEvents: [
@@ -202,6 +208,8 @@ export const createAgentStore = (
         const taskId = get().selectedTaskId;
         if (taskId) void get().selectServerTask(taskId);
       }
+      // Keep the chat's conversation task strip current without polling.
+      if (event.taskId && get().conversationTasks.some((task) => task.id === event.taskId)) void get().refreshConversationTasks();
     };
 
     const run = async (action: () => Promise<void>): Promise<void> => {
@@ -237,6 +245,8 @@ export const createAgentStore = (
     selectedTaskId: null,
     selectedTask: null,
     taskEvents: [],
+    conversationTasks: [],
+    taskLaunchError: null,
     eventStreamStatus: 'disconnected',
     approvals: [],
     artifacts: [],
@@ -247,7 +257,7 @@ export const createAgentStore = (
 
     setServerUrl: (url) => { if (get().serverUrl === url) return; set({ serverUrl: url }); void get().refreshChat(); },
     setChatDraft: (chatDraft) => set({ chatDraft }),
-    setActiveConversation: (activeConversationId) => set({ activeConversationId }),
+    setActiveConversation: (activeConversationId) => { set({ activeConversationId, conversationTasks: [] }); void get().refreshConversationTasks(); },
     newConversation: () => { const id = `draft-${crypto.randomUUID()}`; set((state) => ({ conversations: [{ id, title: 'New conversation', messages: [] }, ...state.conversations], activeConversationId: id, chatError: null })); },
     sendChat: () => {
       const state = get();
@@ -270,7 +280,34 @@ export const createAgentStore = (
     clearChatError: () => set({ chatError: null }),
     setSelectedModel: (selectedModel) => set({ selectedModel }),
     setSelectedMode: (selectedMode) => set({ selectedMode }),
+    // Tasks spawned from the active conversation. Read straight from the server, never inferred.
+    refreshConversationTasks: () => run(async () => {
+      const conversationId = get().activeConversationId;
+      if (!conversationId || conversationId.startsWith('draft-') || !get().authToken.trim()) {
+        set({ conversationTasks: [] });
+        return;
+      }
+      const { tasks } = await api().listTasks({ conversationId });
+      set({ conversationTasks: tasks });
+    }),
 
+    launchChatTask: async ({ kind, prompt }) => {
+      const state = get();
+      const conversation = state.conversations.find((item) => item.id === state.activeConversationId);
+      const content = prompt.trim();
+      if (!conversation || !conversation.id || conversation.id.startsWith('draft-')) {
+        set({ taskLaunchError: 'Send a message first so the conversation has a server id.' });
+        return;
+      }
+      if (!content) { set({ taskLaunchError: 'Enter the instruction to run as a task.' }); return; }
+      if (!conversation.projectId) { set({ taskLaunchError: 'This conversation has no project to run the task in.' }); return; }
+      set({ taskLaunchError: null });
+      await run(async () => {
+        await api().createTask({ projectId: conversation.projectId!, kind, payload: { prompt: content }, conversationId: conversation.id });
+        const { tasks } = await api().listTasks({ conversationId: conversation.id });
+        set({ conversationTasks: tasks });
+      });
+    },
     refreshServerTasks: () => run(async () => {
       const { tasks } = await api().listTasks();
       set({ serverTasks: tasks });
@@ -470,9 +507,20 @@ export const createAgentStore = (
       pendingChat = null;
       if (!state.authToken.trim()) { activeChatConnection.disconnect(); activeChatConnection = null; return; }
       activeChatConnection.connect();
+      // One account-scoped event stream so the conversation task strip tracks progress live.
+      // Task-scoped streams are created separately by `selectServerTask`.
+      if (!chatEventsStream) {
+        chatEventsStream = new TaskEventsStream({
+          serverUrl: () => get().serverUrl,
+          token: () => get().authToken,
+          taskId: () => null,
+          onEvent: appendEvent,
+        });
+      }
+      chatEventsStream.connect();
       try {
         const history = await api().listConversations();
-        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Conversation', messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']), model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null }] : []) })));
+        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Conversation', projectId: item.projectId ?? undefined, messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']), model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null }] : []) })));
         if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
         set((current) => {
           const merged = conversations.map((conversation) => {
@@ -483,12 +531,16 @@ export const createAgentStore = (
           const live = current.conversations.filter((conversation) => conversation.id && !conversations.some((item) => item.id === conversation.id));
           return { conversations: [...live, ...merged].length ? [...live, ...merged] : current.conversations, activeConversationId: current.activeConversationId || conversations[0]?.id || '' };
         });
+        // Runs after `activeConversationId` exists, so the first load is not a no-op.
+        await get().refreshConversationTasks();
       } catch (error) { set({ chatError: error instanceof Error ? error.message : String(error) }); }
     },
 
     disconnectFromServer: () => {
       activeChatConnection?.disconnect();
       activeChatConnection = null;
+      chatEventsStream?.disconnect();
+      chatEventsStream = null;
       if (activeConnection) {
         activeConnection.disconnect();
         activeConnection = null;

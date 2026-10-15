@@ -96,6 +96,26 @@ test('ApiClient: sends bearer token, unwraps error envelopes, and maps 204 to un
   assert.equal(calls[2]!.init.method, 'POST');
 });
 
+test('ApiClient: createTask posts the conversation link and listTasks filters by it', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const client = new ApiClient({
+    baseUrl: () => 'http://127.0.0.1:8080',
+    token: () => 'jwt-abc',
+    fetchFn: async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ tasks: [], task: { id: 'task-1' }, isDuplicate: false }), { status: 200 });
+    },
+  });
+
+  await client.createTask({ projectId: 'proj-1', kind: 'generic_task', payload: { prompt: 'do it' }, conversationId: 'conv-1' });
+  assert.equal(calls[0]!.url, 'http://127.0.0.1:8080/v1/tasks');
+  assert.equal(calls[0]!.init.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { projectId: 'proj-1', kind: 'generic_task', payload: { prompt: 'do it' }, conversationId: 'conv-1' });
+
+  await client.listTasks({ conversationId: 'conv-1' });
+  assert.equal(calls[1]!.url, 'http://127.0.0.1:8080/v1/tasks?conversationId=conv-1');
+});
+
 test('ApiClient: approval decisions target approve/deny endpoints and previews truncate', async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = new ApiClient({
@@ -165,13 +185,13 @@ test('TaskEventsStream: subscribes with task scope, tracks lastEventId, and repl
   }
 });
 
-test('TaskEventsStream: stays disconnected when the task scope or token is missing', () => {
+test('TaskEventsStream: stays disconnected without a token', () => {
   const received: TaskEventEnvelope[] = [];
   const statuses: string[] = [];
   const stream = new TaskEventsStream({
     serverUrl: () => 'https://ai.example.test',
     token: () => '',
-    taskId: () => null,
+    taskId: () => 'task-1',
     onEvent: (event) => received.push(event),
     onStatusChange: (status) => statuses.push(status),
   });
@@ -179,4 +199,29 @@ test('TaskEventsStream: stays disconnected when the task scope or token is missi
   stream.connect();
   assert.deepEqual(statuses, ['disconnected']);
   assert.deepEqual(received, []);
+});
+
+test('TaskEventsStream: a null task scope subscribes to the whole account', () => {
+  const { sockets, restore } = installMockSockets();
+  try {
+    const received: TaskEventEnvelope[] = [];
+    const stream = new TaskEventsStream({
+      serverUrl: () => 'https://ai.example.test',
+      token: () => 'jwt-abc',
+      taskId: () => null,
+      onEvent: (event) => received.push(event),
+    });
+
+    stream.connect();
+    assert.equal(sockets.length, 1);
+    assert.match(sockets[0]!.url, /^wss:\/\/ai\.example\.test\/v1\/events\/ws\?/);
+    // No taskId param: the server then streams every event for the authenticated account.
+    assert.doesNotMatch(sockets[0]!.url, /taskId=/);
+
+    sockets[0]!.emitFrame(envelope({ id: 'evt-9', taskId: 'task-9' }));
+    assert.deepEqual(received.map((event) => event.taskId), ['task-9']);
+    stream.disconnect();
+  } finally {
+    restore();
+  }
 });

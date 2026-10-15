@@ -171,6 +171,7 @@ export const tasks = pgTable(
     kind: varchar('kind', { length: 80 }).notNull(),
     payload: jsonb('payload').notNull(),
     idempotencyKey: varchar('idempotency_key', { length: 128 }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
     leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
     progress: integer('progress').default(0).notNull(),
     attempt: integer('attempt').default(0).notNull(),
@@ -186,6 +187,7 @@ export const tasks = pgTable(
   },
   (table) => [
     index('tasks_scope_status_idx').on(table.userId, table.projectId, table.status),
+    index('tasks_conversation_idx').on(table.userId, table.conversationId),
     uniqueIndex('tasks_user_idempotency_uq').on(table.userId, table.idempotencyKey),
     uniqueIndex('tasks_scope_uq').on(table.id, table.userId),
   ],

@@ -79,7 +79,7 @@ export const useCreateConversation = () => {
 
 // --- Tasks ---
 export const useTasks = (
-  filters?: { projectId?: string | undefined; status?: string | undefined } | undefined,
+  filters?: { projectId?: string | undefined; status?: string | undefined; conversationId?: string | undefined } | undefined,
 ) =>
   useQuery({
     queryKey: ['tasks', filters],
@@ -107,6 +107,7 @@ export const useCreateTask = () => {
       projectId: string;
       kind: string;
       payload?: Record<string, unknown> | undefined;
+      conversationId?: string | undefined;
       priority?: number | undefined;
     }) => defaultApiClient.createTask(data),
     onSuccess: () => {

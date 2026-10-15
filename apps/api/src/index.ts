@@ -259,6 +259,7 @@ const app = await buildApp({
   },
   task: {
     projectRepo: projectRepository,
+    chatRepo: chatRepository,
     taskRepo: taskRepository,
     taskQueue,
     broadcaster,

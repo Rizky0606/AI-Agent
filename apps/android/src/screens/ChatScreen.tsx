@@ -14,8 +14,10 @@ import type { MessageAttachment } from '../api/types.ts';
 import { defaultApiClient } from '../api/client.ts';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { theme } from '../components/Theme.ts';
-import { useMessages } from '../hooks/use-queries.ts';
+import { useCreateTask, useMessages, useTasks } from '../hooks/use-queries.ts';
+import { useUiStore } from '../state/ui-store.ts';
 import { ChatWebSocketClient } from '../services/chat-websocket.ts';
+import { TaskEventsWebSocketClient } from '../services/task-events-websocket.ts';
 import { useChatStore } from '../state/chat-store.ts';
 
 export interface ChatScreenProps {
@@ -55,6 +57,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   }, [setModels]);
   const wsClientRef = useRef<ChatWebSocketClient | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const activeProjectId = useUiStore((state) => state.activeProjectId);
+  const { data: conversationTasks, refetch: refetchConversationTasks } = useTasks({ conversationId });
+  const conversationTaskIdsRef = useRef<Set<string>>(new Set());
+  conversationTaskIdsRef.current = new Set(conversationTasks?.map((task) => task.id) ?? []);
+  const createTask = useCreateTask();
 
   useEffect(() => {
     setConversationId(conversationId);
@@ -70,6 +77,20 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   useEffect(() => {
     if (initialMessages) hydrateMessages(conversationId, initialMessages);
   }, [conversationId, initialMessages, hydrateMessages]);
+
+  // Live task progress: the events socket is user-scoped (no taskId), so any event belonging to a
+  // task in this conversation refetches the list. The id set lives in a ref so the socket is not
+  // torn down and rebuilt on every progress update.
+  useEffect(() => {
+    const ws = new TaskEventsWebSocketClient({
+      onEvent: (event) => {
+        if (!conversationTaskIdsRef.current.has(event.taskId)) return;
+        void refetchConversationTasks();
+      },
+    });
+    void ws.connect();
+    return () => ws.disconnect();
+  }, [refetchConversationTasks]);
   const handleSend = () => {
     const trimmed = draftText.trim();
     if (!trimmed || !wsClientRef.current) return;
@@ -86,6 +107,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   };
   const handleCancel = () => {
     if (wsClientRef.current) wsClientRef.current.cancelActiveStream();
+  };
+  const handleRunAsTask = async () => {
+    const instruction = draftText.trim();
+    if (!instruction || !activeProjectId) return;
+    try {
+      await createTask.mutateAsync({ projectId: activeProjectId, kind: 'generic_task', payload: { prompt: instruction }, conversationId });
+      await refetchConversationTasks();
+    } catch {
+      // useCreateTask surfaces the failure through its own error state.
+    }
   };
   return (
     <KeyboardAvoidingView
@@ -115,6 +146,35 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <TouchableOpacity accessibilityRole="button" style={styles.retryButton} onPress={() => void refetchHistory()}><Text style={styles.retryButtonText}>Coba lagi</Text></TouchableOpacity>
         </View>
       ) : null}
+
+      <View style={styles.chatTasks} accessibilityLabel="Tasks from this conversation">
+        <View style={styles.chatTasksHead}>
+          <Text style={styles.chatTasksTitle}>Tasks from this conversation</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Run draft as task"
+            accessibilityState={{ disabled: createTask.isPending || !draftText.trim() || !activeProjectId }}
+            disabled={createTask.isPending || !draftText.trim() || !activeProjectId}
+            onPress={() => void handleRunAsTask()}
+          >
+            <Text style={[styles.chatTasksAction, (createTask.isPending || !draftText.trim() || !activeProjectId) && styles.chatTasksActionDisabled]}>{createTask.isPending ? 'Mengirim…' : 'Jalankan sebagai tugas'}</Text>
+          </TouchableOpacity>
+        </View>
+        {!activeProjectId ? <Text style={styles.chatTasksEmpty}>Pilih project untuk menjalankan tugas dari chat.</Text> : null}
+        {conversationTasks && conversationTasks.length > 0 ? (
+          <View style={styles.chatTaskList}>
+            {conversationTasks.map((task) => (
+              <View key={task.id} style={styles.chatTaskRow}>
+                <Text style={styles.chatTaskKind}>{task.kind}</Text>
+                <Text style={styles.chatTaskProgress}>{task.progress}%</Text>
+                <Text style={styles.chatTaskStatus}>{task.status}</Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.chatTasksEmpty}>Belum ada tugas dari percakapan ini.</Text>
+        )}
+      </View>
 
       {isLoadingInitial && messages.length === 0 ? (
         <View style={styles.loadingContainer}>
@@ -220,6 +280,17 @@ const styles = StyleSheet.create({
   bubbleRole: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600', marginBottom: 2 },
   timestamp: { color: theme.colors.textMuted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
   bubbleModel: { color: theme.colors.textMuted, fontSize: 10, marginTop: 2 },
+  chatTasks: { backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.surfaceBorder, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
+  chatTasksHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  chatTasksTitle: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600' },
+  chatTasksAction: { color: theme.colors.primary, ...theme.typography.caption, fontWeight: '700', minHeight: theme.controls.minTouchTarget },
+  chatTasksActionDisabled: { color: theme.colors.textMuted, opacity: 0.6 },
+  chatTasksEmpty: { color: theme.colors.textMuted, fontSize: 12, marginTop: theme.spacing.xs },
+  chatTaskList: { marginTop: theme.spacing.xs },
+  chatTaskRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, paddingVertical: 2 },
+  chatTaskKind: { color: theme.colors.textPrimary, fontSize: 12, flex: 1 },
+  chatTaskProgress: { color: theme.colors.textSecondary, fontSize: 12 },
+  chatTaskStatus: { color: theme.colors.textMuted, fontSize: 12, textTransform: 'capitalize' },
   attachmentList: { marginTop: 4 },
   attachmentPill: { fontSize: 11, color: theme.colors.primary, backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginTop: 2 },
   streamingIndicatorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: theme.spacing.xs },

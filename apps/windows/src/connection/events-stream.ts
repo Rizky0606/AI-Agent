@@ -6,6 +6,7 @@ export type StreamStatus = 'connected' | 'reconnecting' | 'disconnected';
 export interface TaskEventsStreamOptions {
   serverUrl: () => string;
   token: () => string;
+  /** `null` subscribes to every task of the account; a task id scopes to that task. */
   taskId: () => string | null;
   onEvent: (event: TaskEventEnvelope) => void;
   onStatusChange?: ((status: StreamStatus) => void) | undefined;
@@ -33,12 +34,13 @@ export class TaskEventsStream {
     this.closedExplicitly = false;
     const taskId = this.options.taskId();
     const token = this.options.token();
-    if (!taskId || !token) {
+    if (!token) {
       this.notify('disconnected');
       return;
     }
 
-    const params = new URLSearchParams({ token, taskId });
+    const params = new URLSearchParams({ token });
+    if (taskId) params.set('taskId', taskId);
     if (this.lastEventId) params.set('last_event_id', this.lastEventId);
 
     this.notify(this.reconnectAttempts > 0 ? 'reconnecting' : 'connected');

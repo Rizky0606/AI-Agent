@@ -30,6 +30,8 @@ export interface TaskModel {
   status: TaskStatus;
   kind: string;
   payload: Record<string, unknown>;
+  /** Chat conversation that spawned this task, when it was launched from one. */
+  conversationId?: string | null | undefined;
   progress: number;
   attempt: number;
   maxAttempts: number;

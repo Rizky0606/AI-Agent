@@ -355,11 +355,12 @@ export class ApiClient {
 
   // --- Tasks ---
   async listTasks(
-    filters?: { projectId?: string | undefined; status?: string | undefined } | undefined,
+    filters?: { projectId?: string | undefined; status?: string | undefined; conversationId?: string | undefined } | undefined,
   ): Promise<{ tasks: TaskRecord[] }> {
     const params = new URLSearchParams();
     if (filters?.projectId) params.set('projectId', filters.projectId);
     if (filters?.status) params.set('status', filters.status);
+    if (filters?.conversationId) params.set('conversationId', filters.conversationId);
     const qs = params.toString() ? `?${params.toString()}` : '';
     return this.request<{ tasks: TaskRecord[] }>(`/v1/tasks${qs}`);
   }
@@ -372,6 +373,7 @@ export class ApiClient {
     projectId: string;
     kind: string;
     payload?: Record<string, unknown> | undefined;
+    conversationId?: string | undefined;
     priority?: number | undefined;
     idempotencyKey?: string | undefined;
   }): Promise<{ task: TaskRecord; isDuplicate: boolean }> {
