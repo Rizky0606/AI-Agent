@@ -1,7 +1,17 @@
-import React, { useRef, useEffect } from 'react';
-import { ArrowUp, Square, Cpu, SlidersHorizontal } from 'lucide-react';
+import React, { useRef, useEffect, useState } from 'react';
+import {
+  ArrowUp,
+  Square,
+  Cpu,
+  SlidersHorizontal,
+  ChevronDown,
+  RefreshCw,
+  X,
+  AlertCircle,
+} from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import { idID } from '../locales/id-ID.ts';
+import { ModelSelectorPopover } from './ModelSelectorPopover.tsx';
 
 interface ChatComposerProps {
   textareaRef?: React.Ref<HTMLTextAreaElement>;
@@ -15,12 +25,17 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
     cancelChat,
     chatStreaming,
     selectedModel,
-    setSelectedModel,
     selectedMode,
     setSelectedMode,
+    modelCatalogUnavailable,
+    modelNotice,
+    clearModelNotice,
+    refreshModels,
   } = useAgentStore();
 
+  const [isModelPopoverOpen, setIsModelPopoverOpen] = useState(false);
   const localRef = useRef<HTMLTextAreaElement | null>(null);
+  const modelChipAnchorRef = useRef<HTMLDivElement | null>(null);
 
   // Auto resize textarea height based on content up to 140px
   useEffect(() => {
@@ -39,14 +54,59 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
     }
   };
 
+  const modelDisplayText =
+    selectedModel === 'auto'
+      ? 'Auto (Cerdas)'
+      : selectedModel.length > 20
+        ? `${selectedModel.slice(0, 18)}…`
+        : selectedModel;
+
   return (
     <div className="floating-composer-wrapper">
       <div className="floating-composer-card">
+        {/* Model Notice Banner if model disappeared and reverted to Auto */}
+        {modelNotice && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '6px 12px',
+              backgroundColor: 'rgba(245, 158, 11, 0.12)',
+              borderBottom: '1px solid rgba(245, 158, 11, 0.25)',
+              fontSize: 11,
+              color: 'var(--accent-amber, #f59e0b)',
+            }}
+            role="status"
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <AlertCircle size={13} />
+              <span>{modelNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={clearModelNotice}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                padding: 0,
+                display: 'flex',
+                alignItems: 'center',
+              }}
+              aria-label="Tutup pemberitahuan"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
         {/* Top Toolbar with Model and Mode Chips */}
         <div className="composer-toolbar-top">
-          <div className="composer-chips-group">
+          <div className="composer-chips-group" style={{ position: 'relative' }}>
             {/* Mode Chip */}
-            <div className="composer-chip" title="Mode Asisten">
+            <div className="composer-chip" title="Mode Asisten AI">
               <SlidersHorizontal size={12} color="var(--accent-cyan)" />
               <select
                 value={selectedMode}
@@ -70,26 +130,58 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
               </select>
             </div>
 
-            {/* Model Chip */}
-            <div className="composer-chip" title="Model AI">
+            {/* Model Chip (Interactive Popover Trigger) */}
+            <div
+              ref={modelChipAnchorRef}
+              className={`composer-chip interactive ${modelCatalogUnavailable ? 'disabled' : ''}`}
+              onClick={() => setIsModelPopoverOpen((prev) => !prev)}
+              title={
+                modelCatalogUnavailable
+                  ? 'Katalog model tidak dapat dihubungi. Mode Auto tetap berfungsi.'
+                  : 'Klik untuk memilih Model AI'
+              }
+              role="button"
+              tabIndex={0}
+              aria-haspopup="dialog"
+              aria-expanded={isModelPopoverOpen}
+            >
               <Cpu size={12} color="var(--accent-blue)" />
-              <input
-                type="text"
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                placeholder="Auto"
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  fontSize: 11,
-                  color: 'inherit',
-                  width: 70,
-                  outline: 'none',
-                  padding: 0,
-                }}
-                aria-label={idID.chat.modelLabel}
-              />
+              <span className="composer-chip-text">{modelDisplayText}</span>
+
+              {modelCatalogUnavailable ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void refreshModels();
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#f59e0b',
+                    fontSize: 10,
+                    padding: 0,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 2,
+                  }}
+                  title="Katalog offline. Klik untuk coba lagi."
+                >
+                  <RefreshCw size={10} />
+                  <span>Coba lagi</span>
+                </button>
+              ) : (
+                <ChevronDown size={11} color="var(--text-sub)" />
+              )}
             </div>
+
+            {/* Model Selector Popover */}
+            <ModelSelectorPopover
+              isOpen={isModelPopoverOpen}
+              onClose={() => setIsModelPopoverOpen(false)}
+              anchorRef={modelChipAnchorRef}
+            />
           </div>
         </div>
 

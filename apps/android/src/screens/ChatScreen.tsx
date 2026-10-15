@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -10,8 +10,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import type { MessageAttachment } from '../api/types.ts';
-import { defaultApiClient } from '../api/client.ts';
+import type { ChatMode, MessageAttachment } from '../api/types.ts';
+import { ModelSelectorModal } from '../components/ModelSelectorModal.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { theme } from '../components/Theme.ts';
 import { useCreateTask, useMessages, useTasks } from '../hooks/use-queries.ts';
@@ -26,11 +26,22 @@ export interface ChatScreenProps {
   onBack: () => void;
 }
 
+const MODE_LABELS: Record<ChatMode, string> = {
+  auto: 'Mode: Auto',
+  fast: 'Mode: Cepat',
+  coding: 'Mode: Coding',
+  complex: 'Mode: Kompleks',
+  research: 'Mode: Riset',
+};
+
+const MODES: ChatMode[] = ['auto', 'fast', 'coding', 'complex', 'research'];
+
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   conversationId,
   conversationTitle,
   onBack,
 }) => {
+  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const {
     messages,
     hydrateMessages,
@@ -43,18 +54,20 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     beginSend,
     failSend,
     error,
-    models,
     selectedModel,
     selectedMode,
-    setModels,
-    setSelectedModel,
-    setSelectedMode,
+    setConversationMode,
     connectionStatus,
+    loadCatalog,
+    modelCatalogUnavailable,
+    modelNotice,
+    clearModelNotice,
   } = useChatStore();
   const { data: initialMessages, isLoading: isLoadingInitial, error: historyError, refetch: refetchHistory } = useMessages(conversationId);
+
   useEffect(() => {
-    void defaultApiClient.listModels().then((catalog) => setModels(catalog.models)).catch(() => setModels([]));
-  }, [setModels]);
+    void loadCatalog();
+  }, [loadCatalog]);
   const wsClientRef = useRef<ChatWebSocketClient | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const activeProjectId = useUiStore((state) => state.activeProjectId);
@@ -198,7 +211,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
                   <Text style={styles.bubbleRole}>{isUser ? 'You' : 'Assistant'}</Text>
                   <Text style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}>{item.content || 'Thinking…'}</Text>
-                  {typeof item.metadata?.['resolvedModel'] === 'string' ? <Text style={styles.bubbleModel}>{item.metadata['resolvedModel']}</Text> : null}
+                  {typeof item.metadata?.['resolvedModel'] === 'string' ? (
+                    <Text
+                      style={[
+                        styles.bubbleModel,
+                        item.metadata['fallbackUsed'] === true && styles.bubbleModelFallback,
+                      ]}
+                    >
+                      Dijawab oleh {String(item.metadata['resolvedModel'])}
+                      {item.metadata['fallbackUsed'] === true ? ' (fallback)' : ''}
+                    </Text>
+                  ) : null}
                   {item.attachments && item.attachments.length > 0 ? (
                     <View style={styles.attachmentList}>
                       {item.attachments.map((att: MessageAttachment, idx: number) => (
@@ -232,18 +255,115 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       )}
 
       <View style={styles.inputBar}>
-        <View style={styles.inputControlsRow}>
-          <Text style={styles.selectorLabel}>Mode: {selectedMode}</Text>
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Change mode, currently ${selectedMode}`} style={styles.selectorControl} onPress={() => setSelectedMode(selectedMode === 'auto' ? 'fast' : selectedMode === 'fast' ? 'coding' : selectedMode === 'coding' ? 'complex' : selectedMode === 'complex' ? 'research' : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity>
-          <Text style={styles.selectorLabel}>Model: {selectedModel}</Text>
-          {models.length > 0 ? <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Change model, currently ${selectedModel}`} style={styles.selectorControl} onPress={() => setSelectedModel(selectedModel === 'auto' ? models[0]!.id : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity> : null}
+        {modelNotice ? (
+          <View style={styles.noticeBanner}>
+            <Text style={styles.noticeText}>⚠️ {modelNotice}</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Tutup pemberitahuan"
+              style={styles.noticeDismissBtn}
+              onPress={clearModelNotice}
+            >
+              <Text style={styles.noticeDismissText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {modelCatalogUnavailable && !modelNotice ? (
+          <View style={styles.offlineBannerRow}>
+            <Text style={styles.offlineBannerText}>Katalog 503 (offline). Auto tetap aktif.</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Coba lagi muat katalog"
+              style={styles.offlineRetryBtn}
+              onPress={() => void loadCatalog()}
+            >
+              <Text style={styles.offlineRetryText}>Coba lagi</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        <View style={styles.chipsRow}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Ubah mode, saat ini ${MODE_LABELS[selectedMode]}`}
+            style={styles.chipButton}
+            onPress={() => {
+              const nextIndex = (MODES.indexOf(selectedMode) + 1) % MODES.length;
+              void setConversationMode(MODES[nextIndex]!);
+            }}
+          >
+            <Text style={styles.chipButtonText}>⚡ {MODE_LABELS[selectedMode]}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Pilih model, saat ini ${selectedModel}`}
+            accessibilityState={{ disabled: modelCatalogUnavailable }}
+            disabled={modelCatalogUnavailable}
+            style={[styles.chipButton, styles.modelChipButton, modelCatalogUnavailable && styles.chipDisabled]}
+            onPress={() => setIsModelModalOpen(true)}
+          >
+            <Text style={[styles.chipButtonText, modelCatalogUnavailable && styles.chipTextDisabled]} numberOfLines={1}>
+              🧠 {modelCatalogUnavailable ? 'Auto (Katalog offline)' : selectedModel === 'auto' ? 'Auto (Disarankan)' : selectedModel}
+            </Text>
+          </TouchableOpacity>
+
+          {modelCatalogUnavailable ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Coba lagi memuat katalog"
+              style={styles.chipRetryButton}
+              onPress={() => void loadCatalog()}
+            >
+              <Text style={styles.chipRetryButtonText}>Coba lagi</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
+
         <View style={styles.inputControlsRow}>
-          <TextInput accessibilityLabel="Message" style={styles.textInput} value={draftText} onChangeText={setDraftText} placeholder="Ketik pesan untuk asisten..." placeholderTextColor={theme.colors.textMuted} multiline maxLength={4000} />
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Send message" style={[styles.sendBtn, (!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected') && styles.sendBtnDisabled]} onPress={handleSend} disabled={!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected'}><Text style={styles.sendBtnText}>↑</Text></TouchableOpacity>
+          <TextInput
+            accessibilityLabel="Message"
+            style={styles.textInput}
+            value={draftText}
+            onChangeText={setDraftText}
+            placeholder="Ketik pesan untuk asisten..."
+            placeholderTextColor={theme.colors.textMuted}
+            multiline
+            maxLength={4000}
+          />
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Send message"
+            style={[
+              styles.sendBtn,
+              (!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected') &&
+                styles.sendBtnDisabled,
+            ]}
+            onPress={handleSend}
+            disabled={!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected'}
+          >
+            <Text style={styles.sendBtnText}>↑</Text>
+          </TouchableOpacity>
         </View>
-        {isStreaming ? <TouchableOpacity accessibilityRole="button" accessibilityLabel="Stop response" accessibilityState={{ disabled: isCancelling }} disabled={isCancelling} style={[styles.cancelButton, isCancelling && styles.sendBtnDisabled]} onPress={handleCancel}><Text style={styles.cancelButtonText}>{isCancelling ? 'Stopping…' : 'Stop'}</Text></TouchableOpacity> : null}
+        {isStreaming ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Stop response"
+            accessibilityState={{ disabled: isCancelling }}
+            disabled={isCancelling}
+            style={[styles.cancelButton, isCancelling && styles.sendBtnDisabled]}
+            onPress={handleCancel}
+          >
+            <Text style={styles.cancelButtonText}>{isCancelling ? 'Stopping…' : 'Stop'}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
+
+      <ModelSelectorModal
+        visible={isModelModalOpen}
+        onClose={() => setIsModelModalOpen(false)}
+      />
     </KeyboardAvoidingView>
   );
 };
@@ -279,7 +399,8 @@ const styles = StyleSheet.create({
   assistantText: { color: theme.colors.textPrimary },
   bubbleRole: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600', marginBottom: 2 },
   timestamp: { color: theme.colors.textMuted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
-  bubbleModel: { color: theme.colors.textMuted, fontSize: 10, marginTop: 2 },
+  bubbleModel: { color: theme.colors.textMuted, fontSize: 11, marginTop: 2 },
+  bubbleModelFallback: { color: theme.colors.warning, fontWeight: '600' },
   chatTasks: { backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.surfaceBorder, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
   chatTasksHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   chatTasksTitle: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600' },
@@ -295,13 +416,26 @@ const styles = StyleSheet.create({
   attachmentPill: { fontSize: 11, color: theme.colors.primary, backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginTop: 2 },
   streamingIndicatorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: theme.spacing.xs },
   streamingLabel: { color: theme.colors.textMuted, fontSize: 11 },
-  cancelButton: { backgroundColor: theme.colors.dangerBg, minHeight: theme.controls.minTouchTarget, justifyContent: 'center', paddingHorizontal: theme.spacing.md, borderRadius: theme.borderRadius.sm, borderWidth: 1, borderColor: theme.colors.danger },
+  cancelButton: { backgroundColor: theme.colors.dangerBg, minHeight: theme.controls.minTouchTarget, justifyContent: 'center', paddingHorizontal: theme.spacing.md, borderRadius: theme.borderRadius.sm, borderWidth: 1, borderColor: theme.colors.danger, marginTop: theme.spacing.xs },
   cancelButtonText: { color: theme.colors.danger, ...theme.typography.body, fontWeight: '600' },
   inputBar: { backgroundColor: theme.colors.surface, borderTopWidth: 1, borderTopColor: theme.colors.surfaceBorder, padding: theme.spacing.sm },
+  noticeBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#332b00', borderColor: theme.colors.warning, borderWidth: 1, borderRadius: theme.borderRadius.sm, paddingHorizontal: theme.spacing.sm, paddingVertical: 6, marginBottom: theme.spacing.xs },
+  noticeText: { color: theme.colors.warning, fontSize: 12, flex: 1 },
+  noticeDismissBtn: { width: theme.controls.minTouchTarget, height: theme.controls.minTouchTarget, justifyContent: 'center', alignItems: 'center' },
+  noticeDismissText: { color: theme.colors.warning, fontSize: 16, fontWeight: '700' },
+  offlineBannerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#2d1a1a', borderColor: theme.colors.danger, borderWidth: 1, borderRadius: theme.borderRadius.sm, paddingHorizontal: theme.spacing.sm, paddingVertical: 4, marginBottom: theme.spacing.xs },
+  offlineBannerText: { color: '#ffb3b3', fontSize: 12, flex: 1 },
+  offlineRetryBtn: { minHeight: 36, paddingHorizontal: theme.spacing.sm, justifyContent: 'center' },
+  offlineRetryText: { color: '#ff8080', fontSize: 12, fontWeight: '700' },
+  chipsRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.xs, marginBottom: theme.spacing.xs, flexWrap: 'wrap' },
+  chipButton: { minHeight: theme.controls.minTouchTarget, paddingHorizontal: theme.spacing.sm, paddingVertical: 6, borderRadius: theme.borderRadius.full, backgroundColor: theme.colors.surfaceElevated, borderWidth: 1, borderColor: theme.colors.surfaceBorder, justifyContent: 'center', alignItems: 'center' },
+  modelChipButton: { flexShrink: 1, maxWidth: 220 },
+  chipDisabled: { opacity: 0.6 },
+  chipButtonText: { color: theme.colors.textPrimary, fontSize: 12, fontWeight: '600' },
+  chipTextDisabled: { color: theme.colors.textMuted },
+  chipRetryButton: { minHeight: theme.controls.minTouchTarget, paddingHorizontal: theme.spacing.sm, justifyContent: 'center', alignItems: 'center' },
+  chipRetryButtonText: { color: theme.colors.primary, fontSize: 12, fontWeight: '700' },
   inputControlsRow: { flexDirection: 'row', alignItems: 'center' },
-  selectorLabel: { color: theme.colors.textMuted, ...theme.typography.caption, marginRight: theme.spacing.xs },
-  selectorControl: { minHeight: theme.controls.minTouchTarget, justifyContent: 'center' },
-  selectorButton: { color: theme.colors.primary, ...theme.typography.caption, marginRight: theme.spacing.sm },
   textInput: { flex: 1, backgroundColor: theme.colors.surfaceElevated, color: theme.colors.textPrimary, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.full, maxHeight: 100, ...theme.typography.body },
   sendBtn: { width: theme.controls.minTouchTarget, height: theme.controls.minTouchTarget, borderRadius: theme.controls.minTouchTarget / 2, backgroundColor: theme.colors.primary, justifyContent: 'center', alignItems: 'center', marginLeft: theme.spacing.xs },
   sendBtnDisabled: { backgroundColor: theme.colors.surfaceElevated, opacity: 0.6 },

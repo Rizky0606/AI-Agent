@@ -15,6 +15,7 @@ import { theme } from '../components/Theme.ts';
 import { useHealth } from '../hooks/use-queries.ts';
 import { defaultFcmService } from '../services/fcm-service.ts';
 import { useAuthStore } from '../state/auth-store.ts';
+import { useChatStore } from '../state/chat-store.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
 export interface SettingsScreenProps {
@@ -25,6 +26,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onNavigateToArti
   const { user, device, serverUrl, logout } = useAuthStore();
   const { fcmToken, pushNotificationsEnabled, setPushNotificationsEnabled } = useUiStore();
   const { data: health, isLoading: healthLoading } = useHealth();
+  const { favoriteModels, toggleFavoriteModel, userDefaultModel, setUserDefaultModel } = useChatStore();
   const [catalog, setCatalog] = useState<ModelCatalogResponse | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const fcmStatus = defaultFcmService.getStatus();
@@ -93,10 +95,70 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onNavigateToArti
         )}
       </View>
       <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Model Catalog</Text>
-        <Text style={styles.infoTextMuted}>{catalog ? `Source: ${catalog.source}` : 'Loading model catalog...'}</Text>
+        <Text style={styles.sectionTitle}>Katalog Model</Text>
+        <Text style={styles.infoTextMuted}>{catalog ? `Sumber: ${catalog.source}` : 'Memuat katalog model...'}</Text>
         {catalogError ? <Text style={styles.offlineWarning}>{catalogError}</Text> : null}
-        {catalog?.models.map((model) => <Text key={model.id} style={styles.infoText}>{model.id} · {model.capabilities.join(', ')}</Text>)}
+        {catalog?.models.map((model) => {
+          const isFav = favoriteModels.includes(model.id);
+          const isDef = userDefaultModel === model.id;
+          const isUnknown = !model.capabilityDetails || Object.keys(model.capabilityDetails).length === 0;
+
+          return (
+            <View key={model.id} style={styles.modelCard}>
+              <View style={styles.modelHeaderRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modelName}>{model.name || model.id}</Text>
+                  <Text style={styles.modelMeta}>
+                    {model.provider} {model.contextWindow ? `· ${(model.contextWindow / 1024).toFixed(0)}k token` : ''}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={isFav ? `Hapus favorit ${model.name || model.id}` : `Favoritkan ${model.name || model.id}`}
+                  style={styles.modelFavBtn}
+                  onPress={() => toggleFavoriteModel(model.id)}
+                >
+                  <Text style={[styles.modelFavStar, isFav && styles.modelFavStarActive]}>
+                    {isFav ? '★' : '☆'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.modelBadgesRow}>
+                {model.capabilityDetails?.['streaming']?.status === 'probed' || model.capabilities.includes('streaming') ? (
+                  <View style={styles.badgeVerified}><Text style={styles.badgeVerifiedText}>Stream ✓</Text></View>
+                ) : null}
+                {model.capabilityDetails?.['tools']?.status === 'probed' || model.capabilities.includes('tools') || model.capabilities.includes('tool_calling') ? (
+                  <View style={styles.badgeVerified}><Text style={styles.badgeVerifiedText}>Tools ✓</Text></View>
+                ) : null}
+                {model.capabilityDetails?.['vision']?.status === 'probed' || model.capabilities.includes('vision') ? (
+                  <View style={styles.badgeVerified}><Text style={styles.badgeVerifiedText}>Vision ✓</Text></View>
+                ) : null}
+                {isUnknown ? (
+                  <View style={styles.badgeUnknown}><Text style={styles.badgeUnknownText}>Unknown ?</Text></View>
+                ) : null}
+                {model.lastLatencyMs ? (
+                  <View style={styles.badgeLatency}><Text style={styles.badgeLatencyText}>{model.lastLatencyMs}ms</Text></View>
+                ) : null}
+              </View>
+
+              <View style={styles.modelActionsRow}>
+                {isDef ? (
+                  <Text style={styles.defaultLabel}>✓ Default Akun</Text>
+                ) : (
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel={`Jadikan ${model.name || model.id} sebagai default akun`}
+                    style={styles.setDefaultBtn}
+                    onPress={() => void setUserDefaultModel(model.id)}
+                  >
+                    <Text style={styles.setDefaultText}>Jadikan Default Akun</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          );
+        })}
         <TouchableOpacity
           style={styles.refreshBtn}
           onPress={() =>
@@ -284,6 +346,109 @@ const styles = StyleSheet.create({
   actionCardDesc: {
     color: theme.colors.textSecondary,
     fontSize: 12,
+  },
+  modelCard: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+    padding: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  modelHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modelName: {
+    color: theme.colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modelMeta: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  modelFavBtn: {
+    width: theme.controls.minTouchTarget,
+    height: theme.controls.minTouchTarget,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modelFavStar: {
+    fontSize: 22,
+    color: theme.colors.textMuted,
+  },
+  modelFavStarActive: {
+    color: '#fbbf24',
+  },
+  modelBadgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  badgeVerified: {
+    backgroundColor: 'rgba(52, 211, 153, 0.15)',
+    borderColor: 'rgba(52, 211, 153, 0.4)',
+    borderWidth: 1,
+    borderRadius: theme.borderRadius.full,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  badgeVerifiedText: {
+    color: '#34d399',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  badgeUnknown: {
+    backgroundColor: 'rgba(156, 163, 175, 0.15)',
+    borderColor: 'rgba(156, 163, 175, 0.3)',
+    borderWidth: 1,
+    borderRadius: theme.borderRadius.full,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  badgeUnknownText: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  badgeLatency: {
+    backgroundColor: 'rgba(96, 165, 250, 0.15)',
+    borderColor: 'rgba(96, 165, 250, 0.3)',
+    borderWidth: 1,
+    borderRadius: theme.borderRadius.full,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  badgeLatencyText: {
+    color: '#60a5fa',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  modelActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 4,
+  },
+  defaultLabel: {
+    color: '#34d399',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  setDefaultBtn: {
+    minHeight: theme.controls.minTouchTarget,
+    paddingHorizontal: theme.spacing.sm,
+    justifyContent: 'center',
+  },
+  setDefaultText: {
+    color: theme.colors.primary,
+    fontSize: 12,
+    fontWeight: '600',
   },
   refreshBtn: {
     backgroundColor: theme.colors.surfaceElevated,

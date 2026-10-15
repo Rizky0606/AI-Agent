@@ -65,18 +65,28 @@ capabilities:
     limitation: only a stdio transport exists, so `sse` and `in_process` server configs cannot be launched; servers are declared through the deployment-time `MCP_SERVERS` variable (arbitrary local process execution, never end-user input); every tool of a server shares the single declared capability because MCP has no capability concept of its own; no real third-party MCP server is configured in this deployment
   android:
     status: partial
-    code: apps/android/src/screens; apps/android/src/api
+    code: apps/android/src/screens; apps/android/src/components; apps/android/src/api; apps/android/src/state
     permission_boundary: authenticated API/WebSocket
     clients: android
     proof: pnpm --filter @personal-ai-os/android test
-    limitation: attachment upload unavailable; task creation surface is coding-runtime-specific
+    limitation: |
+      Client Model Selector implemented (2026-10-15, Sesi 6, ADR 0008): Two-state 'Change' button removed from composer. Chip Model opens built-in React Native Modal bottom sheet with search, provider grouping, 'Auto (Disarankan)' pinned at top, verified capability badges (Stream, Tools, Vision, Context, Latency) only when proven, 'Unknown' label for unproven capabilities, favorite toggling (★), and 'Jadikan Default Akun' preference. All interactive touch targets strictly meet or exceed 48 dp (theme.controls.minTouchTarget).
+      Per-conversation model & mode persistence via `PATCH /v1/conversations/:id` and user default preference via `PATCH /v1/users/me/preferences`.
+      Fallback attribution: Message bubbles render 'Dijawab oleh <model>' or 'Dijawab oleh <model> (fallback)' in warning amber.
+      Resilience: When model catalog returns 503 / offline, the chip disables with a clear Indonesian message and 'Coba lagi' retry button, while Auto continues to function normally. When a previously selected model disappears from the catalog, the client gracefully reverts to Auto with a dismissible notice banner without raw exceptions.
+      SettingsScreen enhanced with rich model cards showing verified capability badges, latencies, and favorite/default controls.
+      Remaining gaps: attachment upload unavailable; task creation surface is coding-runtime-specific.
   windows:
     status: partial
     code: apps/windows/src/ui; apps/windows/src/api; apps/windows/src/connection; apps/windows/src/security; apps/windows/src-tauri
     permission_boundary: authenticated device WSS; local capability registry; server REST calls reuse the same bearer token
     clients: windows
-    proof: apps/windows/test/bootstrap-and-auth.test.ts; apps/windows/test/server-api-and-events.test.ts; apps/windows/test/agent-connection.test.ts; apps/windows/test/connection-and-offline.test.ts; apps/windows/test/layout-and-components.test.ts; apps/api/test/device-handshake.test.ts; apps/api/test/device-commands.test.ts; apps/agent-worker/test/device-dispatch.test.ts; pnpm exec tauri build --no-bundle
+    proof: apps/windows/test/bootstrap-and-auth.test.ts; apps/windows/test/server-api-and-events.test.ts; apps/windows/test/agent-connection.test.ts; apps/windows/test/connection-and-offline.test.ts; apps/windows/test/layout-and-components.test.ts; apps/windows/test/model-selector-store.test.ts; apps/api/test/device-handshake.test.ts; apps/api/test/device-commands.test.ts; apps/agent-worker/test/device-dispatch.test.ts; pnpm exec tauri build --no-bundle
     limitation: |
+      Client Model Selector implemented (2026-10-15, Sesi 6, ADR 0008): Free-text model input removed from composer. Chip Model opens accessible Popover with real-time search, provider grouping, 'Auto (Disarankan)' pinned at top, verified capability badges (Stream, Tools, Vision, Context size, Latency) only when proven by backend probe, 'Unknown' badge for unproven capabilities, favorite toggling (★), and 'Jadikan Default Akun' action.
+      Per-conversation model & mode persistence via `PATCH /v1/conversations/:id` and user default preference via `PATCH /v1/users/me/preferences`. Mode selector (Auto, Cepat, Coding, Kompleks, Riset) seamlessly integrated into composer chips row.
+      Fallback attribution: Message bubbles display 'Dijawab oleh <model>' and amber badge 'Dijawab oleh <model> (fallback)' when fallback routing was used.
+      Resilience: If model catalog returns 503 or network failure, the model chip disables with offline indicator and 'Coba lagi' retry button, and Auto remains fully functional. If a previously selected model disappears from the catalog, store gracefully reverts to Auto with a notice banner without raw error. SettingsView Models section updated with verified badges, latency stats, and favorite/default buttons.
       Windows Layout Redesign and Centralized id-ID Localization implemented (2026-10-15, Sesi 4): Monolithic `App.tsx` (~38 KB) refactored into domain modules under `src/ui/layout/` (`Sidebar.tsx`, `AppHeader.tsx`, `Layout.css`), `src/ui/chat/` (`ChatView.tsx`, `ChatMessages.tsx`, `ChatComposer.tsx`, `EmptyChatState.tsx`, `ToolStepCard.tsx`, `conversation-grouping.ts`), `src/ui/activity/` (`ActivityPanel.tsx`, `ApprovalCard.tsx`, `TaskCard.tsx`, `ArtifactCard.tsx`), `src/ui/project/` (`ProjectView.tsx`), `src/ui/settings/` (`SettingsView.tsx`), and centralized localization `src/ui/locales/id-ID.ts` with 100% consistent Indonesian text (ADR 0006). Zero inline styles remain across all views.
       Left sidebar is collapsible with auto-collapse under 900px viewport, chronologically grouped chats (Hari ini, Kemarin, Lebih lama), new chat button, search input, project allowlist selector, connection status dot, and user profile footer with quick settings and logout.
       Centered chat view is constrained to max-width ~720px with MarkdownMessage formatting, per-message actions (copy, retry, edit), collapsible tool step cards, and 4 Indonesian sample prompts for empty state. Floating pill composer supports Enter send, Shift+Enter newline, Stop button during streaming, and Mode/Model chip slots.

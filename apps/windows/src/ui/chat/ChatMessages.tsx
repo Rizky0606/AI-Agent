@@ -87,9 +87,25 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
                 </button>
               )}
 
-              {message.model && (
-                <span style={{ fontSize: 10, color: 'var(--text-sub)', marginLeft: 4 }}>
-                  {message.model}
+              {!isUser && (message.resolvedModel || message.model) && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: message.fallbackUsed ? 'var(--accent-amber, #f59e0b)' : 'var(--text-sub)',
+                    marginLeft: 6,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    background: message.fallbackUsed ? 'rgba(245, 158, 11, 0.1)' : 'transparent',
+                    border: message.fallbackUsed ? '1px solid rgba(245, 158, 11, 0.3)' : 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                  title={message.fallbackUsed ? 'Model cadangan (fallback) digunakan karena model utama tidak merespons.' : undefined}
+                >
+                  {message.fallbackUsed
+                    ? `Dijawab oleh ${message.resolvedModel || message.model} (fallback)`
+                    : `Dijawab oleh ${message.resolvedModel || message.model}`}
                 </span>
               )}
             </div>

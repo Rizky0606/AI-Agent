@@ -11,6 +11,13 @@ import {
   RefreshCw,
   LogOut,
   AlertTriangle,
+  Star,
+  Zap,
+  Wrench,
+  Eye,
+  Layers,
+  Clock,
+  HelpCircle,
 } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import type { CapabilityName } from '../../security/capability-registry.ts';
@@ -42,6 +49,12 @@ export const SettingsView: React.FC = () => {
     models,
     refreshModels,
     modelCatalogStatus,
+    modelCatalogUnavailable,
+    modelCatalogError,
+    favoriteModels,
+    toggleFavoriteModel,
+    userDefaultModel,
+    setUserDefaultModel,
     closeToTray,
     setCloseToTray,
     autostart,
@@ -314,23 +327,109 @@ export const SettingsView: React.FC = () => {
                 </button>
               </div>
 
-              {modelCatalogStatus && (
+              {modelCatalogUnavailable && (
+                <div className="model-popover-alert" style={{ marginBottom: 12, borderRadius: 'var(--radius-md)' }} role="alert">
+                  <span className="model-alert-text">
+                    {modelCatalogError || 'Katalog model tidak dapat dihubungi (503).'}
+                  </span>
+                  <button
+                    type="button"
+                    className="model-alert-retry"
+                    onClick={() => void refreshModels()}
+                  >
+                    <RefreshCw size={11} />
+                    <span>Coba lagi</span>
+                  </button>
+                </div>
+              )}
+
+              {modelCatalogStatus && !modelCatalogUnavailable && (
                 <span className="settings-hint">{modelCatalogStatus}</span>
               )}
 
               <div className="settings-capability-list">
-                {models.map((model) => (
-                  <div key={model.id} className="activity-card">
-                    <div className="card-header-row">
-                      <strong className="card-title-text">{model.id}</strong>
-                      <span className="status-pill running">{model.provider}</span>
+                {models.map((model) => {
+                  const isFav = favoriteModels.includes(model.id);
+                  const isDefault = userDefaultModel === model.id || model.isDefault;
+                  const details = model.capabilityDetails;
+                  const isStream = details?.streaming?.status === 'probed' || model.capabilities?.includes('streaming');
+                  const isTool = details?.tool_calling?.status === 'probed' || model.capabilities?.includes('tool_calling');
+                  const isVision = details?.vision?.status === 'probed' || model.capabilities?.includes('vision');
+                  const hasUnknown = details && (details.streaming?.status === 'unknown' || details.tool_calling?.status === 'unknown' || details.vision?.status === 'unknown');
+
+                  return (
+                    <div key={model.id} className="activity-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div className="card-header-row">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <strong className="card-title-text">{model.id}</strong>
+                          {isDefault && (
+                            <span className="model-default-badge">Default Akun</span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <button
+                            type="button"
+                            className="model-action-icon-btn"
+                            onClick={() => toggleFavoriteModel(model.id)}
+                            title={isFav ? 'Hapus favorit' : 'Sematkan favorit'}
+                          >
+                            <Star size={14} fill={isFav ? 'var(--accent-amber, #f59e0b)' : 'none'} color={isFav ? 'var(--accent-amber, #f59e0b)' : 'var(--text-sub)'} />
+                          </button>
+                          {!isDefault && (
+                            <button
+                              type="button"
+                              className="model-set-default-btn"
+                              onClick={() => void setUserDefaultModel(model.id)}
+                              title="Jadikan model default untuk semua percakapan"
+                            >
+                              Jadikan Default
+                            </button>
+                          )}
+                          <span className="status-pill running">{model.provider}</span>
+                        </div>
+                      </div>
+
+                      <div className="model-badges-row">
+                        {isStream && (
+                          <span className="model-cap-badge verified">
+                            <Zap size={10} />
+                            <span>Streaming</span>
+                          </span>
+                        )}
+                        {isTool && (
+                          <span className="model-cap-badge verified">
+                            <Wrench size={10} />
+                            <span>Tools</span>
+                          </span>
+                        )}
+                        {isVision && (
+                          <span className="model-cap-badge verified">
+                            <Eye size={10} />
+                            <span>Vision</span>
+                          </span>
+                        )}
+                        {hasUnknown && (
+                          <span className="model-cap-badge unknown">
+                            <HelpCircle size={10} />
+                            <span>Unknown</span>
+                          </span>
+                        )}
+                        {model.contextWindow && (
+                          <span className="model-cap-badge context">
+                            <Layers size={10} />
+                            <span>{model.contextWindow.toLocaleString()} token</span>
+                          </span>
+                        )}
+                        {typeof model.lastLatencyMs === 'number' && model.lastLatencyMs > 0 && (
+                          <span className="model-cap-badge latency">
+                            <Clock size={10} />
+                            <span>{model.lastLatencyMs} ms</span>
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="card-meta-row">
-                      <span>{idID.settings.models.capabilitiesLabel}</span>
-                      <span>{model.capabilities?.join(', ') || idID.settings.models.noCapabilities}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

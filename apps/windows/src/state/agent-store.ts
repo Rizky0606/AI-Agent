@@ -93,8 +93,45 @@ const persistSession = (session: StoredSession): void => {
   }
 };
 
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; model?: string | null; }
-export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; projectId?: string; createdAt?: string; }
+const FAVORITE_MODELS_STORAGE_KEY = 'personal-ai-os.windows.favorite_models';
+
+const readStoredFavorites = (): string[] => {
+  try {
+    const raw = globalThis.localStorage?.getItem(FAVORITE_MODELS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const persistFavorites = (favorites: string[]): void => {
+  try {
+    globalThis.localStorage?.setItem(FAVORITE_MODELS_STORAGE_KEY, JSON.stringify(favorites));
+  } catch {
+    // Ignored when storage unavailable
+  }
+};
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  cancelled?: boolean;
+  model?: string | null;
+  resolvedModel?: string | null;
+  fallbackUsed?: boolean;
+}
+export interface ChatConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  projectId?: string;
+  createdAt?: string;
+  model?: string | null;
+  mode?: 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+}
 export type ChatStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 export interface TaskEventEntry {
@@ -191,7 +228,18 @@ export interface AgentState {
   clearApiError: () => void;
   models: ModelDescriptor[];
   modelCatalogStatus: string | null;
+  modelCatalogError: string | null;
+  modelCatalogUnavailable: boolean;
+  modelNotice: string | null;
+  favoriteModels: string[];
+  userDefaultModel: string | null;
+  userDefaultMode: 'fast' | 'coding' | 'complex' | 'research';
   refreshModels: () => Promise<void>;
+  toggleFavoriteModel: (modelId: string) => void;
+  setUserDefaultModel: (modelId: string | null) => Promise<void>;
+  setConversationModel: (model: string | null) => Promise<void>;
+  setConversationMode: (mode: AgentState['selectedMode']) => Promise<void>;
+  clearModelNotice: () => void;
 }
 
 export const createAgentStore = (
@@ -314,11 +362,33 @@ export const createAgentStore = (
     apiError: null,
     models: [],
     modelCatalogStatus: null,
+    modelCatalogError: null,
+    modelCatalogUnavailable: false,
+    modelNotice: null,
+    favoriteModels: readStoredFavorites(),
+    userDefaultModel: null,
+    userDefaultMode: 'fast',
 
     setServerUrl: (url) => { if (get().serverUrl === url) return; set({ serverUrl: url }); void get().refreshChat(); },
     setChatDraft: (chatDraft) => set({ chatDraft }),
-    setActiveConversation: (activeConversationId) => { set({ activeConversationId, conversationTasks: [] }); void get().refreshConversationTasks(); },
-    newConversation: () => { const id = `draft-${crypto.randomUUID()}`; set((state) => ({ conversations: [{ id, title: 'Percakapan baru', messages: [], createdAt: new Date().toISOString() }, ...state.conversations], activeConversationId: id, chatError: null })); },
+    setActiveConversation: (activeConversationId) => {
+      const conv = get().conversations.find((item) => item.id === activeConversationId);
+      set({
+        activeConversationId,
+        conversationTasks: [],
+        selectedModel: conv?.model || 'auto',
+        selectedMode: conv?.mode || 'auto',
+      });
+      void get().refreshConversationTasks();
+    },
+    newConversation: () => {
+      const id = `draft-${crypto.randomUUID()}`;
+      set((state) => ({
+        conversations: [{ id, title: 'Percakapan baru', messages: [], createdAt: new Date().toISOString(), model: state.selectedModel === 'auto' ? null : state.selectedModel, mode: state.selectedMode }, ...state.conversations],
+        activeConversationId: id,
+        chatError: null,
+      }));
+    },
     sendChat: () => {
       const state = get();
       const content = state.chatDraft.trim();
@@ -326,8 +396,22 @@ export const createAgentStore = (
       if (!state.authToken.trim() || !activeChatConnection) { set({ chatError: 'Sign in to send a message.' }); return; }
       const id = state.activeConversationId || `draft-${crypto.randomUUID()}`;
       pendingChat = { content, conversationId: id };
-      set((current) => ({ activeConversationId: id, chatDraft: '', chatStreaming: true, chatError: null, conversations: current.conversations.some((item) => item.id === id) ? current.conversations : [{ id, title: content.slice(0, 48), messages: [] }, ...current.conversations] }));
-      activeChatConnection.sendChatMessage({ type: 'chat.send', ...(!id.startsWith('draft-') ? { conversationId: id } : {}), content, model: state.selectedModel === 'auto' ? undefined : state.selectedModel, mode: state.selectedMode });
+      set((current) => ({
+        activeConversationId: id,
+        chatDraft: '',
+        chatStreaming: true,
+        chatError: null,
+        conversations: current.conversations.some((item) => item.id === id)
+          ? current.conversations
+          : [{ id, title: content.slice(0, 48), messages: [], model: state.selectedModel === 'auto' ? null : state.selectedModel, mode: state.selectedMode }, ...current.conversations],
+      }));
+      activeChatConnection.sendChatMessage({
+        type: 'chat.send',
+        ...(!id.startsWith('draft-') ? { conversationId: id } : {}),
+        content,
+        model: state.selectedModel === 'auto' ? undefined : state.selectedModel,
+        mode: state.selectedMode,
+      });
     },
     cancelChat: () => { activeChatConnection?.cancelChat(); },
     retryChat: () => {
@@ -338,8 +422,65 @@ export const createAgentStore = (
       get().sendChat();
     },
     clearChatError: () => set({ chatError: null }),
-    setSelectedModel: (selectedModel) => set({ selectedModel }),
-    setSelectedMode: (selectedMode) => set({ selectedMode }),
+    setSelectedModel: (selectedModel) => void get().setConversationModel(selectedModel),
+    setSelectedMode: (selectedMode) => void get().setConversationMode(selectedMode),
+    setConversationModel: async (model) => {
+      const state = get();
+      const nextModel = model || 'auto';
+      set({ selectedModel: nextModel });
+      const activeId = state.activeConversationId;
+      if (activeId) {
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === activeId ? { ...c, model: nextModel === 'auto' ? null : nextModel } : c
+          ),
+        }));
+        if (!activeId.startsWith('draft-') && state.authToken.trim()) {
+          try {
+            await api().updateConversation(activeId, { model: nextModel === 'auto' ? null : nextModel });
+          } catch {
+            // Background update
+          }
+        }
+      }
+    },
+    setConversationMode: async (mode) => {
+      const state = get();
+      set({ selectedMode: mode });
+      const activeId = state.activeConversationId;
+      if (activeId) {
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === activeId ? { ...c, mode } : c
+          ),
+        }));
+        if (!activeId.startsWith('draft-') && state.authToken.trim()) {
+          try {
+            await api().updateConversation(activeId, { mode });
+          } catch {
+            // Background update
+          }
+        }
+      }
+    },
+    toggleFavoriteModel: (modelId) => {
+      const favorites = get().favoriteModels;
+      const next = favorites.includes(modelId)
+        ? favorites.filter((id) => id !== modelId)
+        : [...favorites, modelId];
+      persistFavorites(next);
+      set({ favoriteModels: next });
+    },
+    setUserDefaultModel: async (modelId) => {
+      try {
+        const res = await api().updateUserPreferences({ defaultModel: modelId });
+        set({ userDefaultModel: res.defaultModel });
+        void get().refreshModels();
+      } catch (err) {
+        set({ apiError: err instanceof Error ? err.message : String(err) });
+      }
+    },
+    clearModelNotice: () => set({ modelNotice: null }),
     // Tasks spawned from the active conversation. Read straight from the server, never inferred.
     refreshConversationTasks: () => run(async () => {
       const conversationId = get().activeConversationId;
@@ -442,13 +583,35 @@ export const createAgentStore = (
     closeArtifactPreview: () => set({ artifactPreview: null }),
     clearApiError: () => set({ apiError: null }),
 
-    refreshModels: () => run(async () => {
-      const catalog = await api().listModels();
-      set({
-        models: catalog.models,
-        modelCatalogStatus: `Source: ${catalog.source} · ${catalog.models.length} models`,
-      });
-    }),
+    refreshModels: async () => {
+      try {
+        const catalog = await api().listModels();
+        const currentModel = get().selectedModel;
+        const modelExists = currentModel === 'auto' || catalog.models.some((m) => m.id === currentModel);
+        let notice: string | null = null;
+        let nextSelected = currentModel;
+        if (!modelExists) {
+          notice = `Model '${currentModel}' tidak lagi tersedia di katalog. Beralih ke Auto.`;
+          nextSelected = 'auto';
+        }
+        set({
+          models: catalog.models,
+          modelCatalogStatus: `Source: ${catalog.source} · ${catalog.models.length} models`,
+          modelCatalogError: null,
+          modelCatalogUnavailable: false,
+          selectedModel: nextSelected,
+          ...(notice ? { modelNotice: notice } : {}),
+        });
+      } catch (error) {
+        const errMsg = error instanceof ApiError ? error.message : error instanceof Error ? error.message : String(error);
+        const isUnavailable = error instanceof ApiError && (error.status === 503 || error.code === 'PROVIDER_UNAVAILABLE');
+        set({
+          modelCatalogError: isUnavailable ? 'Katalog model tidak dapat dihubungi (503).' : (errMsg || 'Katalog model tidak tersedia.'),
+          modelCatalogUnavailable: true,
+          modelCatalogStatus: null,
+        });
+      }
+    },
 
     bootstrapAuth: async () => {
       // Sync close-to-tray & autostart from Tauri backend if running inside Tauri
@@ -777,7 +940,17 @@ export const createAgentStore = (
             if (conversation.id !== conversationId) return conversation;
             const existing = conversation.messages.find((message) => message.id === id);
             const content = frame.delta ? `${existing?.content ?? ''}${frame.delta}` : incoming?.content ?? frame.content ?? existing?.content ?? '';
-            const message = { id, role: role === 'system' ? 'assistant' : role, content, cancelled: Boolean(incoming?.cancelled || incoming?.metadata?.['cancelled']), model: frame.resolvedModel ?? existing?.model } as ChatMessage;
+            const resolvedModel = frame.resolvedModel ?? incoming?.metadata?.['resolvedModel'] ?? existing?.resolvedModel ?? (typeof frame.model === 'string' ? frame.model : existing?.model);
+            const fallbackUsed = Boolean(frame.fallbackUsed ?? incoming?.metadata?.['fallbackUsed'] ?? existing?.fallbackUsed);
+            const message = {
+              id,
+              role: role === 'system' ? 'assistant' : role,
+              content,
+              cancelled: Boolean(incoming?.cancelled || incoming?.metadata?.['cancelled']),
+              model: resolvedModel,
+              resolvedModel,
+              fallbackUsed,
+            } as ChatMessage;
             return { ...conversation, messages: existing ? conversation.messages.map((item) => item.id === id ? { ...item, ...message } : item) : [...conversation.messages, message] };
           });
           const done = frame.type === 'message.completed' || frame.type === 'message.cancelled';
@@ -801,7 +974,25 @@ export const createAgentStore = (
       chatEventsStream.connect();
       try {
         const history = await api().listConversations();
-        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Percakapan', projectId: item.projectId ?? undefined, createdAt: item.createdAt, messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']), model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null }] : []) })));
+        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({
+          id: item.id,
+          title: item.title ?? 'Percakapan',
+          projectId: item.projectId ?? undefined,
+          createdAt: item.createdAt,
+          messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] =>
+            message.role === 'user' || message.role === 'assistant'
+              ? [{
+                  id: message.id,
+                  role: message.role,
+                  content: message.content,
+                  cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']),
+                  model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : (typeof message.metadata?.['model'] === 'string' ? message.metadata['model'] : null),
+                  resolvedModel: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null,
+                  fallbackUsed: Boolean(message.metadata?.['fallbackUsed']),
+                }]
+              : []
+          ),
+        })));
         if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
         set((current) => {
           const merged = conversations.map((conversation) => {

@@ -15,6 +15,7 @@ import {
   type ReadyResponse,
   type RefreshResponse,
   type User,
+  type UserPreferences,
 } from './types.ts';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
 
@@ -289,11 +290,12 @@ export class ApiClient {
 
   async updateConversation(
     conversationId: string,
-    title: string,
+    updates: string | { title?: string | undefined; model?: string | null | undefined; mode?: string | undefined },
   ): Promise<{ conversation: Conversation }> {
+    const body = typeof updates === 'string' ? { title: updates } : updates;
     return this.request<{ conversation: Conversation }>(`/v1/conversations/${conversationId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ title }),
+      body: JSON.stringify(body),
     });
   }
 
@@ -316,9 +318,6 @@ export class ApiClient {
     });
   }
 
-  async listModels(): Promise<ModelCatalogResponse> {
-    return this.request<ModelCatalogResponse>('/v1/models');
-  }
   async listConversations(projectId?: string): Promise<{ conversations: Conversation[] }> {
     const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
     return this.request<{ conversations: Conversation[] }>(`/v1/conversations${query}`);
@@ -451,6 +450,25 @@ export class ApiClient {
       database: ready.checks.database ? 'connected' : 'disconnected',
       redis: ready.checks.redis ? 'connected' : 'disconnected',
     };
+  }
+
+  // --- Models & Preferences ---
+  async listModels(): Promise<ModelCatalogResponse> {
+    return this.request<ModelCatalogResponse>('/v1/models');
+  }
+
+  async getUserPreferences(): Promise<UserPreferences> {
+    return this.request<UserPreferences>('/v1/users/me/preferences');
+  }
+
+  async updateUserPreferences(prefs: {
+    defaultModel?: string | null | undefined;
+    defaultMode?: string | undefined;
+  }): Promise<UserPreferences> {
+    return this.request<UserPreferences>('/v1/users/me/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(prefs),
+    });
   }
 }
 

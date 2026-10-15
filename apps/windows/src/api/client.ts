@@ -42,12 +42,29 @@ export interface ArtifactPreview {
   truncated: boolean;
 }
 
+export interface CapabilityDetail {
+  status: 'probed' | 'declared' | 'unknown';
+  latencyMs?: number | undefined;
+  verifiedAt?: string | undefined;
+}
+
 export interface ModelDescriptor {
   id: string;
+  name?: string | undefined;
   provider: string;
   capabilities: string[];
+  capabilityDetails?: Record<string, CapabilityDetail> | undefined;
   contextWindow?: number | undefined;
   costMetadata?: Record<string, unknown> | undefined;
+  isRecommended?: boolean | undefined;
+  isDefault?: boolean | undefined;
+  availabilityStatus?: 'available' | 'degraded' | 'unavailable' | undefined;
+  lastLatencyMs?: number | null | undefined;
+}
+
+export interface UserPreferences {
+  defaultModel: string | null;
+  defaultMode: 'fast' | 'coding' | 'complex' | 'research';
 }
 
 export interface ModelCatalogResponse {
@@ -301,9 +318,40 @@ export class ApiClient {
   async listModels(): Promise<ModelCatalogResponse> {
     return this.request<ModelCatalogResponse>('/v1/models');
   }
+
+  // --- User Preferences ---
+  async getUserPreferences(): Promise<UserPreferences> {
+    return this.request<UserPreferences>('/v1/users/me/preferences');
+  }
+
+  async updateUserPreferences(prefs: {
+    defaultModel?: string | null | undefined;
+    defaultMode?: string | undefined;
+  }): Promise<UserPreferences> {
+    return this.request<UserPreferences>('/v1/users/me/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(prefs),
+    });
+  }
+
+  // --- Conversations ---
   async listConversations(projectId?: string): Promise<{ conversations: WindowsConversation[] }> {
     const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
     return this.request<{ conversations: WindowsConversation[] }>(`/v1/conversations${query}`);
+  }
+
+  async updateConversation(
+    conversationId: string,
+    updates: {
+      title?: string | undefined;
+      model?: string | null | undefined;
+      mode?: string | undefined;
+    },
+  ): Promise<WindowsConversation> {
+    return this.request<WindowsConversation>(`/v1/conversations/${encodeURIComponent(conversationId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
   }
 
   async listMessages(conversationId: string): Promise<{ messages: WindowsChatMessage[] }> {

@@ -121,12 +121,29 @@ export interface HealthResponse {
 
 export type ChatMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
 
+export interface CapabilityDetail {
+  status: 'probed' | 'declared' | 'unknown';
+  latencyMs?: number | undefined;
+  verifiedAt?: string | undefined;
+}
+
 export interface ModelDescriptor {
   id: string;
+  name?: string | undefined;
   provider: string;
   capabilities: string[];
-  contextWindow?: number;
-  costMetadata?: Record<string, unknown>;
+  capabilityDetails?: Record<string, CapabilityDetail> | undefined;
+  contextWindow?: number | undefined;
+  costMetadata?: Record<string, unknown> | undefined;
+  isRecommended?: boolean | undefined;
+  isDefault?: boolean | undefined;
+  availabilityStatus?: 'available' | 'degraded' | 'unavailable' | undefined;
+  lastLatencyMs?: number | null | undefined;
+}
+
+export interface UserPreferences {
+  defaultModel: string | null;
+  defaultMode: 'fast' | 'coding' | 'complex' | 'research';
 }
 
 export interface ModelCatalogResponse {

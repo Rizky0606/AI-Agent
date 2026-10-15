@@ -16,6 +16,8 @@ export interface ChatFrame {
   message?: string | { id: string; role: 'user' | 'assistant' | 'system'; content: string; cancelled?: boolean; metadata?: Record<string, unknown> };
   usage?: Record<string, unknown>;
   resolvedModel?: string;
+  model?: string;
+  fallbackUsed?: boolean;
 }
 
 export interface AgentConnectionOptions {
