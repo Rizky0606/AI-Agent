@@ -137,6 +137,22 @@ capabilities:
       Windows client bundles Inter WOFF2 fonts locally (zero CDN requests) compliant with Tauri CSP 'self'. Base components (Button, IconButton, Chip, Popover, Drawer, Dialog, Toast, EmptyState, Spinner, Skeleton, StatusDot) and MarkdownMessage implemented with zero inline styles. External links confirmed via Dialog and opened through Tauri command open_external_url.
       Theme preference (system/light/dark) persisted in localStorage with dynamic OS media query synchronization.
       Android theme unified to consume @personal-ai-os/shared theme generator with lucide-react-native + react-native-svg. Screen-level migration is scheduled for Sesi 4.
+  runtime_bridges_and_execution:
+    status: partial
+    code: apps/runtime-bridge/src/index.ts; docs/adr/0004-pemetaan-fitur-runtime.md; docs/adr/runtime-bridge.md
+    permission_boundary: SecuredCapabilityGuard; child_process execution allowlist
+    clients: backend (worker/runtime-bridge)
+    proof: apps/runtime-bridge/test; docs/verification/runtimes-live.md
+    limitation: |
+      Runtime bridge evaluates and maps omp, Hermes, pi.dev, and Odysseus (ADR 0004, 2026-10-15, Sesi 11):
+      - Live VPS state: omp 18.6.1 and Hermes 0.20.5 are installed on ARM64 VPS. Hermes is running live on PID 613535 bound to 0.0.0.0:9119 (~160 MB RSS). pi.dev and Odysseus have zero trace on host.
+      - Architectural Decisions:
+        1. omp: Keep as external coding engine, upgrade integration from fire-and-forget CLI (`-p ... --mode json --no-session`) to streaming NDJSON RPC bridge over stdin/stdout (`--mode rpc`). Adopt hashline precision file editing and LSP diagnostics.
+        2. Hermes: Keep as multi-channel messaging gateway (Telegram) and isolated subagent delegate. Reject running independent LLM inference or background uncurated memory. Restrict Hermes to localhost (127.0.0.1:9119) behind Fastify/Caddy.
+        3. pi.dev: Integrate minimal concepts (tree-structured conversation branching, AGENTS.md/SYSTEM.md context discipline) natively into agent-core. Do not install separate daemon.
+        4. Odysseus: LEWATI (Skip) entirely. Local model serving violates VPS constraints (2 OCPU / 12 GB RAM) and project architecture ("Tanpa inferensi LLM lokal di VPS"). Deep research and file tools are already covered by our native research track and MCP hub.
+      - Implementation Roadmap: Sesi 12 (omp NDJSON RPC Bridge), Sesi 13 (Subagent & Hashline), Sesi 14 (Skills & MCP), Sesi 15 (Telegram Gateway & Natural Language Scheduler).
+      - Zero product code modified in Sesi 11; all probe commands submitted as read-only proposals awaiting user authorization.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

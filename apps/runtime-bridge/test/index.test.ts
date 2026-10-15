@@ -49,7 +49,7 @@ test('rejects invalid timeout and does not expose prompt in record', async () =>
 
 
 test('runs fake hermes with isolated request and reports completion', async () => {
-  const response = await fetch(`${url}/v1/runs`, { method: 'POST', headers, body: JSON.stringify({ runtimeId: 'hermes', taskId: 't-1', prompt: 'ignored', workspaceId: 'project/task' }) });
+  const response = await fetch(`${url}/v1/runs`, { method: 'POST', headers, body: JSON.stringify({ runtimeId: 'hermes', taskId: 't-1', prompt: 'ignored', workspaceId: 'project/task-hermes' }) });
   assert.equal(response.status, 202);
   const { runId } = await response.json() as { runId: string };
   const events = await (await fetch(`${url}/v1/runs/${runId}/events`, { headers })).text();
