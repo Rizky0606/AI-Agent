@@ -34,13 +34,19 @@ capabilities:
       The API registers schedules in `schedules` only; `tick()` runs solely in the `scheduler` container, which inserts the `tasks` row and enqueues BullMQ (the duplicate API dispatcher that enqueued without inserting was deleted 2026-10-14). Notification delivery is now durable and observed live: task completion, task failure, and a `task.waiting_approval` event on `personal-ai-os:events:all` each produced a `notifications` row with `delivery_state` and `deep_link`, and both rows and preferences survived an API restart. `NotificationEngine` uses `SqlNotificationRepository` and `createFcmProviderFromEnv()`. FCM uses a real OAuth2 access token from the service account (`ServiceAccountTokenSource`, RS256 JWT exchanged at `token_uri`); the hardcoded `dummy-env-token` is gone. Push tokens live in `devices.push_token` (migration `0009_device_push_token.sql`, partial unique index) and are registered per install through `POST /v1/devices/:deviceId/push-token`. Remaining: `FCM_SERVICE_ACCOUNT_JSON` is not provisioned, so the active provider is `DisabledFcmProvider` and no real Google send has been observed; a push that exhausts `maxAttempts` ends `failed` with no dead-letter queue; incoming events carry no signature verification and `registerRule` is never called in production.
   universal_agent_execution:
     status: implemented
-    code: apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts
-    permission_boundary: executor guard; runtime manager; model:chat guarded by PermissionEngine
+    code: apps/agent-worker/src/task-executor.ts; packages/agent-core/src/generic/generic-agent.ts; packages/agent-core/src/router/agent-router.ts
+    permission_boundary: SecuredCapabilityGuard; PermissionEngine; untrusted content sanitizer (<untrusted_content>); approval halting
     clients: android; windows
-    proof: apps/agent-worker/test/live-worker-execution.test.ts; apps/agent-worker/test/worker.test.ts
+    proof: apps/agent-worker/test/generic-execution.test.ts; apps/agent-worker/test/live-worker-execution.test.ts; scripts/test-generic-live.ts
     limitation: |
-      Generic tasks execute one bounded model step per run; planner output is recorded as evidence, not dispatched step-by-step; `payload.mode` is forwarded to the router but only `coding` changes observable behaviour (`selectedRuntimeId`).
-      Completion evidence is now independent on the coding, tool, and research paths (2026-10-13). `LocalCodingEnvironment` (`packages/agent-core/src/coding/local-environment.ts`) runs `node --run lint|typecheck|test|build` in a real per-task workspace, and `createDefaultEnvironment()` — which returned `{passed: true}` for every check — is deleted. `executeRegisteredTool` runs `GenericEvaluator` over the tool result before writing `completed` (`apps/agent-worker/src/task-executor.ts:637-674`) and attaches no evidence when a tool returns `null`/`undefined`. `ResearchAgent` no longer carries a hardcoded source or claim list: it searches through `web_search` and browses every hit through `web_fetch` via `LocalResearchEnvironment` (`packages/agent-core/src/research/local-environment.ts`), and a run with no reachable source ends `failed` with `No valid sources provided`. Live proof: a workspace whose `lint` exits 1 ends `failed` with `evaluationResult.score=0.71`; a workspace whose scripts pass ends `completed` with `score=1` and a real git diff artifact; a real research query ends `completed` with `score=1` over five fetched pages (task `46098f3e-…`); a query with no hits ends `failed` with `score=0` (task `c38ae271-…`). Remaining gaps: acceptance criteria are still not persisted before execution, so the tool path evaluates against the default `task_output` criterion and does not check whether the output answers the user's request; and research claims are page openings rather than model synthesis, so relevance to the question is not judged.
+      Real autonomous generic agent loop implemented in Sesi 8 (ADR 0010): Plan -> Step (Model tool_calling) -> Observation (SecuredCapabilityGuard & untrusted content sanitization) -> Evaluation (on-topic-guard + GenericEvaluator).
+      Strict hard bounds: maxSteps (default 10, hard max 20), maxTokens (default 100,000), timeout (default 300,000ms, hard max 600,000ms), and maxAttempts retries (no unbounded loops).
+      Acceptance criteria: synthesized and persisted in `TaskCheckpoint.acceptanceCriteria` before step execution (step 1). Evaluated finally against criteria keywords and concrete evidence (artifacts, outputs, logs), not just boolean or self-claim.
+      Approval gating: HIGH/CRITICAL actions require approval via `SecuredCapabilityGuard`, suspend task at `waiting_approval` with checkpoint, and resume once approved. Invalid or rejected approvals fail task cleanly.
+      Honest fallback: if selected model has unverified tool calling capability, executes single-pass chat explicitly labeling `fallbackUsed: true` and Indonesian note.
+      Full telemetry: stepCount, stepDurationsMs, toolsUsed, totalTokens, durationMs, stopReason (`goal_achieved`, `max_steps_exceeded`, `timeout`, `max_tokens_exceeded`), and fallbackUsed.
+      Simulation marker `PLACEHOLDER_GENERIC_WORKER` is completely eliminated from production generic execution, only emitted when `payload.isSimulation === true`.
+      Completion evidence is independent on coding, research, and generic tracks. LocalCodingEnvironment runs lint/typecheck/test/build in a real per-task workspace. ResearchAgent browses hits through web_search and web_fetch via LocalResearchEnvironment. Remaining: model gateway dependent on 9Router upstream stability; offline models fallback to single-pass.
   model_gateway:
     status: implemented
     code: packages/model-gateway; apps/api/src/routes/models.ts; apps/api/src/services/model-router.ts
@@ -130,6 +136,6 @@ simulation:
   limitation: |
     `PLACEHOLDER_GENERIC_WORKER` marker is now strictly bounded to explicit simulation/test runs
     (`payload.isSimulation === true`, `payload.placeholder === true`, or `simulateStep`). Real generic
-    orchestration via `ModelGateway.chat` and `ToolRegistry.executeTool` was implemented in
-    `executeGenericOrchestration` (`apps/agent-worker/src/task-executor.ts:990`), and fails closed if
+    autonomous execution via `ModelGateway.chat` tool_calling, `SecuredCapabilityGuard`, and `ToolRegistry.executeTool`
+    is implemented in `executeGenericTrack` (`apps/agent-worker/src/task-executor.ts`), and fails closed if
     no model gateway is provisioned. `AiCouncil` and `SelfHealingEngine` remain deleted from `agent-core`.
