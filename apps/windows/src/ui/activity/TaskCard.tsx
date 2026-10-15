@@ -72,7 +72,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       {/* Task Controls */}
       <div className="card-header-row" onClick={(e) => e.stopPropagation()}>
         <div className="chat-error-actions">
-          {task.status === 'running' && onPause && (
+          {task.status === 'running' && onPause && task.payload?.supportsPause === true && (
             <button
               type="button"
               className="ui-btn ui-btn-secondary ui-btn-sm"
@@ -84,7 +84,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             </button>
           )}
 
-          {task.status === 'paused' && onResume && (
+          {task.status === 'paused' && onResume && task.payload?.supportsPause === true && (
             <button
               type="button"
               className="ui-btn ui-btn-primary ui-btn-sm"
@@ -96,15 +96,15 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             </button>
           )}
 
-          {(task.status === 'running' || task.status === 'paused') && onCancel && (
+          {(task.status === 'running' || task.status === 'paused' || task.status === 'waiting_approval') && onCancel && (
             <button
               type="button"
               className="ui-btn ui-btn-danger ui-btn-sm"
               onClick={() => void onCancel(task.id)}
-              title="Batalkan"
+              title="Hentikan / Batalkan"
             >
               <XCircle size={12} />
-              <span>Batal</span>
+              <span>Hentikan</span>
             </button>
           )}
         </div>
@@ -112,11 +112,60 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
       {/* Event Stream (Expanded when selected) */}
       {isSelected && events && events.length > 0 && (
-        <div className="settings-form-group">
+        <div className="settings-form-group" style={{ marginTop: 12 }}>
           <span className="settings-label">{idID.activity.tasks.eventStreamLabel}</span>
-          <pre className="task-events-box">
-            {events.map((ev, i) => `[${i + 1}] ${JSON.stringify(ev)}`).join('\n')}
-          </pre>
+          <div className="task-timeline-container" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+            {events.map((ev, i) => {
+              const payload = (ev.payload ?? {}) as Record<string, unknown>;
+              const isDiff = Boolean(payload.diff);
+              return (
+                <div
+                  key={ev.id || i}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 6,
+                    backgroundColor: 'rgba(0,0,0,0.2)',
+                    border: '1px solid var(--border-sub, rgba(255,255,255,0.08))',
+                    fontSize: 12,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontWeight: 600 }}>
+                    <span>
+                      #{i + 1} {ev.eventType}
+                      {payload.action ? ` (${String(payload.action)})` : ''}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--text-sub)' }}>
+                      {ev.createdAt ? new Date(ev.createdAt).toLocaleTimeString() : ''}
+                    </span>
+                  </div>
+                  {Boolean(payload.text) ? (
+                    <div style={{ color: 'var(--text-main)', whiteSpace: 'pre-wrap', marginBottom: 4 }}>
+                      {String(payload.text)}
+                    </div>
+                  ) : null}
+                  {isDiff ? (
+                    <div style={{ marginTop: 4, padding: 6, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11, overflowX: 'auto' }}>
+                      {Boolean(payload.path) ? <div style={{ color: 'var(--accent-cyan)', marginBottom: 2 }}>{String(payload.path)}</div> : null}
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                        {String(payload.diff).split('\n').map((line, lIdx) => {
+                          let color = 'inherit';
+                          if (line.startsWith('+')) color = 'var(--accent-emerald, #10b981)';
+                          else if (line.startsWith('-')) color = 'var(--accent-rose, #ef4444)';
+                          else if (line.startsWith('@@')) color = 'var(--accent-cyan, #06b6d4)';
+                          return <div key={lIdx} style={{ color }}>{line}</div>;
+                        })}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {!payload.text && !isDiff ? (
+                    <pre style={{ margin: 0, fontSize: 11, color: 'var(--text-sub)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                      {JSON.stringify(payload)}
+                    </pre>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

@@ -8,7 +8,9 @@ export interface ToolStepData {
   toolName: string;
   status: 'running' | 'completed' | 'failed';
   summary: string;
-  details?: string | Record<string, unknown>;
+  diff?: string | undefined;
+  path?: string | undefined;
+  details?: string | Record<string, unknown> | undefined;
 }
 
 interface ToolStepCardProps {
@@ -79,11 +81,27 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
         </div>
       </div>
 
-      {expanded && formattedDetails && (
+      {expanded && (
         <div className="tool-step-content">
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {formattedDetails}
-          </pre>
+          {step.diff && (
+            <div style={{ marginBottom: 8, padding: 8, backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11, overflowX: 'auto' }}>
+              {step.path && <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--accent-cyan)' }}>File: {step.path}</div>}
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                {step.diff.split('\n').map((line, idx) => {
+                  let color = 'inherit';
+                  if (line.startsWith('+')) color = 'var(--accent-emerald, #10b981)';
+                  else if (line.startsWith('-')) color = 'var(--accent-rose, #ef4444)';
+                  else if (line.startsWith('@@')) color = 'var(--accent-cyan, #06b6d4)';
+                  return <div key={idx} style={{ color }}>{line}</div>;
+                })}
+              </pre>
+            </div>
+          )}
+          {formattedDetails ? (
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+              {formattedDetails}
+            </pre>
+          ) : null}
         </div>
       )}
     </div>

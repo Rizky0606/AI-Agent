@@ -476,12 +476,117 @@ export class TaskExecutor {
 
   private async executeRuntimeTrack(task: TaskRecord, prompt: string, runtimeId: string, span: TelemetrySpan): Promise<void> {
     if (!this.runtimeManager) throw new Error('Runtime execution requested but no RuntimeManager configured.');
-    // `RuntimeManager.execute` applies the per-runtime concurrency/rate cap; `getRuntime` +
-    // `runtime.execute` would drive the bridge unbounded.
-    const result: RuntimeExecuteResult = await this.runtimeManager.execute(runtimeId, { taskId: task.id, prompt, timeoutMs: typeof task.payload?.timeoutMs === 'number' ? task.payload.timeoutMs : undefined, metadata: { workspaceId: task.payload?.workspaceId ?? task.id }, untrusted: true });
+    const sessionId = typeof task.payload?.sessionId === 'string'
+      ? task.payload.sessionId
+      : typeof task.payload?.conversationId === 'string'
+        ? task.payload.conversationId
+        : task.id;
+    const resume = task.payload?.resume === true;
+
+    const onEvent = async (event: Record<string, unknown>) => {
+      const eventType = String(event['type'] ?? '');
+      const data = (event['data'] as Record<string, unknown>) ?? {};
+      if (eventType === 'tool_start' || eventType === 'tool_end') {
+        const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', {
+          action: data['toolName'] ?? 'tool',
+          input: data['input'],
+          output: data['output'],
+          untrusted: true,
+          timestamp: event['timestamp'],
+        });
+        this.broadcaster.publish(evt);
+      } else if (eventType === 'file_edit') {
+        const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+          action: 'file_edit',
+          path: data['path'],
+          diff: data['diff'],
+          untrusted: true,
+          timestamp: event['timestamp'],
+        });
+        this.broadcaster.publish(evt);
+      } else if (eventType === 'text' && typeof data['text'] === 'string' && data['text'].trim()) {
+        const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+          action: 'runtime_stream',
+          text: data['text'],
+          untrusted: true,
+          timestamp: event['timestamp'],
+        });
+        this.broadcaster.publish(evt);
+      }
+    };
+
+    const result: RuntimeExecuteResult = await this.runtimeManager.execute(runtimeId, {
+      taskId: task.id,
+      prompt,
+      sessionId,
+      resume,
+      onEvent: (evt) => { void onEvent(evt); },
+      timeoutMs: typeof task.payload?.timeoutMs === 'number' ? task.payload.timeoutMs : undefined,
+      metadata: { workspaceId: task.payload?.workspaceId ?? task.id },
+      untrusted: true,
+    });
     const output = result.output ?? '';
     const outputEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', { tool: `runtime:${runtimeId}`, output, proposedActions: result.proposedActions ?? [], untrustedOutputWarning: result.untrustedOutputWarning === true });
     this.broadcaster.publish(outputEvent);
+
+    if (result.proposedActions && result.proposedActions.length > 0) {
+      for (const action of result.proposedActions) {
+        const actionStr = `${action.action} ${action.resource ?? ''}`.toLowerCase();
+        const payloadStr = JSON.stringify(action.payload ?? '').toLowerCase();
+        if (actionStr.includes('git push') || actionStr.includes('git merge') || payloadStr.includes('git push') || payloadStr.includes('git merge') || actionStr.includes('deploy')) {
+          const error = 'Aksi push, merge, atau deploy dilarang keras oleh kebijakan keamanan runtime.';
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', { error });
+          const failed = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.failed', { runtimeId, error, retryable: false });
+          this.broadcaster.publish(failed);
+          return;
+        }
+
+        if (this.guard) {
+          const evalResult = this.guard.getEngine().evaluate({
+            actor: { id: task.userId, role: 'user' },
+            action: action.action,
+            resource: action.resource,
+            scope: 'project',
+            context: { taskId: task.id, ...(action.payload && typeof action.payload === 'object' ? (action.payload as Record<string, unknown>) : {}) },
+          });
+          if (evalResult.riskLevel === 'HIGH' || evalResult.riskLevel === 'CRITICAL') {
+            const created = this.approvalCreator ? await this.approvalCreator({
+              userId: task.userId,
+              taskId: task.id,
+              projectId: task.projectId,
+              action: action.action,
+              resource: action.resource,
+              scope: 'project',
+              riskLevel: evalResult.riskLevel,
+              consequence: evalResult.reason ?? 'Operasi runtime berisiko tinggi',
+              fingerprint: `runtime:${runtimeId}:${action.action}:${action.resource}`,
+              expiresInSeconds: 3600,
+            }) : { id: 'appr-pending' };
+
+            const checkpoint = createVersionedCheckpoint({
+              version: (task.checkpoint?.version ?? 0) + 1,
+              stepIndex: 1,
+              totalSteps: 2,
+              lastExecutedAction: action.action,
+              actionType: 'approval',
+              actionState: { approvalId: created.id, action: action.action },
+              verified: true,
+            });
+            await this.taskRepo.updateTaskProgress(task.userId, task.id, 50, checkpoint);
+            await this.taskRepo.updateTaskStatus(task.userId, task.id, 'waiting_approval');
+            const approvalEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.waiting_approval', {
+              approvalId: created.id,
+              action: action.action,
+              riskLevel: evalResult.riskLevel,
+              consequence: evalResult.reason,
+            });
+            this.broadcaster.publish(approvalEvent);
+            return;
+          }
+        }
+      }
+    }
+
     if (result.status !== 'completed') {
       const status = result.status === 'cancelled' ? 'cancelled' : 'failed';
       const error = result.error ?? `Runtime ${runtimeId} returned ${result.status}.`;

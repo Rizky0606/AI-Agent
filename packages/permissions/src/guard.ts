@@ -59,6 +59,10 @@ export class SecuredCapabilityGuard {
     this.auditLogger = options?.auditLogger;
   }
 
+  getEngine(): PermissionEngine {
+    return this.engine;
+  }
+
   /**
    * Records one audit row per guarded call, written once the outcome is known.
    *

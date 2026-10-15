@@ -138,21 +138,19 @@ capabilities:
       Theme preference (system/light/dark) persisted in localStorage with dynamic OS media query synchronization.
       Android theme unified to consume @personal-ai-os/shared theme generator with lucide-react-native + react-native-svg. Screen-level migration is scheduled for Sesi 4.
   runtime_bridges_and_execution:
-    status: partial
-    code: apps/runtime-bridge/src/index.ts; docs/adr/0004-pemetaan-fitur-runtime.md; docs/adr/runtime-bridge.md
-    permission_boundary: SecuredCapabilityGuard; child_process execution allowlist
-    clients: backend (worker/runtime-bridge)
-    proof: apps/runtime-bridge/test; docs/verification/runtimes-live.md
+    status: implemented
+    code: apps/runtime-bridge/src/index.ts; packages/agent-core/src/runtimes/remote-adapter.ts; apps/agent-worker/src/task-executor.ts; docs/adr/0013-sesi-omp-persisten-dan-streaming.md
+    permission_boundary: SecuredCapabilityGuard; child_process execution allowlist; strict rejection of push/merge/deploy; approval halting for HIGH/CRITICAL actions
+    clients: backend (worker/runtime-bridge); windows (chat & activity cards); android (task detail timeline)
+    proof: apps/runtime-bridge/test/index.test.ts; apps/agent-worker/test/worker.test.ts; packages/agent-core/test/runtime-adapters.test.ts; docs/adr/0013-sesi-omp-persisten-dan-streaming.md
     limitation: |
-      Runtime bridge evaluates and maps omp, Hermes, pi.dev, and Odysseus (ADR 0004, 2026-10-15, Sesi 11):
-      - Live VPS state: omp 18.6.1 and Hermes 0.20.5 are installed on ARM64 VPS. Hermes is running live on PID 613535 bound to 0.0.0.0:9119 (~160 MB RSS). pi.dev and Odysseus have zero trace on host.
-      - Architectural Decisions:
-        1. omp: Keep as external coding engine, upgrade integration from fire-and-forget CLI (`-p ... --mode json --no-session`) to streaming NDJSON RPC bridge over stdin/stdout (`--mode rpc`). Adopt hashline precision file editing and LSP diagnostics.
-        2. Hermes: Keep as multi-channel messaging gateway (Telegram) and isolated subagent delegate. Reject running independent LLM inference or background uncurated memory. Restrict Hermes to localhost (127.0.0.1:9119) behind Fastify/Caddy.
-        3. pi.dev: Integrate minimal concepts (tree-structured conversation branching, AGENTS.md/SYSTEM.md context discipline) natively into agent-core. Do not install separate daemon.
-        4. Odysseus: LEWATI (Skip) entirely. Local model serving violates VPS constraints (2 OCPU / 12 GB RAM) and project architecture ("Tanpa inferensi LLM lokal di VPS"). Deep research and file tools are already covered by our native research track and MCP hub.
-      - Implementation Roadmap: Sesi 12 (omp NDJSON RPC Bridge), Sesi 13 (Subagent & Hashline), Sesi 14 (Skills & MCP), Sesi 15 (Telegram Gateway & Natural Language Scheduler).
-      - Zero product code modified in Sesi 11; all probe commands submitted as read-only proposals awaiting user authorization.
+      Persistent omp session and streaming JSONL event normalization implemented in Sesi 12 (ADR 0013, 2026-10-15):
+      - Persistent Session & Resume: omp runs support persistent sessions via `--session <sessionId>` scoped within realpath-validated workspace directories. Conversations can resume across worker and container restarts. One-shot executions fall back to `--no-session`.
+      - Event Normalization: omp JSONL stdout lines are dynamically parsed into internal `NormalizedRuntimeEvent`s (text, tool_start, tool_end, file_edit with diff and path, error, completed). Emitted over SSE `/v1/runs/:id/events` and broadcast live as `task.tool_call` and `task.progress` over WebSocket (`/v1/events/ws`).
+      - Permission Engine & Safe Boundaries: Proposed runtime actions (command, file_write, file_delete) pass through `SecuredCapabilityGuard`. Git push, git merge, and production deployments are strictly forbidden and rejected immediately. Actions with HIGH or CRITICAL risk suspend the task at `waiting_approval` with a versioned checkpoint.
+      - Client Step Timelines: Windows (Chat ToolStepCard and Activity TaskCard) and Android (TaskDetailScreen) render visual step timelines, tool calls, status indicators, and file edit diffs with syntax coloring (+ green, - red, @@ cyan). Semantic honesty is strictly maintained: Jeda/Lanjutkan (Pause/Resume) controls are only rendered when `task.payload?.supportsPause === true`. Both clients provide a responsive 'Hentikan' (Stop) control.
+      - Resource Limits & Process Safety: Max concurrency of 2 (`RUNTIME_MAX_CONCURRENCY`), bounded FIFO queue, hard timeout, and cross-platform process tree termination (Windows `taskkill /pid ... /T /F` and Unix process group `SIGKILL`). Child environment isolation (`cleanEnv`) strips all product secrets (`DATABASE_URL`, `NINEROUTER_API_KEY`, `JWT_SECRET`, etc.).
+      - Remaining gaps: Physical Android rendering and live Windows UI interaction require manual verification; deep LSP diagnostics and hashline editing scheduled for Sesi 13.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

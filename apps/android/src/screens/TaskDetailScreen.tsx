@@ -83,6 +83,8 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
   const humanTimeline = liveEvents.map((evt) => {
     let title = 'Pembaruan Tugas';
     let detail = '';
+    let diff: string | undefined;
+    let path: string | undefined;
 
     switch (evt.eventType) {
       case 'task.created':
@@ -94,18 +96,28 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
         detail = 'Asisten AI mulai menganalisis rencana kerja.';
         break;
       case 'task.progress':
-        title = `Progres: ${evt.payload?.progress ?? 0}%`;
-        detail =
-          typeof evt.payload?.action === 'string'
-            ? `Langkah: ${evt.payload.action.replace('_', ' ')}`
-            : 'Menjalankan instruksi berurutan...';
+        if (evt.payload?.action === 'file_edit') {
+          title = 'Modifikasi File (Diff)';
+          path = typeof evt.payload?.path === 'string' ? evt.payload.path : undefined;
+          diff = typeof evt.payload?.diff === 'string' ? evt.payload.diff : undefined;
+          detail = path ? `Mengubah file: ${path}` : 'Perubahan file diterapkan.';
+        } else if (evt.payload?.action === 'runtime_stream') {
+          title = 'Output Runtime (Streaming)';
+          detail = String(evt.payload?.text ?? '');
+        } else {
+          title = `Progres: ${evt.payload?.progress ?? 0}%`;
+          detail =
+            typeof evt.payload?.action === 'string'
+              ? `Langkah: ${evt.payload.action.replace('_', ' ')}`
+              : 'Menjalankan instruksi berurutan...';
+        }
         break;
       case 'task.tool_call':
-        title = 'Penggunaan Alat / Resource';
+        title = 'Penggunaan Alat: ' + (evt.payload?.action ?? evt.payload?.tool ?? 'tool');
         detail =
-          typeof evt.payload?.action === 'string'
-            ? `Menjalankan alat: ${evt.payload.action}`
-            : 'Pemeriksaan resource selesai.';
+          typeof evt.payload?.output === 'string'
+            ? evt.payload.output.slice(0, 150)
+            : 'Pemeriksaan resource / alat selesai.';
         break;
       case 'task.waiting_approval':
         title = 'Menunggu Persetujuan Anda ⚠️';
@@ -143,6 +155,8 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
       id: evt.id,
       title,
       detail,
+      diff,
+      path,
       time: new Date(evt.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
   });
@@ -230,7 +244,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
 
         {/* Action Controls */}
         <View style={styles.controlsRow}>
-          {task.status === 'running' ? (
+          {task.status === 'running' && task.payload?.supportsPause === true ? (
             <TouchableOpacity
               style={[styles.controlBtn, styles.pauseBtn]}
               onPress={() => pauseMutation.mutate(task.id)}
@@ -239,7 +253,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
             </TouchableOpacity>
           ) : null}
 
-          {task.status === 'paused' ? (
+          {task.status === 'paused' && task.payload?.supportsPause === true ? (
             <TouchableOpacity
               style={[styles.controlBtn, styles.resumeBtn]}
               onPress={() => resumeMutation.mutate(task.id)}
@@ -255,7 +269,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
               style={[styles.controlBtn, styles.cancelBtn]}
               onPress={() => cancelMutation.mutate(task.id)}
             >
-              <Text style={styles.controlBtnText}>Batalkan</Text>
+              <Text style={styles.controlBtnText}>Hentikan</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -275,6 +289,12 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
                     <Text style={styles.timelineTime}>{item.time}</Text>
                   </View>
                   <Text style={styles.timelineDetail}>{item.detail}</Text>
+                  {item.diff ? (
+                    <View style={{ marginTop: 6, padding: 8, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4 }}>
+                      {item.path ? <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>{item.path}</Text> : null}
+                      <Text style={{ fontFamily: 'monospace', fontSize: 11, color: theme.colors.textPrimary }}>{item.diff}</Text>
+                    </View>
+                  ) : null}
                 </View>
               </View>
             ))
