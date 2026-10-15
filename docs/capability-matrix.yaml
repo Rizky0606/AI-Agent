@@ -70,12 +70,16 @@ capabilities:
     clients: android
     proof: pnpm --filter @personal-ai-os/android test
     limitation: |
-      Client Model Selector implemented (2026-10-15, Sesi 6, ADR 0008): Two-state 'Change' button removed from composer. Chip Model opens built-in React Native Modal bottom sheet with search, provider grouping, 'Auto (Disarankan)' pinned at top, verified capability badges (Stream, Tools, Vision, Context, Latency) only when proven, 'Unknown' label for unproven capabilities, favorite toggling (★), and 'Jadikan Default Akun' preference. All interactive touch targets strictly meet or exceed 48 dp (theme.controls.minTouchTarget).
-      Per-conversation model & mode persistence via `PATCH /v1/conversations/:id` and user default preference via `PATCH /v1/users/me/preferences`.
-      Fallback attribution: Message bubbles render 'Dijawab oleh <model>' or 'Dijawab oleh <model> (fallback)' in warning amber.
-      Resilience: When model catalog returns 503 / offline, the chip disables with a clear Indonesian message and 'Coba lagi' retry button, while Auto continues to function normally. When a previously selected model disappears from the catalog, the client gracefully reverts to Auto with a dismissible notice banner without raw exceptions.
-      SettingsScreen enhanced with rich model cards showing verified capability badges, latencies, and favorite/default controls.
-      Remaining gaps: attachment upload unavailable; task creation surface is coding-runtime-specific.
+      Android UI Redesign & Navigation Architecture implemented (2026-10-15, Sesi 7, ADR 0009):
+      - Replaced manual bottom tab with genuine React Navigation (@react-navigation/bottom-tabs, @react-navigation/native) using lucide-react-native icons (MessageSquare, Activity, MoreHorizontal). 3 primary tabs: Chat, Aktivitas (unified Tasks & Approvals with live pending count badge), and Lainnya.
+      - Deep linking supports custom scheme `personal-ai://` and universal URLs, routing seamlessly to Chat, ApprovalDetail, TaskDetail, and ProjectDetail.
+      - Chat Experience: Full-width assistant messages without heavy bubbles, smooth right-aligned user bubble, custom zero-dependency MarkdownView supporting copyable code blocks with language badge and copy action, inline formatting, long-press menu for Salin and Ulangi, streaming thinking indicator, empty state with 4 Indonesian sample prompt cards, composer integrated with Mode and Model chips (Sesi 6), and safe area/keyboard handling.
+      - Approvals & Risk Management: Inline approval card in Chat and Aktivitas, bottom sheet detail showing risk level, action, target resource, and consequences. Mandatory secondary confirmation dialog for HIGH and CRITICAL risks explicitly stating consequences. All interactive buttons meet or exceed 48 dp minTouchTarget.
+      - Onboarding & Login: Google Sign-in as primary hero action, email/password collapsed under "Opsi Masuk Lainnya", server URL hidden by default under "Pengaturan Lanjutan".
+      - Lainnya Tab: Clean consumer view with 7 sections: Akun (with Logout), Model default, Notifikasi (push switch), Tampilan (Sistem/Terang/Gelap via dynamic useAppTheme synchronized with ui-store and OS appearance), Memori (scaffold Sesi 10), Skill & MCP (scaffold Sesi 14), and collapsible Lanjutan (Server endpoint, Device ID, User ID, PostgreSQL/Redis/API health status, Artifacts, Projects).
+      - Centralized Indonesian localization in `src/locales/id-ID.ts` with 100% consistent Indonesian copy.
+      - Client Model Selector integrated (Sesi 6, ADR 0008): Model chip bottom sheet with provider grouping, capability verification badges, catalog 503 resilience, and per-conversation model/mode persistence.
+      - Remaining gaps: attachment upload unavailable; physical Android device visual rendering requires manual verification.
   windows:
     status: partial
     code: apps/windows/src/ui; apps/windows/src/api; apps/windows/src/connection; apps/windows/src/security; apps/windows/src-tauri
