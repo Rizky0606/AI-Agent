@@ -1,4 +1,6 @@
 export type { TaskRecord, TaskEventEnvelope, TaskStatus } from '@personal-ai-os/shared';
+import type { TaskRecord } from '@personal-ai-os/shared';
+export type TaskItem = TaskRecord;
 
 export interface User {
   id: string;
@@ -84,6 +86,8 @@ export interface ApprovalRecord {
   decidedAt?: string | null | undefined;
   createdAt: string;
 }
+
+export type ApprovalRequest = ApprovalRecord;
 
 export interface ArtifactItem {
   id: string;
