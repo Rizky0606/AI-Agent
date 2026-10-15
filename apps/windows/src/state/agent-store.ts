@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
-import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId } from '../api/client.ts';
+import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
@@ -245,6 +245,30 @@ export interface AgentState {
   runtimeStatus: string | null;
   setSelectedRuntime: (runtime: RuntimeId) => void;
   refreshRuntimes: () => Promise<void>;
+  skills: SkillItem[];
+  projectSkills: Record<string, SkillItem[]>;
+  mcpServers: McpServerItem[];
+  mcpLogs: McpCallLogItem[];
+  skillsLoading: boolean;
+  mcpLoading: boolean;
+  skillsError: string | null;
+  mcpError: string | null;
+  fetchSkills: (projectId?: string) => Promise<void>;
+  toggleProjectSkill: (projectId: string, skillName: string, isEnabled: boolean) => Promise<void>;
+  fetchSkillManifest: (name: string) => Promise<Record<string, unknown> | null>;
+  fetchMcpServers: () => Promise<void>;
+  fetchMcpLogs: (serverId?: string) => Promise<void>;
+  addMcpServer: (payload: {
+    id: string;
+    name: string;
+    transport: 'stdio' | 'sse' | 'http';
+    command?: string;
+    args?: string[];
+    url?: string;
+    allowedCapabilities: string[];
+    riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  }) => Promise<void>;
+  deleteMcpServer: (id: string) => Promise<void>;
 }
 
 export const createAgentStore = (
@@ -376,6 +400,14 @@ export const createAgentStore = (
     selectedRuntime: 'auto',
     runtimes: [],
     runtimeStatus: null,
+    skills: [],
+    projectSkills: {},
+    mcpServers: [],
+    mcpLogs: [],
+    skillsLoading: false,
+    mcpLoading: false,
+    skillsError: null,
+    mcpError: null,
 
     setServerUrl: (url) => { if (get().serverUrl === url) return; set({ serverUrl: url }); void get().refreshChat(); },
     setChatDraft: (chatDraft) => set({ chatDraft }),
@@ -1049,6 +1081,109 @@ export const createAgentStore = (
       eventsStream?.disconnect();
       eventsStream = null;
       set({ connectionStatus: 'disconnected', chatStreaming: false });
+    },
+
+    fetchSkills: async (projectId?: string) => {
+      set({ skillsLoading: true, skillsError: null });
+      try {
+        if (projectId) {
+          const { skills } = await api().listProjectSkills(projectId);
+          set((state) => ({
+            skills,
+            projectSkills: { ...state.projectSkills, [projectId]: skills },
+            skillsLoading: false,
+          }));
+        } else {
+          const { skills } = await api().listSkills();
+          set({ skills, skillsLoading: false });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gagal memuat daftar skill.';
+        set({ skillsLoading: false, skillsError: msg });
+      }
+    },
+
+    toggleProjectSkill: async (projectId: string, skillName: string, isEnabled: boolean) => {
+      try {
+        await api().toggleProjectSkill(projectId, skillName, isEnabled);
+        set((state) => {
+          const updateList = (list: SkillItem[]) =>
+            list.map((s) => (s.name === skillName ? { ...s, isEnabled, isProjectOverride: true } : s));
+          return {
+            skills: updateList(state.skills),
+            projectSkills: {
+              ...state.projectSkills,
+              [projectId]: updateList(state.projectSkills[projectId] ?? state.skills),
+            },
+          };
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gagal mengubah status skill proyek.';
+        set({ skillsError: msg });
+        throw err;
+      }
+    },
+
+    fetchSkillManifest: async (name: string): Promise<Record<string, unknown> | null> => {
+      try {
+        const { manifest } = await api().getSkillManifest(name);
+        return manifest;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : `Gagal memuat manifest skill '${name}'.`;
+        set({ skillsError: msg });
+        return null;
+      }
+    },
+
+    fetchMcpServers: async () => {
+      set({ mcpLoading: true, mcpError: null });
+      try {
+        const { servers } = await api().listMcpServers();
+        set({ mcpServers: servers, mcpLoading: false });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gagal memuat server MCP.';
+        set({ mcpLoading: false, mcpError: msg });
+      }
+    },
+
+    fetchMcpLogs: async (serverId?: string) => {
+      try {
+        const { logs } = await api().listMcpLogs(serverId ? { serverId, limit: 50 } : { limit: 50 });
+        set({ mcpLogs: logs });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gagal memuat log panggilan MCP.';
+        set({ mcpError: msg });
+      }
+    },
+
+    addMcpServer: async (payload) => {
+      set({ mcpLoading: true, mcpError: null });
+      try {
+        const { server } = await api().addMcpServer(payload);
+        set((state) => ({
+          mcpServers: [...state.mcpServers.filter((s) => s.id !== server.id), server],
+          mcpLoading: false,
+        }));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gagal menambahkan server MCP.';
+        set({ mcpLoading: false, mcpError: msg });
+        throw err;
+      }
+    },
+
+    deleteMcpServer: async (id: string) => {
+      set({ mcpLoading: true, mcpError: null });
+      try {
+        await api().deleteMcpServer(id);
+        set((state) => ({
+          mcpServers: state.mcpServers.filter((s) => s.id !== id),
+          mcpLoading: false,
+        }));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gagal menghapus server MCP.';
+        set({ mcpLoading: false, mcpError: msg });
+        throw err;
+      }
     },
 
     toggleCapability: (name, enabled) => {

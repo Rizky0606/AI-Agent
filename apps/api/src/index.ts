@@ -30,6 +30,7 @@ import { SqlApprovalRepository } from './db/approval-repository.ts';
 import { artifactWriteAuditEntry, SqlAuditRepository } from './db/audit-repository.ts';
 import { DrizzleMemoryRepository } from './db/memory-repository.ts';
 import { SqlSkillRepository } from './db/skill-repository.ts';
+import { SqlMcpRepository } from './db/mcp-repository.ts';
 import { SqlScheduleRepository } from './db/schedule-repository.ts';
 import { SqlNotificationRepository } from './db/notification-repository.ts';
 import { DeviceConnectionManager } from './services/device-connection-manager.ts';
@@ -99,6 +100,7 @@ const broadcaster = new RedisTaskEventBroadcaster({
 });
 const approvalRepository = new SqlApprovalRepository(db);
 const auditRepository = new SqlAuditRepository(db);
+const mcpRepository = new SqlMcpRepository(db);
 const toolRegistry = createDefaultToolRegistry({
   guard: new SecuredCapabilityGuard(new PermissionEngine(), { auditLogger: auditRepository }),
 });
@@ -282,6 +284,9 @@ const app = await buildApp({
     skillRepo: skillRepository,
     skillsDir,
     toolRegistry,
+  },
+  mcp: {
+    mcpRepo: mcpRepository,
   },
   schedules: {
     schedulerEngine,

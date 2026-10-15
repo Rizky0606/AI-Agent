@@ -86,7 +86,7 @@ capabilities:
       - Chat Experience: Full-width assistant messages without heavy bubbles, smooth right-aligned user bubble, custom zero-dependency MarkdownView supporting copyable code blocks with language badge and copy action, inline formatting, long-press menu for Salin and Ulangi, streaming thinking indicator, empty state with 4 Indonesian sample prompt cards, composer integrated with Mode and Model chips (Sesi 6), and safe area/keyboard handling.
       - Approvals & Risk Management: Inline approval card in Chat and Aktivitas, bottom sheet detail showing risk level, action, target resource, and consequences. Mandatory secondary confirmation dialog for HIGH and CRITICAL risks explicitly stating consequences. All interactive buttons meet or exceed 48 dp minTouchTarget.
       - Onboarding & Login: Google Sign-in as primary hero action, email/password collapsed under "Opsi Masuk Lainnya", server URL hidden by default under "Pengaturan Lanjutan".
-      - Lainnya Tab: Clean consumer view with 7 sections: Akun (with Logout), Model default, Notifikasi (push switch), Tampilan (Sistem/Terang/Gelap via dynamic useAppTheme synchronized with ui-store and OS appearance), Memori (scaffold Sesi 10), Skill & MCP (scaffold Sesi 14), and collapsible Lanjutan (Server endpoint, Device ID, User ID, PostgreSQL/Redis/API health status, Artifacts, Projects).
+      - Lainnya Tab: Clean consumer view with 7 sections: Akun (with Logout), Model default, Notifikasi (push switch), Tampilan (Sistem/Terang/Gelap via dynamic useAppTheme synchronized with ui-store and OS appearance), Memori (scaffold Sesi 10), Skill & MCP (Sesi 14 implemented: per-project toggle, manifest viewer, and MCP server/tool status & logs), and collapsible Lanjutan (Server endpoint, Device ID, User ID, PostgreSQL/Redis/API health status, Artifacts, Projects).
       - Centralized Indonesian localization in `src/locales/id-ID.ts` with 100% consistent Indonesian copy.
       - Client Model Selector integrated (Sesi 6, ADR 0008): Model chip bottom sheet with provider grouping, capability verification badges, catalog 503 resilience, and per-conversation model/mode persistence.
       - Remaining gaps: attachment upload unavailable; physical Android device visual rendering requires manual verification.
@@ -152,6 +152,30 @@ capabilities:
       - Untrusted Output Sanitization: Output from external runtimes is strictly isolated and wrapped in `<untrusted_content is_instruction="false">...</untrusted_content>` before ingestion into artifacts or context.
       - Telegram & Deep Link Safety: Single Telegram instance policy enforced (no second bot). Notifications carry deep links (`personal-ai://tasks/:taskId`, `personal-ai://approvals/:approvalId`). HIGH and CRITICAL approvals strictly require authenticated application JWT sessions and secondary modal confirmation; approvals cannot be made directly from unauthenticated Telegram messages.
       - Remaining gaps: Physical Android device visual rendering and live Hermes VPS network binding require manual runtime verification.
+  skills_and_mcp_manager:
+    status: implemented
+    code: packages/agent-core/src/skills; packages/mcp; apps/api/src/routes/skills.ts; apps/api/src/routes/mcp.ts; apps/api/src/db/skill-repository.ts; apps/api/src/db/mcp-repository.ts; apps/windows/src/ui/skills; apps/android/src/screens/SettingsScreen.tsx; docs/adr/0015-skill-dan-mcp-manager.md; docs/skills/writing-skills.md
+    permission_boundary: ManifestValidator; PermissionEngine; MCP_COMMAND_ALLOWLIST validation; SSRF loopback/cloud-metadata blocking; admin/owner authorization check; audit_logs recording
+    clients: windows (full Skill & MCP Manager with plain risk explanations, manifest viewer, project overrides, admin add server dialog, call logs); android (view & toggle skills per project, manifest viewer, MCP server & tool inspection, plain risk guide)
+    proof: packages/agent-core/test/skills.test.ts; packages/mcp/test/remote-mcp-and-security.test.ts; apps/api/test/skills.test.ts; apps/api/test/mcp-routes.test.ts; apps/api/test/schema-parity.test.ts; pnpm --filter @personal-ai-os/windows test; pnpm --filter @personal-ai-os/android test
+    limitation: |
+      Skill and MCP Manager implemented in Sesi 14 (ADR 0015, 2026-10-16):
+      - 3 High-Value Skills with manifests, tests, and documentation:
+        1. `plan-before-act`: Enforces structured step plan and concrete acceptance criteria before executing actions.
+        2. `verify-with-evidence`: Independently audits task completion claims, rejecting completion without verifiable test results, exit codes, or tool outputs.
+        3. `security-review`: Scans code diffs for leaked secrets, command injection chaining, path traversal, and excessive permissions.
+      - MCP Remote Transport & Security:
+        - Added `SseMcpServerAdapter` for HTTP/SSE endpoints with SSRF guard blocking 127.0.0.1, localhost, 169.254.169.254, and private networks.
+        - Strict binary allowlist (`MCP_COMMAND_ALLOWLIST`: npx, node, docker, uvx, python3, python) rejecting dangerous shell wrappers and command chaining.
+        - Server management restricted strictly to authenticated admin/owner roles.
+        - Untrusted tool output sanitized and bounded via `sanitizeMcpOutput`.
+      - Per-Project Toggle & Manifest Viewer:
+        - Project overrides persisted in `project_skills` table.
+        - Full manifest viewable via `GET /v1/skills/:name/manifest` and dedicated UI modal.
+      - Audit Logging & Plain Indonesian Risk Guidance:
+        - All skill executions, MCP server changes, and tool calls recorded in `audit_logs` and `mcp_call_logs`.
+        - Windows and Android clients explain risk levels in plain Indonesian before enabling tools.
+      - Remaining gaps: Visual rendering on live Android device and physical Windows system tray interaction require manual verification.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

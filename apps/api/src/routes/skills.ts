@@ -5,17 +5,21 @@ import {
   codingQualityChecklistHandler,
   ManifestValidator,
   onTopicGuardHandler,
+  planBeforeActHandler,
   researchQualityChecklistHandler,
+  securityReviewHandler,
   type SkillHandler,
   type SkillRecord,
   SkillDisabledError,
   SkillExecutor,
   SkillLoader,
+  verifyWithEvidenceHandler,
 } from '@personal-ai-os/agent-core';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthService } from '../auth/service.ts';
 import { AuthError } from '../auth/service.ts';
 import type { SkillRepository } from '../db/skill-repository.ts';
+import type { AuditRepository } from '../db/audit-repository.ts';
 
 interface AuthUser {
   id: string;
@@ -27,13 +31,14 @@ export function registerSkillRoutes(
   options: {
     skillRepo: SkillRepository;
     auth?: AuthService | undefined;
+    auditRepo?: AuditRepository | undefined;
     executor?: SkillExecutor | undefined;
     validator?: ManifestValidator | undefined;
     skillsDir?: string | undefined;
     toolRegistry?: ToolRegistry | undefined;
   },
 ): void {
-  const { skillRepo, auth } = options;
+  const { skillRepo, auth, auditRepo } = options;
   const executor = options.executor ?? new SkillExecutor();
   const validator = options.validator ?? new ManifestValidator();
   const loader = new SkillLoader(validator);
@@ -46,6 +51,9 @@ export function registerSkillRoutes(
   builtinHandlers.set('on-topic-guard', onTopicGuardHandler as never);
   builtinHandlers.set('coding-quality-checklist', codingQualityChecklistHandler as never);
   builtinHandlers.set('research-quality-checklist', researchQualityChecklistHandler as never);
+  builtinHandlers.set('plan-before-act', planBeforeActHandler as never);
+  builtinHandlers.set('verify-with-evidence', verifyWithEvidenceHandler as never);
+  builtinHandlers.set('security-review', securityReviewHandler as never);
 
   const getUser = async (req: FastifyRequest): Promise<AuthUser> => {
     if (auth) {
@@ -230,16 +238,92 @@ export function registerSkillRoutes(
     },
   );
 
+  // 2b. Get Skill Raw Manifest
+  app.get(
+    '/v1/skills/:name/manifest',
+    async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
+      await getUser(req);
+      const skill = (await skillRepo.getSkillByName(req.params.name)) ??
+        HERMES_READONLY_SKILLS.find((s) => s.name === req.params.name);
+      if (!skill) {
+        return reply.code(404).send({ error: `Skill '${req.params.name}' tidak ditemukan.` });
+      }
+      return reply.code(200).send({ manifest: skill.manifest });
+    },
+  );
+
+  // 2c. Get Project Skills List (with project-level enablement overrides)
+  app.get(
+    '/v1/projects/:projectId/skills',
+    async (req: FastifyRequest<{ Params: { projectId: string } }>, reply: FastifyReply) => {
+      await getUser(req);
+      const dbSkills = await skillRepo.listSkills();
+      const allSkills = [...dbSkills, ...HERMES_READONLY_SKILLS];
+      const projectOverrides = await skillRepo.getProjectSkills(req.params.projectId);
+
+      const skillsWithProjectStatus = allSkills.map((s) => ({
+        ...s,
+        isEnabled: projectOverrides[s.name] ?? s.isEnabled,
+        isProjectOverride: projectOverrides[s.name] !== undefined,
+      }));
+
+      return reply.code(200).send({ skills: skillsWithProjectStatus });
+    },
+  );
+
+  // 2d. Toggle Skill for a specific Project
+  app.post(
+    '/v1/projects/:projectId/skills/:name/toggle',
+    async (
+      req: FastifyRequest<{
+        Params: { projectId: string; name: string };
+        Body: { isEnabled: boolean };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const user = await getUser(req);
+      if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
+        return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
+      }
+
+      const isEnabled = Boolean(req.body?.isEnabled);
+      await skillRepo.setProjectSkill(req.params.projectId, req.params.name, isEnabled);
+
+      await auditRepo?.log({
+        userId: user.id,
+        projectId: req.params.projectId,
+        action: 'skill:toggle_project',
+        resourceType: 'project_skill',
+        resourceId: req.params.name,
+        decision: 'allow',
+        metadata: { isEnabled },
+      });
+
+      return reply.code(200).send({
+        projectId: req.params.projectId,
+        skillName: req.params.name,
+        isEnabled,
+      });
+    },
+  );
+
   // 3. Enable Skill
   app.post(
     '/v1/skills/:name/enable',
     async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
-      await getUser(req);
+      const user = await getUser(req);
       if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
         return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
       }
       try {
         const skill = await skillRepo.enableSkill(req.params.name);
+        await auditRepo?.log({
+          userId: user.id,
+          action: 'skill:enable',
+          resourceType: 'skill',
+          resourceId: req.params.name,
+          decision: 'allow',
+        });
         return reply.code(200).send({ skill });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -252,12 +336,19 @@ export function registerSkillRoutes(
   app.post(
     '/v1/skills/:name/disable',
     async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
-      await getUser(req);
+      const user = await getUser(req);
       if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
         return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
       }
       try {
         const skill = await skillRepo.disableSkill(req.params.name);
+        await auditRepo?.log({
+          userId: user.id,
+          action: 'skill:disable',
+          resourceType: 'skill',
+          resourceId: req.params.name,
+          decision: 'allow',
+        });
         return reply.code(200).send({ skill });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -348,8 +439,58 @@ export function registerSkillRoutes(
           projectId: req.body.projectId,
           approvalId: req.body.approvalId,
         });
+
+        const isPolicyBlocked = Boolean(
+          result &&
+            typeof result === 'object' &&
+            (('allowed' in (result as Record<string, unknown>) && (result as { allowed: boolean }).allowed === false) ||
+             ('verified' in (result as Record<string, unknown>) && (result as { verified: boolean }).verified === false) ||
+             ('passed' in (result as Record<string, unknown>) && (result as { passed: boolean }).passed === false) ||
+             ('isOnTopic' in (result as Record<string, unknown>) && (result as { isOnTopic: boolean }).isOnTopic === false))
+        );
+
+        if (isPolicyBlocked) {
+          const reason =
+            (result as Record<string, unknown>).reason ??
+            (result as Record<string, unknown>).message ??
+            'Kebijakan skill menolak aksi atau verifikasi gagal.';
+          await skillRepo.recordSkillUsage(req.params.name, 'failure', String(reason));
+          await auditRepo?.log({
+            userId: user.id,
+            projectId: req.body.projectId,
+            action: 'skill:execute',
+            resourceType: 'skill',
+            resourceId: req.params.name,
+            decision: 'deny',
+            metadata: { outcome: 'failure', reason, taskId: req.body.taskId },
+          });
+        } else {
+          await skillRepo.recordSkillUsage(req.params.name, 'success');
+          await auditRepo?.log({
+            userId: user.id,
+            projectId: req.body.projectId,
+            action: 'skill:execute',
+            resourceType: 'skill',
+            resourceId: req.params.name,
+            decision: 'allow',
+            metadata: { outcome: 'success', taskId: req.body.taskId },
+          });
+        }
+
         return reply.code(200).send({ result });
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await skillRepo.recordSkillUsage(req.params.name, 'failure', msg);
+        await auditRepo?.log({
+          userId: user.id,
+          projectId: req.body.projectId,
+          action: 'skill:execute',
+          resourceType: 'skill',
+          resourceId: req.params.name,
+          decision: 'deny',
+          metadata: { outcome: 'failure', error: msg, taskId: req.body.taskId },
+        });
+
         if (err instanceof ApprovalRequiredError) {
           return reply.code(403).send({
             error: err.message,
@@ -367,7 +508,6 @@ export function registerSkillRoutes(
         if (err instanceof SkillDisabledError) {
           return reply.code(400).send({ error: err.message });
         }
-        const msg = err instanceof Error ? err.message : String(err);
         return reply.code(500).send({ error: `Eksekusi skill gagal: ${msg}` });
       }
     },

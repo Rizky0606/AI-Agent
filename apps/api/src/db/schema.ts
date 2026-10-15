@@ -354,12 +354,77 @@ export const skills = pgTable(
     isEnabled: boolean('is_enabled').default(true).notNull(),
     isDefault: boolean('is_default').default(false).notNull(),
     scope: varchar('scope', { length: 80 }).default('system').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    lastOutcome: varchar('last_outcome', { length: 32 }),
+    lastError: text('last_error'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     ...created,
   },
   (table) => [
     uniqueIndex('skills_name_uq').on(table.name),
     index('skills_is_enabled_idx').on(table.isEnabled),
+  ],
+);
+
+export const projectSkills = pgTable(
+  'project_skills',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    skillName: varchar('skill_name', { length: 120 }).notNull(),
+    isEnabled: boolean('is_enabled').default(true).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.skillName] }),
+    index('project_skills_project_idx').on(table.projectId),
+    index('project_skills_skill_name_idx').on(table.skillName),
+  ],
+);
+
+export const mcpServers = pgTable(
+  'mcp_servers',
+  {
+    id: varchar('id', { length: 120 }).primaryKey(),
+    name: varchar('name', { length: 200 }).notNull(),
+    transport: varchar('transport', { length: 32 }).notNull(),
+    command: varchar('command', { length: 255 }),
+    args: jsonb('args'),
+    url: varchar('url', { length: 500 }),
+    allowedCapabilities: jsonb('allowed_capabilities').notNull(),
+    riskLevel: varchar('risk_level', { length: 32 }).default('MEDIUM').notNull(),
+    status: varchar('status', { length: 32 }).default('connected').notNull(),
+    approvalId: uuid('approval_id').references(() => approvals.id, { onDelete: 'set null' }),
+    isApproved: boolean('is_approved').default(false).notNull(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('mcp_servers_status_idx').on(table.status),
+    index('mcp_servers_transport_idx').on(table.transport),
+  ],
+);
+
+export const mcpCallLogs = pgTable(
+  'mcp_call_logs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    serverId: varchar('server_id', { length: 120 }).notNull(),
+    toolName: varchar('tool_name', { length: 120 }).notNull(),
+    arguments: jsonb('arguments'),
+    durationMs: integer('duration_ms').notNull(),
+    status: varchar('status', { length: 32 }).notNull(),
+    error: text('error'),
+    ...created,
+  },
+  (table) => [
+    index('mcp_call_logs_server_tool_idx').on(table.serverId, table.toolName),
+    index('mcp_call_logs_created_idx').on(table.createdAt),
   ],
 );
 
@@ -457,6 +522,9 @@ export type ApprovalRow = typeof approvals.$inferSelect;
 export type AuditLogRow = typeof auditLogs.$inferSelect;
 export type MemoryRow = typeof memories.$inferSelect;
 export type SkillRow = typeof skills.$inferSelect;
+export type ProjectSkillRow = typeof projectSkills.$inferSelect;
+export type McpServerRow = typeof mcpServers.$inferSelect;
+export type McpCallLogRow = typeof mcpCallLogs.$inferSelect;
 export type SkillRevisionRow = typeof skillRevisions.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;

@@ -30,6 +30,8 @@ import type { ArtifactManager } from '@personal-ai-os/tools';
 import { registerArtifactRoutes } from './routes/artifacts.ts';
 import type { SkillRepository } from './db/skill-repository.ts';
 import { registerSkillRoutes } from './routes/skills.ts';
+import type { McpRepository } from './db/mcp-repository.ts';
+import { registerMcpRoutes } from './routes/mcp.ts';
 import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
 import { registerSchedulesRoutes } from './routes/schedules.ts';
 import { registerModelRoutes } from './routes/models.ts';
@@ -126,6 +128,9 @@ export type AppDependencies = {
     skillRepo: SkillRepository;
     skillsDir?: string | undefined;
     toolRegistry?: ToolRegistry | undefined;
+  } | undefined;
+  mcp?: {
+    mcpRepo: McpRepository;
   } | undefined;
   schedules?:
     | {
@@ -631,8 +636,18 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     registerSkillRoutes(app, {
       skillRepo: dependencies.skills.skillRepo,
       auth: dependencies.auth,
+      auditRepo: dependencies.approval?.auditRepo,
       skillsDir: dependencies.skills.skillsDir,
       toolRegistry: dependencies.skills.toolRegistry,
+    });
+  }
+
+  if (dependencies.mcp) {
+    registerMcpRoutes(app, {
+      mcpRepo: dependencies.mcp.mcpRepo,
+      auth: dependencies.auth,
+      auditRepo: dependencies.approval?.auditRepo,
+      approvalRepo: dependencies.approval?.approvalRepo,
     });
   }
 

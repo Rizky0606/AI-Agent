@@ -446,6 +446,69 @@ export class ApiClient {
   async listRuntimes(): Promise<{ runtimes: RuntimeDescriptor[] }> {
     return this.request<{ runtimes: RuntimeDescriptor[] }>('/v1/runtimes');
   }
+
+  // --- Skills ---
+  async listSkills(params?: { isEnabled?: boolean }): Promise<{ skills: SkillItem[] }> {
+    const qs = params?.isEnabled !== undefined ? `?isEnabled=${params.isEnabled}` : '';
+    return this.request<{ skills: SkillItem[] }>(`/v1/skills${qs}`);
+  }
+
+  async getSkillManifest(name: string): Promise<{ manifest: Record<string, unknown> }> {
+    return this.request<{ manifest: Record<string, unknown> }>(`/v1/skills/${encodeURIComponent(name)}/manifest`);
+  }
+
+  async listProjectSkills(projectId: string): Promise<{ skills: SkillItem[] }> {
+    return this.request<{ skills: SkillItem[] }>(`/v1/projects/${encodeURIComponent(projectId)}/skills`);
+  }
+
+  async toggleProjectSkill(
+    projectId: string,
+    skillName: string,
+    isEnabled: boolean,
+  ): Promise<{ success: boolean; skillName: string; isEnabled: boolean }> {
+    return this.request<{ success: boolean; skillName: string; isEnabled: boolean }>(
+      `/v1/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillName)}/toggle`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ isEnabled }),
+      },
+    );
+  }
+
+  // --- MCP ---
+  async listMcpServers(): Promise<{ servers: McpServerItem[] }> {
+    return this.request<{ servers: McpServerItem[] }>('/v1/mcp/servers');
+  }
+
+  async addMcpServer(payload: {
+    id: string;
+    name: string;
+    transport: 'stdio' | 'sse' | 'http';
+    command?: string;
+    args?: string[];
+    url?: string;
+    allowedCapabilities: string[];
+    riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  }): Promise<{ server: McpServerItem }> {
+    return this.request<{ server: McpServerItem }>('/v1/mcp/servers', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteMcpServer(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/mcp/servers/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listMcpLogs(params?: { serverId?: string | undefined; limit?: number | undefined }): Promise<{ logs: McpCallLogItem[] }> {
+    const q = new URLSearchParams();
+    if (params?.serverId) q.set('serverId', params.serverId);
+    if (params?.limit) q.set('limit', String(params.limit));
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<{ logs: McpCallLogItem[] }>(`/v1/mcp/logs${qs}`);
+  }
 }
 
 export type RuntimeId = 'auto' | 'omp' | 'hermes' | 'native';
@@ -457,5 +520,60 @@ export interface RuntimeDescriptor {
   status: 'ready' | 'offline';
   healthText: string;
   capabilities: string[];
+}
+
+export interface SkillPermission {
+  action: string;
+  resource: string;
+  scope: string;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  reason: string;
+}
+
+export interface SkillItem {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  source: 'builtin' | 'workspace' | 'remote' | 'hermes';
+  isEnabled: boolean;
+  isReadOnly?: boolean;
+  isProjectOverride?: boolean;
+  requestedPermissions: SkillPermission[];
+  lastUsedAt?: string | null;
+  lastOutcome?: 'success' | 'failure' | null;
+  lastError?: string | null;
+  manifest?: Record<string, unknown>;
+}
+
+export interface McpServerItem {
+  id: string;
+  name: string;
+  transport: 'stdio' | 'sse' | 'http';
+  command?: string | null;
+  args?: string[] | null;
+  url?: string | null;
+  allowedCapabilities: string[];
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  status: 'connected' | 'disconnected' | 'error';
+  lastConnectedAt?: string | null;
+  lastError?: string | null;
+  tools?: Array<{
+    name: string;
+    description: string;
+    riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  }>;
+}
+
+export interface McpCallLogItem {
+  id: string;
+  serverId: string;
+  toolName: string;
+  userId?: string | null;
+  projectId?: string | null;
+  status: 'success' | 'failure' | 'denied';
+  durationMs?: number | null;
+  error?: string | null;
+  createdAt: string;
 }
 

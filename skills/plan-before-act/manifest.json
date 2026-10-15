@@ -1,0 +1,55 @@
+{
+  "name": "plan-before-act",
+  "version": "1.0.0",
+  "description": "Memvalidasi bahwa setiap tugas memiliki rencana terstruktur dan kriteria penerimaan (acceptance criteria) konkret sebelum aksi dijalankan.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "goal": { "type": "string" },
+      "proposedAction": { "type": "string" },
+      "plan": {
+        "type": "object",
+        "properties": {
+          "steps": { "type": "array", "items": { "type": "string" } },
+          "acceptanceCriteria": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "required": ["goal", "proposedAction"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "allowed": { "type": "boolean" },
+      "reason": { "type": "string" },
+      "missingElements": { "type": "array", "items": { "type": "string" } },
+      "validatedPlan": {
+        "type": "object",
+        "properties": {
+          "steps": { "type": "array", "items": { "type": "string" } },
+          "acceptanceCriteria": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "required": ["allowed", "reason", "missingElements"]
+  },
+  "toolRequirements": [],
+  "permissions": [
+    {
+      "action": "query:plan_validation",
+      "resource": "task://plan",
+      "scope": "workspace",
+      "riskLevel": "LOW",
+      "reason": "Validasi rencana kerja dan acceptance criteria sebelum aksi dieksekusi."
+    }
+  ],
+  "compatibility": {
+    "agentCoreVersion": ">=0.2.0",
+    "platforms": ["node", "linux", "windows"]
+  },
+  "metadata": {
+    "category": "governance",
+    "author": "personal-ai-os",
+    "risk": "LOW"
+  }
+}

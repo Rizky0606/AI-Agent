@@ -536,10 +536,100 @@ export class ApiClient {
     return this.request<{ runtimes: RuntimeDescriptor[] }>('/v1/runtimes');
   }
 
-  async listSkills(): Promise<{ skills: Array<{ id: string; name: string; isEnabled: boolean; isReadOnly?: boolean; manifest?: { name: string; description: string; category?: string } }> }> {
-    return this.request<{ skills: Array<{ id: string; name: string; isEnabled: boolean; isReadOnly?: boolean; manifest?: { name: string; description: string; category?: string } }> }>('/v1/skills');
+  async listSkills(): Promise<{ skills: SkillItem[] }> {
+    return this.request<{ skills: SkillItem[] }>('/v1/skills');
+  }
+
+  async listProjectSkills(projectId: string): Promise<{ skills: SkillItem[] }> {
+    return this.request<{ skills: SkillItem[] }>(`/v1/projects/${encodeURIComponent(projectId)}/skills`);
+  }
+
+  async toggleProjectSkill(
+    projectId: string,
+    skillName: string,
+    isEnabled: boolean,
+  ): Promise<{ success: boolean; skillName: string; isEnabled: boolean }> {
+    return this.request<{ success: boolean; skillName: string; isEnabled: boolean }>(
+      `/v1/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillName)}/toggle`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ isEnabled }),
+      },
+    );
+  }
+
+  async getSkillManifest(name: string): Promise<{ manifest: Record<string, unknown> }> {
+    return this.request<{ manifest: Record<string, unknown> }>(`/v1/skills/${encodeURIComponent(name)}/manifest`);
+  }
+
+  async listMcpServers(): Promise<{ servers: McpServerItem[] }> {
+    return this.request<{ servers: McpServerItem[] }>('/v1/mcp/servers');
+  }
+
+  async listMcpLogs(params?: { serverId?: string; limit?: number }): Promise<{ logs: McpCallLogItem[] }> {
+    const q = new URLSearchParams();
+    if (params?.serverId) q.set('serverId', params.serverId);
+    if (params?.limit) q.set('limit', String(params.limit));
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<{ logs: McpCallLogItem[] }>(`/v1/mcp/logs${qs}`);
   }
 }
 
 export const defaultApiClient = new ApiClient();
+
+export interface SkillPermission {
+  action: string;
+  resource: string;
+  scope: string;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  reason: string;
+}
+
+export interface SkillItem {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  source: 'builtin' | 'workspace' | 'remote' | 'hermes';
+  isEnabled: boolean;
+  isReadOnly?: boolean;
+  isProjectOverride?: boolean;
+  requestedPermissions: SkillPermission[];
+  lastUsedAt?: string | null;
+  lastOutcome?: 'success' | 'failure' | null;
+  lastError?: string | null;
+  manifest?: Record<string, unknown>;
+}
+
+export interface McpServerItem {
+  id: string;
+  name: string;
+  transport: 'stdio' | 'sse' | 'http';
+  command?: string | null;
+  args?: string[] | null;
+  url?: string | null;
+  allowedCapabilities: string[];
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  status: 'connected' | 'disconnected' | 'error';
+  lastConnectedAt?: string | null;
+  lastError?: string | null;
+  tools?: Array<{
+    name: string;
+    description: string;
+    riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  }>;
+}
+
+export interface McpCallLogItem {
+  id: string;
+  serverId: string;
+  toolName: string;
+  userId?: string | null;
+  projectId?: string | null;
+  status: 'success' | 'failure' | 'denied';
+  durationMs?: number | null;
+  error?: string | null;
+  createdAt: string;
+}
+
 
