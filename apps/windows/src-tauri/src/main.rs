@@ -320,7 +320,15 @@ fn open_in_browser(url: &str) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn open_in_browser(_url: &str) -> Result<(), String> {
-    Err("Google login is only supported on Windows".into())
+    Err("Browser opening is only supported on Windows".into())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("Hanya URL http:// dan https:// yang diizinkan".into());
+    }
+    open_in_browser(&url)
 }
 
 /// Runs the browser half of the Authorization Code + PKCE flow: binds a loopback port, hands the
@@ -379,7 +387,8 @@ fn main() {
             read_allowed_text,
             get_allowed_file_metadata,
             write_allowed_file,
-            google_login
+            google_login,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
