@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAgentStore } from './context.ts';
+import { ThemeSwitcher } from './components/index.ts';
 import './Theme.css';
 
 interface FileTreeEntry { path: string; name: string; kind: 'directory' | 'file'; size: number; }
@@ -349,6 +350,7 @@ export const App: React.FC = () => {
         </div>
 
         <div className="header-status-section">
+          <ThemeSwitcher />
           <div className="status-pill">
             <span className={`status-dot ${connectionStatus}`} />
             <span style={{ textTransform: 'capitalize' }}>{connectionStatus}</span>
