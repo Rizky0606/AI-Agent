@@ -1,9 +1,20 @@
 import type {
+  AcceptanceCriterion,
+  CriterionCategory,
   EvaluationResult,
   ResearchClaim,
   ResearchContradiction,
   ResearchSource,
 } from '@personal-ai-os/evaluator';
+
+export type {
+  AcceptanceCriterion,
+  CriterionCategory,
+  EvaluationResult,
+  ResearchClaim,
+  ResearchContradiction,
+  ResearchSource,
+};
 import type { RiskLevel } from '@personal-ai-os/permissions';
 
 export type AgentMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
