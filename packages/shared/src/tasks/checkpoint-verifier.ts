@@ -31,6 +31,7 @@ export function createVersionedCheckpoint(params: {
   verified?: boolean | undefined;
   verificationNotes?: string | undefined;
   timestamp?: string | undefined;
+  acceptanceCriteria?: import('./types.ts').CheckpointAcceptanceCriterion[] | undefined;
 }): TaskCheckpoint {
   const checksum = computeCheckpointChecksum({
     version: params.version,
@@ -52,6 +53,7 @@ export function createVersionedCheckpoint(params: {
     checksum,
     verified: params.verified ?? true,
     verificationNotes: params.verificationNotes,
+    acceptanceCriteria: params.acceptanceCriteria,
   };
 }
 
