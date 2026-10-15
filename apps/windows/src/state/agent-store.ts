@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
-import { ApiClient, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor } from '../api/client.ts';
+import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
@@ -10,6 +10,24 @@ import { type DeviceIdentity, DeviceIdentityManager } from '../connection/device
 import { invoke } from '@tauri-apps/api/core';
 import { buildGoogleStartUrl, codeChallengeFor, parseCallbackQuery, randomBase64Url } from '../auth/google.ts';
 
+export const isTokenExpired = (token: string, bufferSeconds = 30): boolean => {
+  if (!token || typeof token !== 'string') return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return false;
+    const part = parts[1];
+    if (!part) return false;
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonStr = typeof globalThis.atob === 'function'
+      ? globalThis.atob(base64)
+      : Buffer.from(base64, 'base64').toString('utf8');
+    const payload = JSON.parse(jsonStr) as { exp?: number };
+    if (typeof payload.exp !== 'number') return false;
+    return payload.exp * 1000 <= Date.now() + (bufferSeconds * 1000);
+  } catch {
+    return false;
+  }
+};
 
 export interface DiagnosticLog {
   id: string;
@@ -20,12 +38,35 @@ export interface DiagnosticLog {
 
 /** Persisted session; `serverUrl` stays in-memory like it always has. */
 const SESSION_STORAGE_KEY = 'personal-ai-os.windows.session';
+const CLOSE_TO_TRAY_STORAGE_KEY = 'personal-ai-os.windows.close_to_tray';
+const AUTOSTART_STORAGE_KEY = 'personal-ai-os.windows.autostart';
+
+export type AuthState = 'unauthenticated' | 'bootstrapping' | 'authenticating' | 'authenticated';
+
+export type LoginStep =
+  | 'idle'
+  | 'opening_browser'
+  | 'verifying'
+  | 'registering_device'
+  | 'connecting'
+  | 'connected'
+  | 'error';
 
 interface StoredSession {
   accessToken: string;
   refreshToken: string;
   email: string;
 }
+
+const readStoredBoolean = (key: string, defaultValue: boolean): boolean => {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    if (raw === null || raw === undefined) return defaultValue;
+    return JSON.parse(raw);
+  } catch {
+    return defaultValue;
+  }
+};
 
 const readStoredSession = (): StoredSession => {
   const empty: StoredSession = { accessToken: '', refreshToken: '', email: '' };
@@ -98,6 +139,17 @@ export interface AgentState {
   artifacts: ArtifactItem[];
   artifactPreview: ArtifactPreviewState | null;
   apiError: string | null;
+  authState: AuthState;
+  loginStep: LoginStep;
+  loginError: string | null;
+  bootstrapMessage: string | null;
+  closeToTray: boolean;
+  autostart: boolean;
+  bootstrapAuth: () => Promise<void>;
+  manualLogin: (token: string) => Promise<void>;
+  clearLoginError: () => void;
+  setCloseToTray: (enabled: boolean) => Promise<void>;
+  setAutostart: (enabled: boolean) => Promise<void>;
   setServerUrl: (url: string) => void;
   setAuthToken: (token: string) => void;
   googleLogin: () => Promise<void>;
@@ -153,6 +205,7 @@ export const createAgentStore = (
   let chatScope: string | null = null;
   let activeConnection: AgentConnection | null = null;
   let loginInFlight = false;
+  let connectingInFlight = false;
   const getInitialCapabilities = (): Record<CapabilityName, boolean> => {
     const rules = registry.getAllRules();
     const map = {} as Record<CapabilityName, boolean>;
@@ -221,12 +274,19 @@ export const createAgentStore = (
       }
     };
     const storedSession = readStoredSession();
+    const hasStoredTokens = Boolean(storedSession.accessToken || storedSession.refreshToken);
     return {
-    serverUrl: import.meta.env.VITE_SERVER_URL ?? 'https://ai.ojixx.my.id',
+    serverUrl: (import.meta as unknown as { env?: { VITE_SERVER_URL?: string } }).env?.VITE_SERVER_URL ?? 'https://ai.ojixx.my.id',
     authToken: storedSession.accessToken,
     refreshToken: storedSession.refreshToken,
     userEmail: storedSession.email,
     connectionStatus: 'disconnected',
+    authState: hasStoredTokens ? 'bootstrapping' : 'unauthenticated',
+    loginStep: 'idle',
+    loginError: null,
+    bootstrapMessage: null,
+    closeToTray: readStoredBoolean(CLOSE_TO_TRAY_STORAGE_KEY, true),
+    autostart: readStoredBoolean(AUTOSTART_STORAGE_KEY, false),
 
     device: identityMgr.getIdentity(),
     capabilities: getInitialCapabilities(),
@@ -390,9 +450,98 @@ export const createAgentStore = (
       });
     }),
 
-    googleLogin: () => run(async () => {
+    bootstrapAuth: async () => {
+      // Sync close-to-tray & autostart from Tauri backend if running inside Tauri
+      try {
+        const ctt = await invoke<boolean>('get_close_to_tray');
+        const as = await invoke<boolean>('get_autostart');
+        set({ closeToTray: ctt, autostart: as });
+      } catch {
+        // Ignored when running outside Tauri (e.g. web tests)
+      }
+
+      const { authToken, refreshToken } = get();
+      if (!authToken && !refreshToken) {
+        set({ authState: 'unauthenticated', loginStep: 'idle', bootstrapMessage: null });
+        return;
+      }
+
+      set({ authState: 'bootstrapping', bootstrapMessage: 'Memverifikasi sesi...' });
+
+      try {
+        let currentToken = authToken;
+        if (!currentToken || isTokenExpired(currentToken)) {
+          if (!refreshToken) {
+            clearSession();
+            set({
+              authState: 'unauthenticated',
+              loginStep: 'idle',
+              loginError: null,
+              bootstrapMessage: null,
+            });
+            return;
+          }
+          set({ bootstrapMessage: 'Menyegarkan sesi autentikasi...' });
+          try {
+            const session = await api().refreshSession(refreshToken);
+            applySession(session);
+            currentToken = session.accessToken;
+          } catch (refreshErr) {
+            const isOffline =
+              (refreshErr instanceof TypeError && refreshErr.message.toLowerCase().includes('fetch')) ||
+              (refreshErr instanceof ApiError && (refreshErr.status === 502 || refreshErr.status === 503 || refreshErr.status === 504 || refreshErr.status === 0)) ||
+              (refreshErr instanceof Error && (refreshErr.message.toLowerCase().includes('network') || refreshErr.message.toLowerCase().includes('failed to fetch') || refreshErr.message.toLowerCase().includes('econnrefused')));
+
+            if (isOffline) {
+              set({
+                authState: 'unauthenticated',
+                loginStep: 'error',
+                loginError: 'Server tidak terjangkau. Periksa koneksi internet Anda.',
+                bootstrapMessage: null,
+              });
+              return;
+            }
+
+            clearSession();
+            set({
+              authState: 'unauthenticated',
+              loginStep: 'error',
+              loginError: 'Sesi Anda telah kedaluwarsa. Silakan masuk kembali.',
+              bootstrapMessage: null,
+            });
+            return;
+          }
+        }
+
+        set({ bootstrapMessage: 'Mendaftarkan perangkat...' });
+        await get().syncDeviceIdentity();
+
+        set({ bootstrapMessage: 'Menghubungkan ke layanan...' });
+        await get().connectToServer();
+        void get().refreshChat();
+
+        set({
+          authState: 'authenticated',
+          loginStep: 'connected',
+          loginError: null,
+          bootstrapMessage: null,
+        });
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const isOffline = errMsg.toLowerCase().includes('network') || errMsg.toLowerCase().includes('fetch') || errMsg.toLowerCase().includes('econnrefused');
+        set({
+          authState: 'unauthenticated',
+          loginStep: 'error',
+          loginError: isOffline ? 'Server tidak terjangkau. Periksa koneksi internet Anda.' : errMsg,
+          bootstrapMessage: null,
+        });
+      }
+    },
+
+    googleLogin: async () => {
       if (loginInFlight) return;
       loginInFlight = true;
+      set({ authState: 'authenticating', loginStep: 'opening_browser', loginError: null });
       try {
         const codeVerifier = randomBase64Url(32);
         const state = randomBase64Url(16);
@@ -401,21 +550,140 @@ export const createAgentStore = (
           await codeChallengeFor(codeVerifier),
           state,
         );
-        const rawQuery = await invoke<string>('google_login', { startUrlTemplate });
+
+        let rawQuery: string;
+        try {
+          rawQuery = await invoke<string>('google_login', { startUrlTemplate });
+        } catch (invokeErr) {
+          const rawMsg = invokeErr instanceof Error ? invokeErr.message : String(invokeErr);
+          if (
+            rawMsg.toLowerCase().includes('timeout') ||
+            rawMsg.toLowerCase().includes('cancel') ||
+            rawMsg.toLowerCase().includes('closed') ||
+            rawMsg.toLowerCase().includes('dibatalkan')
+          ) {
+            throw new Error('Proses login dibatalkan atau jendela browser ditutup sebelum selesai.');
+          }
+          throw new Error(`Gagal membuka alur login Google: ${rawMsg}`);
+        }
+
+        set({ loginStep: 'verifying' });
         const callback = parseCallbackQuery(rawQuery);
-        if (callback.state !== state) throw new Error('State OAuth tidak cocok — login dibatalkan.');
-        const session = await api().exchangeLoginCode(callback.code, codeVerifier);
+        if (callback.state !== state) {
+          throw new Error('State OAuth tidak cocok. Login dibatalkan demi keamanan.');
+        }
+
+        let session: AuthSession;
+        try {
+          session = await api().exchangeLoginCode(callback.code, codeVerifier);
+        } catch (exchangeErr) {
+          if (exchangeErr instanceof ApiError && (exchangeErr.status === 403 || exchangeErr.code === 'FORBIDDEN')) {
+            throw new Error('Akun Google Anda tidak memiliki izin untuk mengakses sistem ini.');
+          }
+          throw exchangeErr;
+        }
+
         applySession(session);
         get().addLog('info', `Login Google berhasil sebagai ${session.user.email}`);
+
+        set({ loginStep: 'registering_device' });
+        await get().syncDeviceIdentity();
+
+        set({ loginStep: 'connecting' });
+        await get().connectToServer();
+        void get().refreshChat();
+
+        set({
+          loginStep: 'connected',
+          authState: 'authenticated',
+          loginError: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        get().addLog('error', `Login gagal: ${message}`);
+        set({
+          authState: 'unauthenticated',
+          loginStep: 'error',
+          loginError: message,
+        });
       } finally {
         loginInFlight = false;
       }
-    }),
+    },
+
+    manualLogin: async (token: string) => {
+      const trimmed = token.trim();
+      if (!trimmed) {
+        set({ loginError: 'Masukkan token autentikasi yang valid.' });
+        return;
+      }
+      set({ authState: 'authenticating', loginStep: 'verifying', loginError: null });
+      try {
+        get().setAuthToken(trimmed);
+
+        set({ loginStep: 'registering_device' });
+        await get().syncDeviceIdentity();
+
+        set({ loginStep: 'connecting' });
+        await get().connectToServer();
+        void get().refreshChat();
+
+        set({
+          loginStep: 'connected',
+          authState: 'authenticated',
+          loginError: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        get().addLog('error', `Login manual gagal: ${message}`);
+        set({
+          authState: 'unauthenticated',
+          loginStep: 'error',
+          loginError: message,
+        });
+      }
+    },
+
+    clearLoginError: () => set({ loginError: null, loginStep: 'idle' }),
+
+    setCloseToTray: async (enabled: boolean) => {
+      try {
+        globalThis.localStorage?.setItem(CLOSE_TO_TRAY_STORAGE_KEY, JSON.stringify(enabled));
+      } catch {
+        // storage fallback
+      }
+      set({ closeToTray: enabled });
+      try {
+        await invoke('set_close_to_tray', { enabled });
+      } catch {
+        // ignore non-tauri runtime
+      }
+    },
+
+    setAutostart: async (enabled: boolean) => {
+      try {
+        globalThis.localStorage?.setItem(AUTOSTART_STORAGE_KEY, JSON.stringify(enabled));
+      } catch {
+        // storage fallback
+      }
+      set({ autostart: enabled });
+      try {
+        await invoke('set_autostart', { enabled });
+      } catch {
+        // ignore non-tauri runtime
+      }
+    },
 
     logout: () => run(async () => {
       const { refreshToken } = get();
       get().disconnectFromServer();
       clearSession();
+      set({
+        authState: 'unauthenticated',
+        loginStep: 'idle',
+        loginError: null,
+        bootstrapMessage: null,
+      });
       if (!refreshToken) return;
       try {
         await api().logout(refreshToken);
@@ -441,29 +709,42 @@ export const createAgentStore = (
     connectToServer: async () => {
       const state = get();
       if (!state.authToken.trim()) {
-        state.addLog('warn', 'Belum masuk. Gunakan "Masuk dengan Google" di tab Settings.');
+        state.addLog('warn', 'Belum masuk. Silakan lakukan autentikasi terlebih dahulu.');
         return;
       }
-      if (activeConnection) {
-        activeConnection.disconnect();
+      if (connectingInFlight) {
+        return;
+      }
+      if (activeConnection && (activeConnection.getStatus() === 'connected' || activeConnection.getStatus() === 'connecting')) {
+        return;
       }
 
-      const { TauriCommandExecutor } = await import('../security/tauri-executor.ts');
-      const exec = executor ?? new TauriCommandExecutor(registry, pathValidator);
+      connectingInFlight = true;
+      try {
+        if (activeConnection) {
+          activeConnection.disconnect();
+          activeConnection = null;
+        }
 
-      activeConnection = new AgentConnection({
-        serverUrl: state.serverUrl,
-        token: state.authToken,
-        identity: state.device,
-        keyStore: identityMgr.keys,
-        executor: exec,
-        onStatusChange: (status) => set({ connectionStatus: status }),
-        onDeviceId: (deviceId) => set({ device: identityMgr.setServerDeviceId(deviceId) }),
-        onLogMessage: (level, msg) => get().addLog(level, msg),
-        // Chat runs on its own account-authenticated socket.
-      });
+        const { TauriCommandExecutor } = await import('../security/tauri-executor.ts');
+        const exec = executor ?? new TauriCommandExecutor(registry, pathValidator);
 
-      await activeConnection.connect();
+        activeConnection = new AgentConnection({
+          serverUrl: state.serverUrl,
+          token: state.authToken,
+          identity: state.device,
+          keyStore: identityMgr.keys,
+          executor: exec,
+          onStatusChange: (status) => set({ connectionStatus: status }),
+          onDeviceId: (deviceId) => set({ device: identityMgr.setServerDeviceId(deviceId) }),
+          onLogMessage: (level, msg) => get().addLog(level, msg),
+          // Chat runs on its own account-authenticated socket.
+        });
+
+        await activeConnection.connect();
+      } finally {
+        connectingInFlight = false;
+      }
     },
 
     refreshChat: async () => {

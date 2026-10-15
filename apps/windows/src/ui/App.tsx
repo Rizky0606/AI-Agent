@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAgentStore } from './context.ts';
-import { ThemeSwitcher } from './components/index.ts';
+import { StatusDot, ThemeSwitcher } from './components/index.ts';
+import { LoginScreen } from './LoginScreen.tsx';
 import './Theme.css';
 
 interface FileTreeEntry { path: string; name: string; kind: 'directory' | 'file'; size: number; }
@@ -285,6 +286,12 @@ export const App: React.FC = () => {
   >('chat');
 
   const {
+    authState,
+    bootstrapAuth,
+    closeToTray,
+    setCloseToTray,
+    autostart,
+    setAutostart,
     device,
     connectionStatus,
     capabilities,
@@ -308,8 +315,14 @@ export const App: React.FC = () => {
   } = useAgentStore();
 
   useEffect(() => {
-    void syncDeviceIdentity();
-  }, [syncDeviceIdentity]);
+    void bootstrapAuth();
+  }, [bootstrapAuth]);
+
+  useEffect(() => {
+    if (authState === 'authenticated') {
+      void syncDeviceIdentity();
+    }
+  }, [authState, syncDeviceIdentity]);
 
   const [newPathInput, setNewPathInput] = useState('');
 
@@ -334,6 +347,9 @@ export const App: React.FC = () => {
     }
   };
 
+  if (authState !== 'authenticated') {
+    return <LoginScreen />;
+  }
 
   return (
     <div className="agent-container">
@@ -351,9 +367,31 @@ export const App: React.FC = () => {
 
         <div className="header-status-section">
           <ThemeSwitcher />
-          <div className="status-pill">
-            <span className={`status-dot ${connectionStatus}`} />
-            <span style={{ textTransform: 'capitalize' }}>{connectionStatus}</span>
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '5px 12px',
+              borderRadius: 'var(--radius-full)',
+              background: 'var(--bg-subtle, rgba(255, 255, 255, 0.04))',
+              border: '1px solid var(--border-color)',
+            }}
+            title={`Status koneksi: ${connectionStatus}`}
+          >
+            <StatusDot
+              status={connectionStatus}
+              pulse={connectionStatus === 'connecting' || connectionStatus === 'reconnecting'}
+            />
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-sub)' }}>
+              {connectionStatus === 'connected'
+                ? 'Terhubung'
+                : connectionStatus === 'connecting'
+                ? 'Menghubungkan'
+                : connectionStatus === 'reconnecting'
+                ? 'Menyambung ulang'
+                : 'Terputus'}
+            </span>
           </div>
         </div>
       </header>
@@ -662,6 +700,45 @@ export const App: React.FC = () => {
               </div>
             </div>
           </div>
+
+          <div className="card" style={{ maxWidth: 600, marginTop: 12 }}>
+            <h2 className="card-title">Integrasi Sistem Operasi Windows</h2>
+            <p className="card-subtitle">
+              Konfigurasi perilaku aplikasi saat jendela ditutup dan saat sistem dinyalakan.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 16 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={closeToTray}
+                  onChange={(e) => void setCloseToTray(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Tutup ke System Tray (Close-to-Tray)</span>
+                  <p style={{ fontSize: 11, color: 'var(--text-sub)', margin: '2px 0 0 0' }}>
+                    Saat tombol silang (X) ditekan, sembunyikan aplikasi ke area tray Windows tanpa mematikan proses agen.
+                  </p>
+                </div>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={autostart}
+                  onChange={(e) => void setAutostart(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Jalankan otomatis saat Windows start (Autostart)</span>
+                  <p style={{ fontSize: 11, color: 'var(--text-sub)', margin: '2px 0 0 0' }}>
+                    Mulai aplikasi Personal AI OS di latar belakang secara otomatis saat login ke Windows.
+                  </p>
+                </div>
+              </label>
+            </div>
+          </div>
+
           <ModelSettings />
           </>
         )}
