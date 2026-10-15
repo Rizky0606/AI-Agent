@@ -25,8 +25,9 @@ interface ColumnRow {
  * database are allowed because the migration runner owns `schema_migrations`.
  */
 test('schema.ts matches the database the migrations build', async () => {
-  const baseUrl = process.env['DATABASE_URL'];
-  assert.ok(baseUrl, 'DATABASE_URL is required: this check applies the real migrations');
+  const baseUrl =
+    process.env['DATABASE_URL'] ??
+    'postgresql://personal_ai_os:personal_ai_secret@127.0.0.1:5432/personal_ai_os';
 
   const scratchName = `schema_parity_${randomBytes(6).toString('hex')}`;
   const adminUrl = new URL(baseUrl);

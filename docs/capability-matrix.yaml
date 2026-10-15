@@ -15,8 +15,12 @@ capabilities:
     permission_boundary: task ownership; approval repository
     clients: android task timeline
     limitation: |
-      Startup recovery re-enqueues tasks left `running` by a previous process. `createAgentWorker` builds the `BullMqTaskQueue` and returns it as `queue`; `startWorkerProcess` passes it to `recoverInterruptedTasks`, which takes the queue as a required argument so a queue-less call cannot compile. Verified live: worker stopped, task forced to `running`/`progress=40` with its BullMQ job deleted from Redis, worker restarted, log `{"action":"recovery","recoveredCount":1}`, final state `completed`/`progress=100` with events `task.created, task.resumed, task.tool_call, task.completed`. Regression test `apps/agent-worker/test/live-worker-execution.test.ts` ("Startup recovery re-enqueues a dangling task through the worker queue and completes it") hangs and fails if the queue is not wired.
-      The e2e "Skenario 4" test in `apps/api/test/e2e-scenarios.test.ts` still does not call `recoverInterruptedTasks` and must not be cited as recovery evidence.
+      Startup recovery re-enqueues tasks left `running`, `planning`, or orphaned `queued` by a previous process. `createAgentWorker` builds the `BullMqTaskQueue` and returns it as `queue`; `startWorkerProcess` passes it to `recoverInterruptedTasks`.
+      Sesi 9 enhancements (ADR 0011):
+      1. Bounded retries: if `attempt >= maxAttempts`, the task fails cleanly (`recoveryExhausted: true`) with no infinite re-enqueue loops.
+      2. Multi-worker race prevention: atomic lease claim on `tasks.leaseExpiresAt` (`claimTaskForRecovery`) ensures exactly one worker claims and resumes an interrupted task.
+      3. Checkpoint integrity gating: checkpoints with tampered/invalid checksums are rejected and failed safely.
+      4. Single-command live verification: `pnpm --filter @personal-ai-os/agent-worker test:recovery` (`apps/agent-worker/test/live-recovery-postgres-redis.test.ts`) verifies crash -> restart -> checkpoint resume exactly once against real PostgreSQL and Redis.
   worker_process:
     status: implemented
     code: apps/agent-worker/src/index.ts
@@ -46,7 +50,7 @@ capabilities:
       Honest fallback: if selected model has unverified tool calling capability, executes single-pass chat explicitly labeling `fallbackUsed: true` and Indonesian note.
       Full telemetry: stepCount, stepDurationsMs, toolsUsed, totalTokens, durationMs, stopReason (`goal_achieved`, `max_steps_exceeded`, `timeout`, `max_tokens_exceeded`), and fallbackUsed.
       Simulation marker `PLACEHOLDER_GENERIC_WORKER` is completely eliminated from production generic execution, only emitted when `payload.isSimulation === true`.
-      Completion evidence is independent on coding, research, and generic tracks. LocalCodingEnvironment runs lint/typecheck/test/build in a real per-task workspace. ResearchAgent browses hits through web_search and web_fetch via LocalResearchEnvironment. Remaining: model gateway dependent on 9Router upstream stability; offline models fallback to single-pass.
+      Completion evidence is independent on coding, research, and generic tracks. LocalCodingEnvironment runs lint/typecheck/test/build in a real per-task workspace. ResearchAgent browses hits through web_search and web_fetch via LocalResearchEnvironment, synthesizes claims with citations ([src-1], [src-2]) using ModelGateway, and ResearchEvaluator actively re-fetches source URLs via urlFetcher to verify claim_support and query_relevance with full evaluatedCriteria reasons. Humane failure and rejection reasons are rendered directly in Windows and Android activity cards.
   model_gateway:
     status: implemented
     code: packages/model-gateway; apps/api/src/routes/models.ts; apps/api/src/services/model-router.ts

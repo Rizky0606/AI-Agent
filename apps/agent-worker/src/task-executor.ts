@@ -150,9 +150,11 @@ export class TaskExecutor {
     this.preferredRuntimeId = options?.preferredRuntimeId ?? 'omp';
     this.router = options?.router ?? new AgentRouter(this.analyzer, this.planner, this.runtimeManager);
     this.codingAgent = options?.codingAgent ?? new CodingAgent(undefined, undefined, this.guard);
-    this.researchAgent = options?.researchAgent ?? new ResearchAgent();
     this.modelGateway = options?.modelGateway;
     this.defaultModel = options?.defaultModel;
+    this.researchAgent =
+      options?.researchAgent ??
+      new ResearchAgent({ modelGateway: this.modelGateway, defaultModel: this.defaultModel });
     this.genericAgent =
       options?.genericAgent ??
       new GenericAgent({ modelGateway: this.modelGateway, defaultModel: this.defaultModel });
@@ -581,8 +583,12 @@ export class TaskExecutor {
         return;
       }
 
-      if (report.status === 'failed') {
-        const reason = report.summary;
+      if (report.status === 'failed' || report.evaluationResult?.passed === false) {
+        const reason =
+          report.summary ||
+          report.evaluationResult?.completionBlockedReason ||
+          report.evaluationResult?.remainingIssues[0] ||
+          'Coding evaluator menolak hasil task karena bukti verifikasi gagal.';
         await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
           error: reason,
         });
@@ -681,8 +687,12 @@ export class TaskExecutor {
 
       const report = await this.researchAgent.execute(researchInput);
 
-      if (report.status === 'failed') {
-        const reason = report.summary;
+      if (report.status === 'failed' || report.evaluationResult?.passed === false) {
+        const reason =
+          report.summary ||
+          report.evaluationResult?.completionBlockedReason ||
+          report.evaluationResult?.remainingIssues[0] ||
+          'Research evaluator menolak hasil riset karena klaim/sumber tidak terverifikasi.';
         await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
           error: reason,
         });
@@ -2124,9 +2134,9 @@ export class TaskExecutor {
   }
 
   /**
-   * Re-enqueue tasks left `running` by a previous process. The queue is required: without it
-   * this method only wrote a `task.resumed` event and left the task dangling forever, which
-   * looked like a successful recovery in the logs.
+   * Re-enqueue tasks left `running`, `planning`, or orphaned `queued` by a previous process.
+   * Enforces retry bounds, checkpoint integrity validation, and recovery locks to prevent
+   * race conditions across worker restarts.
    */
   async recoverInterruptedTasks(
     queue: TaskQueueEnqueuer,
@@ -2135,25 +2145,95 @@ export class TaskExecutor {
     const recoveredTasks: TaskRecord[] = [];
 
     for (const task of dangling) {
-      const isIntegrityValid = task.checkpoint ? verifyCheckpointIntegrity(task.checkpoint) : true;
-      const lastStep = task.checkpoint?.stepIndex ?? 0;
-      const resumeEvent = await this.taskRepo.createTaskEvent(
-        task.userId,
-        task.id,
-        'task.resumed',
-        {
-          recoveredAfterRestart: true,
-          checkpointVersion: task.checkpoint?.version ?? 1,
-          checkpointIntegrityValid: isIntegrityValid,
-          lastVerifiedStep: lastStep,
-          resumingFromStep: lastStep + 1,
-          note: 'Task dipulihkan setelah worker restart; melanjutkan dari checkpoint terakhir.',
-        },
-      );
-      this.broadcaster.publish(resumeEvent);
+      // 1. Multi-worker recovery lock check: prevent duplicate recovery across concurrent workers
+      if (this.taskRepo.claimTaskForRecovery) {
+        const acquired = await this.taskRepo.claimTaskForRecovery(task.id);
+        if (!acquired) {
+          continue;
+        }
+      }
+
+      // 2. Retry bounding check: prevent infinite re-enqueue loops if maxAttempts exhausted
+      if (task.attempt >= task.maxAttempts) {
+        const reason = `Batas percobaan ulang maksimal tercapai saat pemulihan tugas (${task.attempt}/${task.maxAttempts}).`;
+        if (task.status === 'queued') {
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'planning', {
+            attempt: task.attempt + 1,
+          });
+        }
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+          error: reason,
+        });
+        const failEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.failed',
+          {
+            error: reason,
+            recoveryExhausted: true,
+            retryable: false,
+          },
+        );
+        this.broadcaster.publish(failEvent);
+        if (this.taskRepo.releaseTaskRecovery) {
+          await this.taskRepo.releaseTaskRecovery(task.id);
+        }
+        continue;
+      }
+
+      // 3. Checkpoint integrity check: abort corrupted checkpoints
+      const isIntegrityValid = task.checkpoint?.checksum ? verifyCheckpointIntegrity(task.checkpoint) : true;
+      if (!isIntegrityValid) {
+        const reason = 'Integritas checkpoint tidak valid saat pemulihan tugas. Task dihentikan demi keamanan.';
+        if (task.status === 'queued') {
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'planning');
+        }
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+          error: reason,
+        });
+        const failEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.failed',
+          {
+            error: reason,
+            checkpointIntegrityValid: false,
+            retryable: false,
+          },
+        );
+        this.broadcaster.publish(failEvent);
+        if (this.taskRepo.releaseTaskRecovery) {
+          await this.taskRepo.releaseTaskRecovery(task.id);
+        }
+        continue;
+      }
+
+      // 4. Emit task.resumed ONLY for tasks that had already started (running, planning, or checkpoint exists)
+      const hadStarted = task.status === 'running' || task.status === 'planning' || Boolean(task.checkpoint);
+      if (hadStarted) {
+        const lastStep = task.checkpoint?.stepIndex ?? 0;
+        const resumeEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.resumed',
+          {
+            recoveredAfterRestart: true,
+            checkpointVersion: task.checkpoint?.version ?? 1,
+            checkpointIntegrityValid: true,
+            lastVerifiedStep: lastStep,
+            resumingFromStep: lastStep + 1,
+            note: 'Task dipulihkan setelah worker restart; melanjutkan dari checkpoint terakhir.',
+          },
+        );
+        this.broadcaster.publish(resumeEvent);
+      }
 
       await queue.enqueue(task);
       recoveredTasks.push(task);
+
+      if (this.taskRepo.releaseTaskRecovery) {
+        await this.taskRepo.releaseTaskRecovery(task.id);
+      }
     }
 
     return { recoveredCount: recoveredTasks.length, recoveredTasks };

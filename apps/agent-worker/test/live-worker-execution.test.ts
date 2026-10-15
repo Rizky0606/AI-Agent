@@ -871,7 +871,9 @@ test('Research task searches, browses, and cites through the guarded tool regist
   });
 
   assert.deepEqual(searched, ['durable execution']);
-  assert.deepEqual(fetched, ['https://example.org/durable', 'https://example.com/checkpoints']);
+  // ResearchAgent fetched each URL during browsing and ResearchEvaluator re-fetched each URL for verification
+  assert.deepEqual(Array.from(new Set(fetched)), ['https://example.org/durable', 'https://example.com/checkpoints']);
+  assert.equal(fetched.length, 4, 'ResearchEvaluator must re-fetch source URLs for verification');
 
   const completedTask = await repo.getTask(task.userId, task.id);
   assert.equal(completedTask?.status, 'completed');
