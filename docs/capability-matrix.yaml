@@ -1,5 +1,5 @@
 version: 1
-updated: 2026-10-14
+updated: 2026-10-15
 capabilities:
   control_plane:
     status: implemented
@@ -100,10 +100,11 @@ simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'
   code: apps/agent-worker/src/task-executor.ts:47
-  production_claim: forbidden until real generic orchestration exists
+  production_claim: synthetic evidence permitted only when payload.isSimulation or payload.placeholder is true
   proof: apps/agent-worker/test/worker.test.ts; apps/agent-worker/test/live-worker-execution.test.ts
   limitation: |
-    `PLACEHOLDER_GENERIC_WORKER` is still the only marker for generic execution: a task that is
-    not coding, research, runtime, or device dispatch runs the placeholder track, and that must not
-    be presented as a capability. The previously listed unwired code is gone as of 2026-10-14 —
-    `AiCouncil` and `SelfHealingEngine` were deleted from `agent-core` (zero call sites in `apps/`).
+    `PLACEHOLDER_GENERIC_WORKER` marker is now strictly bounded to explicit simulation/test runs
+    (`payload.isSimulation === true`, `payload.placeholder === true`, or `simulateStep`). Real generic
+    orchestration via `ModelGateway.chat` and `ToolRegistry.executeTool` was implemented in
+    `executeGenericOrchestration` (`apps/agent-worker/src/task-executor.ts:990`), and fails closed if
+    no model gateway is provisioned. `AiCouncil` and `SelfHealingEngine` remain deleted from `agent-core`.
