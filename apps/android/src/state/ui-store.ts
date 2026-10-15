@@ -4,7 +4,7 @@ export interface UiState {
   activeProjectId: string | null;
   taskStatusFilter: string | null;
   approvalStatusFilter: string | null;
-  theme: 'dark' | 'light';
+  theme: 'system' | 'light' | 'dark';
   fcmToken: string | null;
   pushNotificationsEnabled: boolean;
   notifyApprovalRequired: boolean;
@@ -16,7 +16,7 @@ export interface UiState {
   setActiveProjectId: (id: string | null) => void;
   setTaskStatusFilter: (status: string | null) => void;
   setApprovalStatusFilter: (status: string | null) => void;
-  setTheme: (theme: 'dark' | 'light') => void;
+  setTheme: (theme: 'system' | 'light' | 'dark') => void;
   setFcmToken: (token: string | null) => void;
   setPushNotificationsEnabled: (enabled: boolean) => void;
   setNotifyApprovalRequired: (enabled: boolean) => void;
