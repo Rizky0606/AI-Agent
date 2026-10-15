@@ -30,6 +30,15 @@ import {
   CodingAgent,
   type CodingEnvironment,
   type CodingTaskInput,
+  type CriterionCategory,
+  DEFAULT_MAX_STEPS,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_TIMEOUT_MS,
+  GenericAgent,
+  type GenericExecutionTelemetry,
+  type GenericStopReason,
+  HARD_MAX_STEPS,
+  HARD_MAX_TIMEOUT_MS,
   IntentAnalyzer,
   Planner,
   ResearchAgent,
@@ -38,10 +47,15 @@ import {
   type ResearchTaskInput,
   type RuntimeManager,
   type RuntimeExecuteResult,
+  synthesizeGenericCriteria,
 } from '@personal-ai-os/agent-core';
-import type { ModelGateway } from '@personal-ai-os/model-gateway';
-import type { ToolRegistry } from '@personal-ai-os/tools';
+import type {
+  ChatMessage,
+  ModelGateway,
+} from '@personal-ai-os/model-gateway';
+import { sanitizeUntrustedToolOutput, type ToolRegistry } from '@personal-ai-os/tools';
 import { DeviceOfflineError, type DeviceCommandResult } from '@personal-ai-os/api/services';
+import { MemoryCandidateExtractor, type MemoryCandidate } from '@personal-ai-os/memory';
 import type { DeviceDispatcher } from './device-dispatcher.ts';
 
 export const PLACEHOLDER_WORKER_LABEL =
@@ -94,8 +108,10 @@ export interface TaskExecutorOptions {
   /** Parent directory for per-task coding workspaces. Each task gets its own git-initialised subdirectory. */
   codingWorkspaceRoot?: string | undefined;
   researchAgent?: ResearchAgent | undefined;
+  genericAgent?: GenericAgent | undefined;
   modelGateway?: ModelGateway | undefined;
   defaultModel?: string | undefined;
+  memoryProposalHandler?: ((proposal: MemoryCandidate) => Promise<unknown>) | undefined;
 }
 
 export class TaskExecutor {
@@ -113,15 +129,20 @@ export class TaskExecutor {
   private readonly preferredRuntimeId: string;
   private readonly codingAgent: CodingAgent;
   private readonly researchAgent: ResearchAgent;
+  private readonly genericAgent: GenericAgent;
   private readonly modelGateway?: ModelGateway | undefined;
   private readonly defaultModel?: string | undefined;
   private readonly codingWorkspaceRoot: string;
+  private readonly candidateExtractor = new MemoryCandidateExtractor();
+  private readonly memoryProposalHandler?:
+    ((proposal: MemoryCandidate) => Promise<unknown>) | undefined;
 
   constructor(
     taskRepo: TaskRepository,
     broadcaster: EventPublisher,
     options?: TaskExecutorOptions,
   ) {
+    this.memoryProposalHandler = options?.memoryProposalHandler;
     this.taskRepo = taskRepo;
     this.broadcaster = broadcaster;
     this.guard = options?.guard;
@@ -135,9 +156,14 @@ export class TaskExecutor {
     this.preferredRuntimeId = options?.preferredRuntimeId ?? 'omp';
     this.router = options?.router ?? new AgentRouter(this.analyzer, this.planner, this.runtimeManager);
     this.codingAgent = options?.codingAgent ?? new CodingAgent(undefined, undefined, this.guard);
-    this.researchAgent = options?.researchAgent ?? new ResearchAgent();
     this.modelGateway = options?.modelGateway;
     this.defaultModel = options?.defaultModel;
+    this.researchAgent =
+      options?.researchAgent ??
+      new ResearchAgent({ modelGateway: this.modelGateway, defaultModel: this.defaultModel });
+    this.genericAgent =
+      options?.genericAgent ??
+      new GenericAgent({ modelGateway: this.modelGateway, defaultModel: this.defaultModel });
     this.codingWorkspaceRoot =
       options?.codingWorkspaceRoot ?? process.env.CODING_WORKSPACE_ROOT ?? 'data/workspaces';
   }
@@ -159,7 +185,12 @@ export class TaskExecutor {
     }
 
     // Check if task is already in non-runnable state
-    if (task.status === 'cancelled' || task.status === 'completed' || task.status === 'paused') {
+    if (
+      task.status === 'cancelled' ||
+      task.status === 'completed' ||
+      task.status === 'paused' ||
+      task.status === 'failed'
+    ) {
       defaultTracer.endSpan(span, { status: 'ok', attributes: { 'task.status': task.status } });
       return;
     }
@@ -337,8 +368,44 @@ export class TaskExecutor {
       }
 
       // ========================================================
-      // PATH C: STANDARD / TOOL / CONTROLLED STEP EXECUTION
+      // PATH C: REAL GENERIC EXECUTION OR CONTROLLED TRACK
       // ========================================================
+      const isExplicitGuardedAction = typeof task.payload?.action === 'string';
+      const isExplicitToolCall = typeof task.payload?.toolName === 'string';
+      const isGenericTask =
+        task.kind.startsWith('generic') ||
+        task.kind === 'agent_task' ||
+        task.payload?.mode === 'generic';
+
+      if (!isSimulation && !isCodingTask && !isResearchTask && targetDevice === undefined) {
+        if (!isExplicitGuardedAction && !isExplicitToolCall && isGenericTask) {
+          // If task checkpoint was saved by the 4-step pipeline (totalSteps === 4), resume it in standard track
+          if (task.checkpoint?.totalSteps === 4) {
+            await this.executeStandardTrack(
+              task,
+              startStep,
+              currentCheckpointVersion,
+              isSimulation,
+              isCodingTask,
+              isResearchTask,
+              prompt,
+              span,
+            );
+            return;
+          }
+
+          // Real autonomous bounded generic loop
+          await this.executeGenericTrack(
+            task,
+            startStep,
+            currentCheckpointVersion,
+            prompt,
+            span,
+          );
+          return;
+        }
+      }
+
       await this.executeStandardTrack(
         task,
         startStep,
@@ -376,6 +443,37 @@ export class TaskExecutor {
     }
   }
 
+  private async onTaskCompleted(
+    task: TaskRecord,
+    outcome?: { result?: string | undefined; summary?: string | undefined } | undefined,
+  ): Promise<void> {
+    if (!this.memoryProposalHandler) return;
+    try {
+      const candidates = this.candidateExtractor.extractFromTask({
+        taskId: task.id,
+        userId: task.userId,
+        projectId: task.projectId,
+        kind: task.kind,
+        title: (task.payload?.title as string) ?? (task.payload?.category as string),
+        instructions: (task.payload?.instructions as string) ?? (task.payload?.prompt as string),
+        result: outcome?.result ?? outcome?.summary,
+      });
+
+      for (const candidate of candidates) {
+        await this.memoryProposalHandler({
+          ...candidate,
+          metadata: {
+            ...(candidate.metadata ?? {}),
+            isProposal: true,
+            status: 'proposed',
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to extract memory proposal from task:', err);
+    }
+  }
+
   private async executeRuntimeTrack(task: TaskRecord, prompt: string, runtimeId: string, span: TelemetrySpan): Promise<void> {
     if (!this.runtimeManager) throw new Error('Runtime execution requested but no RuntimeManager configured.');
     // `RuntimeManager.execute` applies the per-runtime concurrency/rate cap; `getRuntime` +
@@ -399,6 +497,7 @@ export class TaskExecutor {
     await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed', { artifacts: [artifact] });
     const completed = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { runtimeId, result: 'Runtime output received and recorded.', artifacts: [artifact] });
     this.broadcaster.publish(completed);
+    await this.onTaskCompleted(task, { result: 'Runtime output received and recorded.' });
     defaultTracer.endSpan(span, { status: 'ok' });
   }
 
@@ -522,8 +621,12 @@ export class TaskExecutor {
         return;
       }
 
-      if (report.status === 'failed') {
-        const reason = report.summary;
+      if (report.status === 'failed' || report.evaluationResult?.passed === false) {
+        const reason =
+          report.summary ||
+          report.evaluationResult?.completionBlockedReason ||
+          report.evaluationResult?.remainingIssues[0] ||
+          'Coding evaluator menolak hasil task karena bukti verifikasi gagal.';
         await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
           error: reason,
         });
@@ -562,6 +665,7 @@ export class TaskExecutor {
         },
       );
       this.broadcaster.publish(completeEvent);
+      await this.onTaskCompleted(task, { result: report.summary });
       defaultTracer.endSpan(span, { status: 'ok' });
     }
   }
@@ -622,8 +726,12 @@ export class TaskExecutor {
 
       const report = await this.researchAgent.execute(researchInput);
 
-      if (report.status === 'failed') {
-        const reason = report.summary;
+      if (report.status === 'failed' || report.evaluationResult?.passed === false) {
+        const reason =
+          report.summary ||
+          report.evaluationResult?.completionBlockedReason ||
+          report.evaluationResult?.remainingIssues[0] ||
+          'Research evaluator menolak hasil riset karena klaim/sumber tidak terverifikasi.';
         await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
           error: reason,
         });
@@ -662,6 +770,7 @@ export class TaskExecutor {
         },
       );
       this.broadcaster.publish(completeEvent);
+      await this.onTaskCompleted(task, { result: report.summary });
       defaultTracer.endSpan(span, { status: 'ok' });
     }
   }
@@ -898,6 +1007,7 @@ export class TaskExecutor {
       artifacts: [artifact],
     });
     this.broadcaster.publish(completeEvent);
+    await this.onTaskCompleted(task, { result: completeEvent.payload?.result as string });
     defaultTracer.endSpan(span, { status: 'ok' });
   }
 
@@ -980,6 +1090,7 @@ export class TaskExecutor {
     await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed');
     const completeEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { result: result.data, tool: toolName, evaluationResult });
     this.broadcaster.publish(completeEvent);
+    await this.onTaskCompleted(task, { result: typeof result.data === 'string' ? result.data : JSON.stringify(result.data) });
     defaultTracer.endSpan(span, { status: 'ok' });
   }
 
@@ -1036,6 +1147,570 @@ export class TaskExecutor {
       plannedSteps: plan.steps.map((s) => s.name),
       usage: response.usage ?? null,
     };
+  }
+
+  // =========================================================================
+  // REAL GENERIC TRACK (Autonomous Bounded Tool-Calling Loop)
+  // =========================================================================
+  private async executeGenericTrack(
+    task: TaskRecord,
+    startStep: number,
+    currentCheckpointVersion: number,
+    prompt: string,
+    span: TelemetrySpan,
+  ): Promise<void> {
+    if (await this.isHalted(task.userId, task.id)) return;
+
+    const startTime = Date.now();
+    const timeoutMs = Math.min(
+      HARD_MAX_TIMEOUT_MS,
+      typeof task.payload?.timeoutMs === 'number' ? task.payload.timeoutMs : DEFAULT_TIMEOUT_MS,
+    );
+    const maxSteps = Math.min(
+      HARD_MAX_STEPS,
+      typeof task.payload?.maxSteps === 'number' ? task.payload.maxSteps : DEFAULT_MAX_STEPS,
+    );
+    const maxTokens =
+      typeof task.payload?.maxTokens === 'number' ? task.payload.maxTokens : DEFAULT_MAX_TOKENS;
+
+    // 1. Synthesize and persist Acceptance Criteria before execution (AGENTS.md)
+    const explicitCriteria = task.payload?.acceptanceCriteria as AcceptanceCriterion[] | undefined;
+    const checkpointCriteria: AcceptanceCriterion[] | undefined = task.checkpoint?.acceptanceCriteria
+      ? (task.checkpoint.acceptanceCriteria as Array<{ id: string; description: string; category?: string; required?: boolean; expectedEvidenceType?: string }>).map((c) => ({
+          id: c.id,
+          description: c.description,
+          category: ((c.category as CriterionCategory) || 'generic') as CriterionCategory,
+          required: Boolean(c.required),
+          expectedEvidenceType: c.expectedEvidenceType,
+        }))
+      : undefined;
+    const criteria: AcceptanceCriterion[] =
+      checkpointCriteria ?? synthesizeGenericCriteria(prompt, explicitCriteria);
+
+    if (startStep <= 1) {
+      currentCheckpointVersion++;
+      const cp1 = createVersionedCheckpoint({
+        version: currentCheckpointVersion,
+        stepIndex: 1,
+        totalSteps: maxSteps,
+        lastExecutedAction: 'generic_plan_and_criteria',
+        actionType: 'internal',
+        acceptanceCriteria: criteria,
+        verified: true,
+      });
+      await this.taskRepo.updateTaskProgress(task.userId, task.id, 10, cp1);
+
+      const progEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+        progress: 10,
+        step: 1,
+        action: 'generic_plan_and_criteria',
+        acceptanceCriteria: criteria,
+      });
+      this.broadcaster.publish(progEvent);
+    }
+
+    if (!this.modelGateway) {
+      throw new Error(
+        'Generic task requires a ModelGateway (set NINEROUTER_API_KEY or DEFAULT_CHAT_MODEL); refusing to fabricate evidence.',
+      );
+    }
+
+    const model = (task.payload?.model as string) ?? this.defaultModel;
+    if (!model) {
+      throw new Error('Generic task requires payload.model or DEFAULT_CHAT_MODEL to select a verified model.');
+    }
+
+    // Check if model supports verified tool_calling
+    const hasToolCalling = await this.genericAgent.verifyToolCallingCapability(model);
+    const availableTools = hasToolCalling ? this.genericAgent.getAvailableTools(this.registry) : [];
+
+    // Telemetry tracking
+    const stepDurationsMs: number[] = [];
+    let accumulatedTokens = 0;
+    const toolsUsed: string[] = [];
+
+    // Message history for the loop
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content:
+          'Anda adalah AI Agent otonom Personal AI OS yang mengeksekusi tugas pengguna dalam Bahasa Indonesia. ' +
+          'Kumpulkan data faktual dan gunakan tool yang tersedia bila diperlukan. ' +
+          'Jika tugas selesai atau data yang dibutuhkan sudah cukup, sampaikan luaran lengkap, konkret, dan dapat diverifikasi langsung tanpa memanggil tool lagi. ' +
+          'Jangan mengarang hasil yang tidak Anda kerjakan.',
+      },
+      { role: 'user', content: prompt },
+    ];
+
+    // Replay previous observations if resuming
+    if (task.checkpoint?.actionState?.messages && Array.isArray(task.checkpoint.actionState.messages)) {
+      messages.push(...(task.checkpoint.actionState.messages as ChatMessage[]));
+    }
+
+    let finalAnswer = '';
+    let stopReason: GenericStopReason = 'goal_achieved';
+    let fallbackUsed = false;
+    let fallbackNote: string | undefined;
+
+    // IF MODEL HAS NO VERIFIED TOOL_CALLING -> HONEST FALLBACK
+    if (!hasToolCalling || availableTools.length === 0) {
+      fallbackUsed = true;
+      fallbackNote =
+        'Model tidak memiliki kapabilitas tool_calling terverifikasi; eksekusi dilakukan secara single-pass tanpa tool.';
+
+      const stepStart = Date.now();
+      const response = await this.modelGateway.chat({
+        model,
+        messages,
+        temperature: 0,
+      });
+      const stepDuration = Date.now() - stepStart;
+      stepDurationsMs.push(stepDuration);
+      if (response.usage?.totalTokens) {
+        accumulatedTokens += response.usage.totalTokens;
+      }
+      finalAnswer = response.content;
+
+      // Emit tool_call event for single-pass consistency
+      const toolEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', {
+        tool: 'model:chat',
+        input: { prompt },
+        output: { content: finalAnswer, fallbackUsed: true, note: fallbackNote },
+      });
+      this.broadcaster.publish(toolEvent);
+    } else {
+      // AUTONOMOUS BOUNDED TOOL-CALLING LOOP
+      let currentStep = Math.max(2, startStep > 1 ? (task.checkpoint?.stepIndex ?? 2) : 2);
+      let isLoopCompleted = false;
+
+      // Handle resume after approved step
+      const approvedApprovalId =
+        (task.checkpoint?.actionState?.approvalId as string) ??
+        (task.payload?.approvalId as string) ??
+        undefined;
+      let isApprovedResume =
+        task.checkpoint?.actionState?.approved === true && approvedApprovalId !== undefined;
+
+      while (currentStep <= maxSteps && !isLoopCompleted) {
+        if (await this.isHalted(task.userId, task.id)) return;
+
+        // Hard bound: Timeout check
+        if (Date.now() - startTime >= timeoutMs) {
+          stopReason = 'timeout';
+          break;
+        }
+
+        // Hard bound: Token cap check
+        if (accumulatedTokens >= maxTokens) {
+          stopReason = 'max_steps_exceeded';
+          break;
+        }
+
+        const stepStart = Date.now();
+
+        // If resuming approved tool call
+        if (isApprovedResume && task.checkpoint?.actionState?.pendingToolCall) {
+          isApprovedResume = false;
+          const pending = task.checkpoint.actionState.pendingToolCall as {
+            name: string;
+            args: unknown;
+          };
+          const toolExecution = await this.executeGuardedTool(
+            task,
+            pending.name,
+            pending.args,
+            approvedApprovalId,
+            currentStep,
+            currentCheckpointVersion,
+            criteria,
+            messages,
+          );
+
+          if (toolExecution.approvalRequired) {
+            return; // halted
+          }
+
+          toolsUsed.push(pending.name);
+          const sanitized = sanitizeUntrustedToolOutput(toolExecution.output, pending.name);
+          messages.push({
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: `call_${currentStep}`,
+                type: 'function',
+                function: { name: pending.name, arguments: JSON.stringify(pending.args) },
+              },
+            ],
+          });
+          messages.push({
+            role: 'tool',
+            name: pending.name,
+            tool_call_id: `call_${currentStep}`,
+            content: sanitized.wrappedContent,
+          });
+
+          stepDurationsMs.push(Date.now() - stepStart);
+          currentStep++;
+          continue;
+        }
+
+        // Call model with tools
+        const response = await this.modelGateway.chat({
+          model,
+          messages,
+          tools: availableTools,
+          toolChoice: 'auto',
+          temperature: 0,
+        });
+
+        const stepDuration = Date.now() - stepStart;
+        stepDurationsMs.push(stepDuration);
+        if (response.usage?.totalTokens) {
+          accumulatedTokens += response.usage.totalTokens;
+        }
+
+        // Check if model returned tool calls or final answer
+        if (!response.toolCalls || response.toolCalls.length === 0) {
+          finalAnswer = response.content;
+          isLoopCompleted = true;
+          stopReason = 'goal_achieved';
+          break;
+        }
+
+        // Model chose to call tool(s)
+        const assistantMsg: ChatMessage = {
+          role: 'assistant',
+          content: response.content ?? '',
+          tool_calls: response.toolCalls,
+        };
+        messages.push(assistantMsg);
+
+        for (const toolCall of response.toolCalls) {
+          const toolName = toolCall.function.name;
+          let parsedArgs: unknown = {};
+          try {
+            parsedArgs = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
+          } catch {
+            parsedArgs = { raw: toolCall.function.arguments };
+          }
+
+          toolsUsed.push(toolName);
+
+          const toolExecution = await this.executeGuardedTool(
+            task,
+            toolName,
+            parsedArgs,
+            undefined,
+            currentStep,
+            currentCheckpointVersion,
+            criteria,
+            messages,
+          );
+
+          if (toolExecution.approvalRequired) {
+            return; // Task halted in waiting_approval
+          }
+
+          if (toolExecution.permissionDenied) {
+            stopReason = 'approval_denied';
+            await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+              error: toolExecution.error ?? 'Akses tool ditolak oleh Permission Engine.',
+            });
+            const failEvent = await this.taskRepo.createTaskEvent(
+              task.userId,
+              task.id,
+              'task.failed',
+              {
+                error: toolExecution.error,
+                retryable: false,
+                telemetry: {
+                  stepCount: currentStep,
+                  durationMs: Date.now() - startTime,
+                  toolsUsed,
+                  stopReason,
+                },
+              },
+            );
+            this.broadcaster.publish(failEvent);
+            return;
+          }
+
+          // Output sanitized as untrusted content
+          const sanitized = sanitizeUntrustedToolOutput(toolExecution.output, toolName);
+          messages.push({
+            role: 'tool',
+            name: toolName,
+            tool_call_id: toolCall.id,
+            content: sanitized.wrappedContent,
+          });
+
+          // Publish task.tool_call
+          const toolEvent = await this.taskRepo.createTaskEvent(
+            task.userId,
+            task.id,
+            'task.tool_call',
+            {
+              tool: toolName,
+              input: parsedArgs,
+              output: sanitized.wrappedContent,
+              untrusted: true,
+              durationMs: toolExecution.durationMs,
+            },
+          );
+          this.broadcaster.publish(toolEvent);
+
+          // Checkpoint this completed tool step
+          currentCheckpointVersion++;
+          const progressPct = Math.min(85, 20 + currentStep * 15);
+          const cpStep = createVersionedCheckpoint({
+            version: currentCheckpointVersion,
+            stepIndex: currentStep,
+            totalSteps: maxSteps,
+            lastExecutedAction: `tool_call:${toolName}`,
+            actionType: 'external_tool',
+            actionState: {
+              toolName,
+              output: sanitized.wrappedContent,
+              messages: messages.slice(2), // preserve conversation steps
+            },
+            acceptanceCriteria: criteria,
+            verified: true,
+          });
+          await this.taskRepo.updateTaskProgress(task.userId, task.id, progressPct, cpStep);
+
+          const progEvent = await this.taskRepo.createTaskEvent(
+            task.userId,
+            task.id,
+            'task.progress',
+            {
+              progress: progressPct,
+              step: currentStep,
+              action: `tool_call:${toolName}`,
+              tool: toolName,
+            },
+          );
+          this.broadcaster.publish(progEvent);
+        }
+
+        currentStep++;
+      }
+
+      // If loop finished because maxSteps was exceeded without final answer, request model synthesis
+      if (!isLoopCompleted && !finalAnswer) {
+        if (stopReason === 'goal_achieved') {
+          stopReason = 'max_steps_exceeded';
+        }
+        messages.push({
+          role: 'user',
+          content:
+            'Batas langkah tercapai. Tolong berikan ringkasan dan jawaban akhir berdasarkan semua hasil observasi yang telah dikumpulkan di atas.',
+        });
+        const summaryRes = await this.modelGateway.chat({
+          model,
+          messages,
+          temperature: 0,
+        });
+        finalAnswer = summaryRes.content;
+      }
+    }
+
+    const totalDurationMs = Date.now() - startTime;
+    const telemetry: GenericExecutionTelemetry = {
+      stepCount: stepDurationsMs.length,
+      totalTokens: accumulatedTokens,
+      durationMs: totalDurationMs,
+      stepDurationsMs,
+      toolsUsed,
+      stopReason,
+      fallbackUsed,
+    };
+
+    const artifacts = [
+      {
+        id: `artifact-summary-${task.id}`,
+        type: 'summary',
+        title: `Task Output (${prompt.slice(0, 30)})`,
+        content: finalAnswer,
+        ...(fallbackUsed ? { fallbackUsed: true, note: fallbackNote } : {}),
+      },
+    ];
+
+    // 4. Run Evaluation (on-topic-guard + GenericEvaluator)
+    const evalRes = await this.genericAgent.evaluateCompletion({
+      goal: prompt,
+      acceptanceCriteria: criteria,
+      finalContent: finalAnswer,
+      artifacts,
+      toolOutputs: { toolsUsed, stepCount: stepDurationsMs.length, finalAnswer },
+      executionLogs: [
+        `Executed generic task with model: ${model}`,
+        `Tools invoked: ${toolsUsed.join(', ') || 'none'}`,
+        `Stop reason: ${stopReason}`,
+      ],
+    });
+
+    if (!evalRes.passed) {
+      const reason =
+        evalRes.evaluationResult.completionBlockedReason ??
+        evalRes.deviationReason ??
+        evalRes.evaluationResult.remainingIssues[0] ??
+        'Evaluasi tugas generik ditolak oleh Evaluator.';
+
+      await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+        error: reason,
+        artifacts,
+      });
+
+      const failEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.failed', {
+        error: reason,
+        evaluationResult: evalRes.evaluationResult,
+        telemetry,
+        retryable: false,
+      });
+      this.broadcaster.publish(failEvent);
+      defaultTracer.endSpan(span, { status: 'error', errorMessage: reason });
+      return;
+    }
+
+    // 5. Complete task
+    currentCheckpointVersion++;
+    const cpComplete = createVersionedCheckpoint({
+      version: currentCheckpointVersion,
+      stepIndex: maxSteps,
+      totalSteps: maxSteps,
+      lastExecutedAction: 'complete_task',
+      actionType: 'internal',
+      acceptanceCriteria: criteria,
+      actionState: { finalAnswer, telemetry },
+      verified: true,
+    });
+
+    await this.taskRepo.updateTaskProgress(task.userId, task.id, 100, cpComplete);
+    await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed', {
+      artifacts,
+    });
+
+    const completeEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', {
+      result: finalAnswer,
+      artifacts,
+      evaluationResult: evalRes.evaluationResult,
+      telemetry,
+      ...(fallbackUsed ? { fallbackUsed: true, note: fallbackNote } : {}),
+    });
+    this.broadcaster.publish(completeEvent);
+    await this.onTaskCompleted(task, { result: finalAnswer });
+    defaultTracer.endSpan(span, { status: 'ok', attributes: { 'task.telemetry': JSON.stringify(telemetry) } });
+  }
+
+  private async executeGuardedTool(
+    task: TaskRecord,
+    toolName: string,
+    toolInput: unknown,
+    approvalId: string | undefined,
+    currentStep: number,
+    currentCheckpointVersion: number,
+    criteria: AcceptanceCriterion[],
+    messages: ChatMessage[],
+  ): Promise<{
+    output?: unknown;
+    durationMs: number;
+    approvalRequired?: boolean;
+    permissionDenied?: boolean;
+    error?: string;
+  }> {
+    const t0 = Date.now();
+    if (!this.registry) {
+      throw new Error(`Tool '${toolName}' dipanggil tetapi ToolRegistry tidak dikonfigurasi.`);
+    }
+
+    try {
+      const res = await this.registry.executeTool({
+        toolName,
+        input: toolInput,
+        context: {
+          actor: { id: task.userId, role: 'user' },
+          taskId: task.id,
+          projectId: task.projectId,
+          traceId: task.id,
+        },
+        approvalId,
+      });
+
+      return {
+        output: res.data,
+        durationMs: Date.now() - t0,
+      };
+    } catch (err) {
+      if (err instanceof ApprovalRequiredError) {
+        let createdApprovalId = 'appr-pending';
+        if (this.approvalCreator) {
+          const created = await this.approvalCreator({
+            userId: task.userId,
+            taskId: task.id,
+            projectId: task.projectId,
+            action: err.requiredApproval.action,
+            resource: err.requiredApproval.resource,
+            scope: err.requiredApproval.scope,
+            riskLevel: err.requiredApproval.riskLevel,
+            consequence: err.requiredApproval.consequence,
+            fingerprint: err.requiredApproval.fingerprint,
+            expiresInSeconds: 3600,
+          });
+          createdApprovalId = created.id;
+        }
+
+        const cpWait = createVersionedCheckpoint({
+          version: currentCheckpointVersion + 1,
+          stepIndex: currentStep,
+          totalSteps: HARD_MAX_STEPS,
+          lastExecutedAction: 'waiting_approval',
+          actionType: 'approval',
+          actionState: {
+            approvalId: createdApprovalId,
+            action: err.requiredApproval.action,
+            pendingToolCall: { name: toolName, args: toolInput },
+            messages: messages.slice(2),
+          },
+          acceptanceCriteria: criteria,
+          verified: true,
+        });
+
+        await this.taskRepo.updateTaskProgress(task.userId, task.id, 50, cpWait);
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'waiting_approval');
+
+        const approvalEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.waiting_approval',
+          {
+            approvalId: createdApprovalId,
+            action: err.requiredApproval.action,
+            resource: err.requiredApproval.resource,
+            scope: err.requiredApproval.scope,
+            riskLevel: err.requiredApproval.riskLevel,
+            consequence: err.requiredApproval.consequence,
+            fingerprint: err.requiredApproval.fingerprint,
+          },
+        );
+        this.broadcaster.publish(approvalEvent);
+
+        return {
+          durationMs: Date.now() - t0,
+          approvalRequired: true,
+        };
+      }
+
+      if (err instanceof PermissionDeniedError) {
+        return {
+          durationMs: Date.now() - t0,
+          permissionDenied: true,
+          error: err.message,
+        };
+      }
+
+      throw err;
+    }
   }
 
   // =========================================================================
@@ -1497,14 +2172,15 @@ export class TaskExecutor {
         },
       );
       this.broadcaster.publish(completeEvent);
+      await this.onTaskCompleted(task, { result: completionContent });
       defaultTracer.endSpan(span, { status: 'ok' });
     }
   }
 
   /**
-   * Re-enqueue tasks left `running` by a previous process. The queue is required: without it
-   * this method only wrote a `task.resumed` event and left the task dangling forever, which
-   * looked like a successful recovery in the logs.
+   * Re-enqueue tasks left `running`, `planning`, or orphaned `queued` by a previous process.
+   * Enforces retry bounds, checkpoint integrity validation, and recovery locks to prevent
+   * race conditions across worker restarts.
    */
   async recoverInterruptedTasks(
     queue: TaskQueueEnqueuer,
@@ -1513,25 +2189,95 @@ export class TaskExecutor {
     const recoveredTasks: TaskRecord[] = [];
 
     for (const task of dangling) {
-      const isIntegrityValid = task.checkpoint ? verifyCheckpointIntegrity(task.checkpoint) : true;
-      const lastStep = task.checkpoint?.stepIndex ?? 0;
-      const resumeEvent = await this.taskRepo.createTaskEvent(
-        task.userId,
-        task.id,
-        'task.resumed',
-        {
-          recoveredAfterRestart: true,
-          checkpointVersion: task.checkpoint?.version ?? 1,
-          checkpointIntegrityValid: isIntegrityValid,
-          lastVerifiedStep: lastStep,
-          resumingFromStep: lastStep + 1,
-          note: 'Task dipulihkan setelah worker restart; melanjutkan dari checkpoint terakhir.',
-        },
-      );
-      this.broadcaster.publish(resumeEvent);
+      // 1. Multi-worker recovery lock check: prevent duplicate recovery across concurrent workers
+      if (this.taskRepo.claimTaskForRecovery) {
+        const acquired = await this.taskRepo.claimTaskForRecovery(task.id);
+        if (!acquired) {
+          continue;
+        }
+      }
+
+      // 2. Retry bounding check: prevent infinite re-enqueue loops if maxAttempts exhausted
+      if (task.attempt >= task.maxAttempts) {
+        const reason = `Batas percobaan ulang maksimal tercapai saat pemulihan tugas (${task.attempt}/${task.maxAttempts}).`;
+        if (task.status === 'queued') {
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'planning', {
+            attempt: task.attempt + 1,
+          });
+        }
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+          error: reason,
+        });
+        const failEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.failed',
+          {
+            error: reason,
+            recoveryExhausted: true,
+            retryable: false,
+          },
+        );
+        this.broadcaster.publish(failEvent);
+        if (this.taskRepo.releaseTaskRecovery) {
+          await this.taskRepo.releaseTaskRecovery(task.id);
+        }
+        continue;
+      }
+
+      // 3. Checkpoint integrity check: abort corrupted checkpoints
+      const isIntegrityValid = task.checkpoint?.checksum ? verifyCheckpointIntegrity(task.checkpoint) : true;
+      if (!isIntegrityValid) {
+        const reason = 'Integritas checkpoint tidak valid saat pemulihan tugas. Task dihentikan demi keamanan.';
+        if (task.status === 'queued') {
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'planning');
+        }
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+          error: reason,
+        });
+        const failEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.failed',
+          {
+            error: reason,
+            checkpointIntegrityValid: false,
+            retryable: false,
+          },
+        );
+        this.broadcaster.publish(failEvent);
+        if (this.taskRepo.releaseTaskRecovery) {
+          await this.taskRepo.releaseTaskRecovery(task.id);
+        }
+        continue;
+      }
+
+      // 4. Emit task.resumed ONLY for tasks that had already started (running, planning, or checkpoint exists)
+      const hadStarted = task.status === 'running' || task.status === 'planning' || Boolean(task.checkpoint);
+      if (hadStarted) {
+        const lastStep = task.checkpoint?.stepIndex ?? 0;
+        const resumeEvent = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.resumed',
+          {
+            recoveredAfterRestart: true,
+            checkpointVersion: task.checkpoint?.version ?? 1,
+            checkpointIntegrityValid: true,
+            lastVerifiedStep: lastStep,
+            resumingFromStep: lastStep + 1,
+            note: 'Task dipulihkan setelah worker restart; melanjutkan dari checkpoint terakhir.',
+          },
+        );
+        this.broadcaster.publish(resumeEvent);
+      }
 
       await queue.enqueue(task);
       recoveredTasks.push(task);
+
+      if (this.taskRepo.releaseTaskRecovery) {
+        await this.taskRepo.releaseTaskRecovery(task.id);
+      }
     }
 
     return { recoveredCount: recoveredTasks.length, recoveredTasks };

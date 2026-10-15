@@ -1,4 +1,6 @@
 export type { TaskRecord, TaskEventEnvelope, TaskStatus } from '@personal-ai-os/shared';
+import type { TaskRecord } from '@personal-ai-os/shared';
+export type TaskItem = TaskRecord;
 
 export interface User {
   id: string;
@@ -85,6 +87,8 @@ export interface ApprovalRecord {
   createdAt: string;
 }
 
+export type ApprovalRequest = ApprovalRecord;
+
 export interface ArtifactItem {
   id: string;
   filename: string;
@@ -121,15 +125,61 @@ export interface HealthResponse {
 
 export type ChatMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
 
+export interface CapabilityDetail {
+  status: 'probed' | 'declared' | 'unknown';
+  latencyMs?: number | undefined;
+  verifiedAt?: string | undefined;
+}
+
 export interface ModelDescriptor {
   id: string;
+  name?: string | undefined;
   provider: string;
   capabilities: string[];
-  contextWindow?: number;
-  costMetadata?: Record<string, unknown>;
+  capabilityDetails?: Record<string, CapabilityDetail> | undefined;
+  contextWindow?: number | undefined;
+  costMetadata?: Record<string, unknown> | undefined;
+  isRecommended?: boolean | undefined;
+  isDefault?: boolean | undefined;
+  availabilityStatus?: 'available' | 'degraded' | 'unavailable' | undefined;
+  lastLatencyMs?: number | null | undefined;
+}
+
+export interface UserPreferences {
+  defaultModel: string | null;
+  defaultMode: 'fast' | 'coding' | 'complex' | 'research';
 }
 
 export interface ModelCatalogResponse {
   source: 'live' | 'persisted';
   models: ModelDescriptor[];
 }
+
+export interface MemoryItem {
+  id: string;
+  userId: string;
+  projectId?: string | null | undefined;
+  type: 'preference' | 'decision' | 'knowledge' | 'session' | 'project' | 'task';
+  content: string;
+  scope: string;
+  provenance: string;
+  retention: string;
+  metadata?: Record<string, unknown> | undefined;
+  isProposal?: boolean | undefined;
+  status?: string | undefined;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemorySearchResult {
+  data: Array<{
+    memory: MemoryItem;
+    score: number;
+    searchMode?: 'semantic' | 'text_fallback' | undefined;
+  }>;
+  semanticSearchActive: boolean;
+  searchMode: 'semantic' | 'text_fallback';
+  status: 'active' | 'inactive';
+  notice?: string | undefined;
+}
+

@@ -1,8 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Clipboard,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   StyleSheet,
   Text,
@@ -10,15 +12,26 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import type { MessageAttachment } from '../api/types.ts';
-import { defaultApiClient } from '../api/client.ts';
+import {
+  ArrowLeft,
+  Copy,
+  RotateCcw,
+  Send,
+  Sparkles,
+  Square,
+  X,
+} from 'lucide-react-native';
+import type { ChatMessage, ChatMode, MessageAttachment } from '../api/types.ts';
+import { MarkdownView } from '../components/MarkdownView.tsx';
+import { ModelSelectorModal } from '../components/ModelSelectorModal.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
-import { theme } from '../components/Theme.ts';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useCreateTask, useMessages, useTasks } from '../hooks/use-queries.ts';
-import { useUiStore } from '../state/ui-store.ts';
+import { idID } from '../locales/id-ID.ts';
 import { ChatWebSocketClient } from '../services/chat-websocket.ts';
 import { TaskEventsWebSocketClient } from '../services/task-events-websocket.ts';
 import { useChatStore } from '../state/chat-store.ts';
+import { useUiStore } from '../state/ui-store.ts';
 
 export interface ChatScreenProps {
   conversationId: string;
@@ -26,11 +39,25 @@ export interface ChatScreenProps {
   onBack: () => void;
 }
 
+const MODE_LABELS: Record<ChatMode, string> = {
+  auto: 'Mode: Auto',
+  fast: 'Mode: Cepat',
+  coding: 'Mode: Coding',
+  complex: 'Mode: Kompleks',
+  research: 'Mode: Riset',
+};
+
+const MODES: ChatMode[] = ['auto', 'fast', 'coding', 'complex', 'research'];
+
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   conversationId,
   conversationTitle,
   onBack,
 }) => {
+  const theme = useAppTheme();
+  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
+  const [selectedMessageForAction, setSelectedMessageForAction] = useState<ChatMessage | null>(null);
+
   const {
     messages,
     hydrateMessages,
@@ -43,18 +70,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     beginSend,
     failSend,
     error,
-    models,
     selectedModel,
     selectedMode,
-    setModels,
-    setSelectedModel,
-    setSelectedMode,
+    setConversationMode,
     connectionStatus,
+    loadCatalog,
+    modelCatalogUnavailable,
+    modelNotice,
+    clearModelNotice,
   } = useChatStore();
-  const { data: initialMessages, isLoading: isLoadingInitial, error: historyError, refetch: refetchHistory } = useMessages(conversationId);
+
+  const { showToast } = useUiStore();
+  const { data: initialMessages, isLoading: isLoadingInitial, error: historyError, refetch: refetchHistory } =
+    useMessages(conversationId);
+
   useEffect(() => {
-    void defaultApiClient.listModels().then((catalog) => setModels(catalog.models)).catch(() => setModels([]));
-  }, [setModels]);
+    void loadCatalog();
+  }, [loadCatalog]);
+
   const wsClientRef = useRef<ChatWebSocketClient | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const activeProjectId = useUiStore((state) => state.activeProjectId);
@@ -78,9 +111,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (initialMessages) hydrateMessages(conversationId, initialMessages);
   }, [conversationId, initialMessages, hydrateMessages]);
 
-  // Live task progress: the events socket is user-scoped (no taskId), so any event belonging to a
-  // task in this conversation refetches the list. The id set lives in a ref so the socket is not
-  // torn down and rebuilt on every progress update.
   useEffect(() => {
     const ws = new TaskEventsWebSocketClient({
       onEvent: (event) => {
@@ -91,95 +121,153 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     void ws.connect();
     return () => ws.disconnect();
   }, [refetchConversationTasks]);
-  const handleSend = () => {
-    const trimmed = draftText.trim();
-    if (!trimmed || !wsClientRef.current) return;
+
+  const handleSend = (textToSend?: string) => {
+    const content = (textToSend ?? draftText).trim();
+    if (!content || !wsClientRef.current) return;
     beginSend();
     try {
       wsClientRef.current.sendMessage({
-        content: trimmed,
+        content,
         model: selectedModel === 'auto' ? undefined : selectedModel,
         mode: selectedMode,
       });
+      if (!textToSend) {
+        setDraftText('');
+      }
     } catch (err) {
       failSend(err instanceof Error ? err.message : 'Unable to send message');
     }
   };
+
   const handleCancel = () => {
     if (wsClientRef.current) wsClientRef.current.cancelActiveStream();
   };
+
   const handleRunAsTask = async () => {
     const instruction = draftText.trim();
     if (!instruction || !activeProjectId) return;
     try {
-      await createTask.mutateAsync({ projectId: activeProjectId, kind: 'generic_task', payload: { prompt: instruction }, conversationId });
+      await createTask.mutateAsync({
+        projectId: activeProjectId,
+        kind: 'generic_task',
+        payload: { prompt: instruction },
+        conversationId,
+      });
       await refetchConversationTasks();
+      showToast('Tugas baru berhasil dibuat dari obrolan.');
     } catch {
-      // useCreateTask surfaces the failure through its own error state.
+      // Handled by query
     }
   };
+
+  const handleCopyMessage = (msg: ChatMessage) => {
+    try {
+      Clipboard.setString(msg.content);
+      showToast(idID.common.copied);
+    } catch {
+      showToast(idID.common.copied);
+    }
+    setSelectedMessageForAction(null);
+  };
+
+  const handleRetryMessage = (msg: ChatMessage) => {
+    setSelectedMessageForAction(null);
+    setDraftText(msg.content);
+  };
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
     >
-      <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Go back">
-          <Text style={styles.backButtonText}>‹</Text>
+      {/* Header */}
+      <View
+        style={[
+          styles.header,
+          {
+            backgroundColor: theme.colors.surface,
+            borderBottomColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        <TouchableOpacity
+          onPress={onBack}
+          style={styles.backButton}
+          accessibilityRole="button"
+          accessibilityLabel={idID.common.back}
+        >
+          <ArrowLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>{conversationTitle ?? 'Chat'}</Text>
+          <Text
+            style={[styles.headerTitle, { color: theme.colors.textPrimary }]}
+            numberOfLines={1}
+          >
+            {conversationTitle ?? idID.chat.headerTitle}
+          </Text>
           <StatusPill status={connectionStatus} />
         </View>
       </View>
+
+      {/* Connection State Warning */}
       {connectionStatus !== 'connected' ? (
-        <View style={styles.connBanner}>
-          <Text style={styles.connBannerText}>
-            {connectionStatus === 'reconnecting' ? 'Koneksi terputus. Menyambung ulang…' : connectionStatus === 'connecting' ? 'Menyambungkan…' : 'Tidak terhubung. Pesan tidak dapat dikirim.'}
+        <View
+          style={[
+            styles.connBanner,
+            {
+              backgroundColor: theme.colors.surfaceElevated,
+              borderBottomColor: theme.colors.warning,
+            },
+          ]}
+        >
+          <Text style={[styles.connBannerText, { color: theme.colors.warning }]}>
+            {connectionStatus === 'reconnecting'
+              ? idID.chat.connReconnecting
+              : connectionStatus === 'connecting'
+                ? idID.chat.connConnecting
+                : idID.chat.connDisconnected}
           </Text>
         </View>
       ) : null}
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+      {error ? (
+        <Text style={[styles.errorText, { color: theme.colors.danger }]}>{error}</Text>
+      ) : null}
+
       {historyError ? (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{historyError instanceof Error ? historyError.message : 'Riwayat gagal dimuat'}</Text>
-          <TouchableOpacity accessibilityRole="button" style={styles.retryButton} onPress={() => void refetchHistory()}><Text style={styles.retryButtonText}>Coba lagi</Text></TouchableOpacity>
+        <View
+          style={[
+            styles.errorBanner,
+            {
+              backgroundColor: theme.colors.dangerBg,
+              borderColor: theme.colors.danger,
+            },
+          ]}
+        >
+          <Text style={[styles.errorText, { color: theme.colors.danger }]}>
+            {historyError instanceof Error ? historyError.message : 'Riwayat gagal dimuat'}
+          </Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={idID.common.retry}
+            style={styles.retryButton}
+            onPress={() => void refetchHistory()}
+          >
+            <Text style={[styles.retryButtonText, { color: theme.colors.danger }]}>
+              {idID.common.retry}
+            </Text>
+          </TouchableOpacity>
         </View>
       ) : null}
 
-      <View style={styles.chatTasks} accessibilityLabel="Tasks from this conversation">
-        <View style={styles.chatTasksHead}>
-          <Text style={styles.chatTasksTitle}>Tasks from this conversation</Text>
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Run draft as task"
-            accessibilityState={{ disabled: createTask.isPending || !draftText.trim() || !activeProjectId }}
-            disabled={createTask.isPending || !draftText.trim() || !activeProjectId}
-            onPress={() => void handleRunAsTask()}
-          >
-            <Text style={[styles.chatTasksAction, (createTask.isPending || !draftText.trim() || !activeProjectId) && styles.chatTasksActionDisabled]}>{createTask.isPending ? 'Mengirim…' : 'Jalankan sebagai tugas'}</Text>
-          </TouchableOpacity>
-        </View>
-        {!activeProjectId ? <Text style={styles.chatTasksEmpty}>Pilih project untuk menjalankan tugas dari chat.</Text> : null}
-        {conversationTasks && conversationTasks.length > 0 ? (
-          <View style={styles.chatTaskList}>
-            {conversationTasks.map((task) => (
-              <View key={task.id} style={styles.chatTaskRow}>
-                <Text style={styles.chatTaskKind}>{task.kind}</Text>
-                <Text style={styles.chatTaskProgress}>{task.progress}%</Text>
-                <Text style={styles.chatTaskStatus}>{task.status}</Text>
-              </View>
-            ))}
-          </View>
-        ) : (
-          <Text style={styles.chatTasksEmpty}>Belum ada tugas dari percakapan ini.</Text>
-        )}
-      </View>
-
+      {/* Messages List */}
       {isLoadingInitial && messages.length === 0 ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color={theme.colors.primary} />
-          <Text style={styles.loadingText}>Memuat riwayat…</Text>
+          <ActivityIndicator color={theme.colors.primary} size="large" />
+          <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+            {idID.common.loading}
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -191,119 +279,849 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           renderItem={({ item }) => {
             const isUser = item.role === 'user';
             return (
-              <View
-                style={[styles.bubbleContainer, isUser ? styles.userAlign : styles.assistantAlign]}
-                accessibilityLabel={`${isUser ? 'You' : 'Assistant'}: ${item.content}`}
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onLongPress={() => setSelectedMessageForAction(item)}
+                accessibilityRole="button"
+                accessibilityLabel={`${isUser ? 'Pesan Anda' : 'Pesan Asisten'}: ${item.content}. Tekan lama untuk opsi salin atau ulangi.`}
+                style={[
+                  styles.messageContainer,
+                  isUser ? styles.userContainer : styles.assistantContainer,
+                ]}
               >
-                <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-                  <Text style={styles.bubbleRole}>{isUser ? 'You' : 'Assistant'}</Text>
-                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}>{item.content || 'Thinking…'}</Text>
-                  {typeof item.metadata?.['resolvedModel'] === 'string' ? <Text style={styles.bubbleModel}>{item.metadata['resolvedModel']}</Text> : null}
-                  {item.attachments && item.attachments.length > 0 ? (
-                    <View style={styles.attachmentList}>
-                      {item.attachments.map((att: MessageAttachment, idx: number) => (
-                        <Text key={idx} style={styles.attachmentPill}>📎 {att.name || att.type}</Text>
-                      ))}
+                {isUser ? (
+                  // User Message: Smooth Bubble on Right
+                  <View
+                    style={[
+                      styles.userBubble,
+                      {
+                        backgroundColor: theme.colors.primary,
+                        borderColor: theme.colors.primary,
+                      },
+                    ]}
+                  >
+                    <Text style={styles.userMessageText}>{item.content}</Text>
+                    <Text style={styles.userTimestamp}>
+                      {new Date(item.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
+                ) : (
+                  // Assistant Message: Full width without heavy bubble
+                  <View style={styles.assistantMessageWrapper}>
+                    <View style={styles.assistantHeaderRow}>
+                      <View style={styles.assistantSparkleBadge}>
+                        <Sparkles size={14} color={theme.colors.primary} />
+                      </View>
+                      <Text
+                        style={[
+                          styles.assistantNameText,
+                          { color: theme.colors.textSecondary },
+                        ]}
+                      >
+                        Asisten
+                      </Text>
+                      {typeof item.metadata?.['resolvedModel'] === 'string' ? (
+                        <Text
+                          style={[
+                            styles.modelAttributionText,
+                            {
+                              color:
+                                item.metadata['fallbackUsed'] === true
+                                  ? theme.colors.warning
+                                  : theme.colors.textMuted,
+                            },
+                          ]}
+                        >
+                          {idID.chat.answeredBy} {String(item.metadata['resolvedModel'])}
+                          {item.metadata['fallbackUsed'] === true
+                            ? ` ${idID.chat.fallbackUsed}`
+                            : ''}
+                        </Text>
+                      ) : null}
                     </View>
-                  ) : null}
-                  <Text style={styles.timestamp}>{new Date(item.createdAt).toLocaleTimeString()}</Text>
-                </View>
-              </View>
+
+                    <View style={styles.assistantMarkdownBox}>
+                      <MarkdownView
+                        content={item.content || idID.chat.streamingThinking}
+                        textColor={theme.colors.textPrimary}
+                        onCopyNotice={(notice) => showToast(notice)}
+                      />
+                    </View>
+
+                    {item.attachments && item.attachments.length > 0 ? (
+                      <View style={styles.attachmentList}>
+                        {item.attachments.map((att: MessageAttachment, idx: number) => (
+                          <Text
+                            key={idx}
+                            style={[
+                              styles.attachmentPill,
+                              {
+                                backgroundColor: theme.colors.surfaceElevated,
+                                color: theme.colors.primary,
+                              },
+                            ]}
+                          >
+                            📎 {att.name || att.type}
+                          </Text>
+                        ))}
+                      </View>
+                    ) : null}
+
+                    <Text style={[styles.assistantTimestamp, { color: theme.colors.textMuted }]}>
+                      {new Date(item.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
             );
           }}
-          ListEmptyComponent={!isStreaming ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyMark}>✦</Text>
-              <Text style={styles.emptyTitle}>Mulai percakapan</Text>
-              <Text style={styles.emptySubtitle}>Tanyakan apa saja. Pesan Anda tersimpan lintas perangkat.</Text>
-            </View>
-          ) : null}
-          ListFooterComponent={isStreaming && !messages.some((message) => message.id === useChatStore.getState().streamingMessageId) ? (
-            <View style={[styles.bubbleContainer, styles.assistantAlign]}>
-              <View style={[styles.bubble, styles.assistantBubble]}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-                <View style={styles.streamingIndicatorRow}>
-                  <Text style={styles.streamingLabel}>Thinking…</Text>
+          ListEmptyComponent={
+            !isStreaming ? (
+              <View style={styles.emptyState}>
+                <View
+                  style={[
+                    styles.emptySparkleCircle,
+                    { backgroundColor: theme.colors.surfaceElevated },
+                  ]}
+                >
+                  <Sparkles size={36} color={theme.colors.primary} />
+                </View>
+                <Text
+                  style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}
+                  accessibilityRole="header"
+                >
+                  {idID.chat.emptyTitle}
+                </Text>
+                <Text
+                  style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+                >
+                  {idID.chat.emptySubtitle}
+                </Text>
+
+                {/* Sample Prompt Cards */}
+                <View style={styles.samplePromptsContainer}>
+                  {idID.chat.samplePrompts.map((item, idx) => (
+                    <TouchableOpacity
+                      key={idx}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Contoh prompt: ${item.title}`}
+                      style={[
+                        styles.samplePromptCard,
+                        {
+                          backgroundColor: theme.colors.surface,
+                          borderColor: theme.colors.surfaceBorder,
+                        },
+                      ]}
+                      onPress={() => setDraftText(item.prompt)}
+                    >
+                      <Text
+                        style={[
+                          styles.samplePromptTitle,
+                          { color: theme.colors.textPrimary },
+                        ]}
+                      >
+                        {item.title}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.samplePromptText,
+                          { color: theme.colors.textMuted },
+                        ]}
+                        numberOfLines={2}
+                      >
+                        {item.prompt}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
               </View>
-            </View>
-          ) : null}
+            ) : null
+          }
+          ListFooterComponent={
+            isStreaming &&
+            !messages.some((m) => m.id === useChatStore.getState().streamingMessageId) ? (
+              <View style={styles.streamingIndicatorBox}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+                <Text
+                  style={[
+                    styles.streamingIndicatorText,
+                    { color: theme.colors.textSecondary },
+                  ]}
+                >
+                  {idID.chat.streamingThinking}
+                </Text>
+              </View>
+            ) : null
+          }
         />
       )}
 
-      <View style={styles.inputBar}>
-        <View style={styles.inputControlsRow}>
-          <Text style={styles.selectorLabel}>Mode: {selectedMode}</Text>
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Change mode, currently ${selectedMode}`} style={styles.selectorControl} onPress={() => setSelectedMode(selectedMode === 'auto' ? 'fast' : selectedMode === 'fast' ? 'coding' : selectedMode === 'coding' ? 'complex' : selectedMode === 'complex' ? 'research' : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity>
-          <Text style={styles.selectorLabel}>Model: {selectedModel}</Text>
-          {models.length > 0 ? <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Change model, currently ${selectedModel}`} style={styles.selectorControl} onPress={() => setSelectedModel(selectedModel === 'auto' ? models[0]!.id : 'auto')}><Text style={styles.selectorButton}>Change</Text></TouchableOpacity> : null}
+      {/* Composer Area */}
+      <View
+        style={[
+          styles.composerContainer,
+          {
+            backgroundColor: theme.colors.surface,
+            borderTopColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        {/* Model Notice Banner */}
+        {modelNotice ? (
+          <View
+            style={[
+              styles.noticeBanner,
+              {
+                backgroundColor: theme.colors.riskHighBg,
+                borderColor: theme.colors.riskHigh,
+              },
+            ]}
+          >
+            <Text style={[styles.noticeText, { color: theme.colors.riskHigh }]}>
+              ⚠️ {modelNotice}
+            </Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.common.close}
+              style={styles.noticeDismissBtn}
+              onPress={clearModelNotice}
+            >
+              <X size={16} color={theme.colors.riskHigh} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {/* Catalog Offline Notice */}
+        {modelCatalogUnavailable && !modelNotice ? (
+          <View
+            style={[
+              styles.offlineBannerRow,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.warning,
+              },
+            ]}
+          >
+            <Text style={[styles.offlineBannerText, { color: theme.colors.warning }]}>
+              {idID.chat.catalogOffline}
+            </Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.common.retry}
+              style={styles.offlineRetryBtn}
+              onPress={() => void loadCatalog()}
+            >
+              <Text style={[styles.offlineRetryText, { color: theme.colors.primary }]}>
+                {idID.common.retry}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {/* Chips Row: Mode & Model */}
+        <View style={styles.chipsRow}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Ubah mode, saat ini ${MODE_LABELS[selectedMode]}`}
+            style={[
+              styles.chipButton,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+            onPress={() => {
+              const nextIndex = (MODES.indexOf(selectedMode) + 1) % MODES.length;
+              void setConversationMode(MODES[nextIndex]!);
+            }}
+          >
+            <Text
+              style={[styles.chipButtonText, { color: theme.colors.textPrimary }]}
+            >
+              ⚡ {MODE_LABELS[selectedMode]}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Pilih model, saat ini ${selectedModel}`}
+            accessibilityState={{ disabled: modelCatalogUnavailable }}
+            disabled={modelCatalogUnavailable}
+            style={[
+              styles.chipButton,
+              styles.modelChipButton,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+              },
+              modelCatalogUnavailable && styles.chipDisabled,
+            ]}
+            onPress={() => setIsModelModalOpen(true)}
+          >
+            <Text
+              style={[
+                styles.chipButtonText,
+                { color: theme.colors.textPrimary },
+                modelCatalogUnavailable && { color: theme.colors.textMuted },
+              ]}
+              numberOfLines={1}
+            >
+              🧠{' '}
+              {modelCatalogUnavailable
+                ? 'Auto (Katalog offline)'
+                : selectedModel === 'auto'
+                  ? 'Auto (Disarankan)'
+                  : selectedModel}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Run as Task CTA */}
+          {draftText.trim() && activeProjectId ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.chat.runAsTask}
+              disabled={createTask.isPending}
+              style={[
+                styles.chipButton,
+                {
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderColor: theme.colors.primary,
+                },
+              ]}
+              onPress={() => void handleRunAsTask()}
+            >
+              <Text style={[styles.chipButtonText, { color: theme.colors.primary }]}>
+                📋 {createTask.isPending ? idID.chat.runAsTaskRunning : idID.chat.runAsTask}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
+
+        {/* Text Input Row with Send / Stop buttons */}
         <View style={styles.inputControlsRow}>
-          <TextInput accessibilityLabel="Message" style={styles.textInput} value={draftText} onChangeText={setDraftText} placeholder="Ketik pesan untuk asisten..." placeholderTextColor={theme.colors.textMuted} multiline maxLength={4000} />
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Send message" style={[styles.sendBtn, (!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected') && styles.sendBtnDisabled]} onPress={handleSend} disabled={!draftText.trim() || isStreaming || isSending || isCancelling || connectionStatus !== 'connected'}><Text style={styles.sendBtnText}>↑</Text></TouchableOpacity>
+          <TextInput
+            accessibilityLabel={idID.chat.composerPlaceholder}
+            style={[
+              styles.textInput,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+                color: theme.colors.textPrimary,
+              },
+            ]}
+            value={draftText}
+            onChangeText={setDraftText}
+            placeholder={idID.chat.composerPlaceholder}
+            placeholderTextColor={theme.colors.textMuted}
+            multiline
+            maxLength={4000}
+          />
+
+          {isStreaming ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.chat.stop}
+              disabled={isCancelling}
+              style={[
+                styles.iconBtn,
+                {
+                  backgroundColor: theme.colors.dangerBg,
+                  borderColor: theme.colors.danger,
+                },
+                isCancelling && styles.btnDisabled,
+              ]}
+              onPress={handleCancel}
+            >
+              <Square size={18} color={theme.colors.danger} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.chat.send}
+              disabled={
+                !draftText.trim() ||
+                isSending ||
+                connectionStatus !== 'connected'
+              }
+              style={[
+                styles.iconBtn,
+                {
+                  backgroundColor:
+                    !draftText.trim() ||
+                    isSending ||
+                    connectionStatus !== 'connected'
+                      ? theme.colors.surfaceElevated
+                      : theme.colors.primary,
+                  borderColor: theme.colors.surfaceBorder,
+                },
+                (!draftText.trim() ||
+                  isSending ||
+                  connectionStatus !== 'connected') &&
+                  styles.btnDisabled,
+              ]}
+              onPress={() => handleSend()}
+            >
+              <Send
+                size={18}
+                color={
+                  !draftText.trim() ||
+                  isSending ||
+                  connectionStatus !== 'connected'
+                    ? theme.colors.textMuted
+                    : '#fff'
+                }
+              />
+            </TouchableOpacity>
+          )}
         </View>
-        {isStreaming ? <TouchableOpacity accessibilityRole="button" accessibilityLabel="Stop response" accessibilityState={{ disabled: isCancelling }} disabled={isCancelling} style={[styles.cancelButton, isCancelling && styles.sendBtnDisabled]} onPress={handleCancel}><Text style={styles.cancelButtonText}>{isCancelling ? 'Stopping…' : 'Stop'}</Text></TouchableOpacity> : null}
       </View>
+
+      {/* Long-Press Message Actions Modal */}
+      <Modal
+        visible={Boolean(selectedMessageForAction)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedMessageForAction(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setSelectedMessageForAction(null)}
+        >
+          <View
+            style={[
+              styles.actionsModalCard,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
+            <Text
+              style={[styles.actionsModalTitle, { color: theme.colors.textPrimary }]}
+            >
+              {idID.chat.messageActionsTitle}
+            </Text>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.chat.copyMessage}
+              style={styles.actionModalRow}
+              onPress={() =>
+                selectedMessageForAction && handleCopyMessage(selectedMessageForAction)
+              }
+            >
+              <Copy size={18} color={theme.colors.primary} />
+              <Text
+                style={[
+                  styles.actionModalText,
+                  { color: theme.colors.textPrimary },
+                ]}
+              >
+                {idID.chat.copyMessage}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.chat.retryMessage}
+              style={styles.actionModalRow}
+              onPress={() =>
+                selectedMessageForAction && handleRetryMessage(selectedMessageForAction)
+              }
+            >
+              <RotateCcw size={18} color={theme.colors.primary} />
+              <Text
+                style={[
+                  styles.actionModalText,
+                  { color: theme.colors.textPrimary },
+                ]}
+              >
+                {idID.chat.retryMessage}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.common.cancel}
+              style={[
+                styles.actionModalCancelBtn,
+                { borderTopColor: theme.colors.surfaceBorder },
+              ]}
+              onPress={() => setSelectedMessageForAction(null)}
+            >
+              <Text
+                style={[
+                  styles.actionModalCancelText,
+                  { color: theme.colors.textSecondary },
+                ]}
+              >
+                {idID.common.cancel}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Model Selector Sheet */}
+      <ModelSelectorModal
+        visible={isModelModalOpen}
+        onClose={() => setIsModelModalOpen(false)}
+      />
     </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderBottomWidth: 1, borderBottomColor: theme.colors.surfaceBorder },
-  backButton: { width: theme.controls.minTouchTarget, height: theme.controls.minTouchTarget, justifyContent: 'center', alignItems: 'center', marginRight: theme.spacing.sm },
-  backButtonText: { color: theme.colors.primary, fontSize: 28 },
-  headerTitleContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerTitle: { color: theme.colors.textPrimary, ...theme.typography.bodyLarge, fontWeight: '600' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  connBanner: { paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, backgroundColor: theme.colors.surfaceElevated, borderBottomWidth: 1, borderBottomColor: theme.colors.warning },
-  connBannerText: { color: theme.colors.warning, ...theme.typography.caption, fontWeight: '600' },
-  errorText: { color: theme.colors.danger, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, fontSize: 12 },
-  loadingText: { color: theme.colors.textSecondary, ...theme.typography.body, marginTop: theme.spacing.sm },
-  errorBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.spacing.md, marginHorizontal: theme.spacing.md, marginTop: theme.spacing.sm, padding: theme.spacing.sm, borderRadius: theme.borderRadius.sm, borderWidth: 1, borderColor: theme.colors.danger, backgroundColor: theme.colors.dangerBg },
-  retryButton: { minHeight: theme.controls.minTouchTarget, justifyContent: 'center', paddingHorizontal: theme.spacing.md },
-  retryButtonText: { color: theme.colors.danger, ...theme.typography.body, fontWeight: '700' },
-  emptyState: { alignItems: 'center', paddingVertical: theme.spacing.xxl, paddingHorizontal: theme.spacing.xl },
-  emptyMark: { color: theme.colors.primary, fontSize: 32, marginBottom: theme.spacing.sm },
-  emptyTitle: { color: theme.colors.textPrimary, ...theme.typography.title, marginBottom: theme.spacing.xs },
-  emptySubtitle: { color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' },
-  messageList: { padding: theme.spacing.md, paddingBottom: theme.spacing.xl },
-  bubbleContainer: { width: '100%', marginBottom: theme.spacing.sm },
-  userAlign: { alignItems: 'flex-end' },
-  assistantAlign: { alignItems: 'flex-start' },
-  bubble: { maxWidth: '85%', padding: theme.spacing.sm, borderRadius: theme.borderRadius.lg },
-  userBubble: { backgroundColor: theme.colors.primary },
-  assistantBubble: { backgroundColor: theme.colors.surface },
-  bubbleText: { fontSize: 14, lineHeight: 20 },
-  userText: { color: '#fff' },
-  assistantText: { color: theme.colors.textPrimary },
-  bubbleRole: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600', marginBottom: 2 },
-  timestamp: { color: theme.colors.textMuted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
-  bubbleModel: { color: theme.colors.textMuted, fontSize: 10, marginTop: 2 },
-  chatTasks: { backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.surfaceBorder, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
-  chatTasksHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  chatTasksTitle: { color: theme.colors.textMuted, ...theme.typography.caption, fontWeight: '600' },
-  chatTasksAction: { color: theme.colors.primary, ...theme.typography.caption, fontWeight: '700', minHeight: theme.controls.minTouchTarget },
-  chatTasksActionDisabled: { color: theme.colors.textMuted, opacity: 0.6 },
-  chatTasksEmpty: { color: theme.colors.textMuted, fontSize: 12, marginTop: theme.spacing.xs },
-  chatTaskList: { marginTop: theme.spacing.xs },
-  chatTaskRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, paddingVertical: 2 },
-  chatTaskKind: { color: theme.colors.textPrimary, fontSize: 12, flex: 1 },
-  chatTaskProgress: { color: theme.colors.textSecondary, fontSize: 12 },
-  chatTaskStatus: { color: theme.colors.textMuted, fontSize: 12, textTransform: 'capitalize' },
-  attachmentList: { marginTop: 4 },
-  attachmentPill: { fontSize: 11, color: theme.colors.primary, backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginTop: 2 },
-  streamingIndicatorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: theme.spacing.xs },
-  streamingLabel: { color: theme.colors.textMuted, fontSize: 11 },
-  cancelButton: { backgroundColor: theme.colors.dangerBg, minHeight: theme.controls.minTouchTarget, justifyContent: 'center', paddingHorizontal: theme.spacing.md, borderRadius: theme.borderRadius.sm, borderWidth: 1, borderColor: theme.colors.danger },
-  cancelButtonText: { color: theme.colors.danger, ...theme.typography.body, fontWeight: '600' },
-  inputBar: { backgroundColor: theme.colors.surface, borderTopWidth: 1, borderTopColor: theme.colors.surfaceBorder, padding: theme.spacing.sm },
-  inputControlsRow: { flexDirection: 'row', alignItems: 'center' },
-  selectorLabel: { color: theme.colors.textMuted, ...theme.typography.caption, marginRight: theme.spacing.xs },
-  selectorControl: { minHeight: theme.controls.minTouchTarget, justifyContent: 'center' },
-  selectorButton: { color: theme.colors.primary, ...theme.typography.caption, marginRight: theme.spacing.sm },
-  textInput: { flex: 1, backgroundColor: theme.colors.surfaceElevated, color: theme.colors.textPrimary, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.full, maxHeight: 100, ...theme.typography.body },
-  sendBtn: { width: theme.controls.minTouchTarget, height: theme.controls.minTouchTarget, borderRadius: theme.controls.minTouchTarget / 2, backgroundColor: theme.colors.primary, justifyContent: 'center', alignItems: 'center', marginLeft: theme.spacing.xs },
-  sendBtnDisabled: { backgroundColor: theme.colors.surfaceElevated, opacity: 0.6 },
-  sendBtnText: { color: theme.colors.textPrimary, fontSize: 20, fontWeight: '700' },
+  container: {
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    minHeight: 56,
+  },
+  backButton: {
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  headerTitleContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+    marginRight: 8,
+  },
+  connBanner: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+  connBannerText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  errorText: {
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    fontSize: 12,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  retryButton: {
+    minHeight: 48,
+    minWidth: 48,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  retryButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 14,
+  },
+  messageList: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    paddingBottom: 24,
+  },
+  messageContainer: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  userContainer: {
+    alignItems: 'flex-end',
+  },
+  assistantContainer: {
+    alignItems: 'flex-start',
+    width: '100%',
+  },
+  userBubble: {
+    maxWidth: '85%',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderBottomRightRadius: 4,
+  },
+  userMessageText: {
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  userTimestamp: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 10,
+    marginTop: 4,
+    alignSelf: 'flex-end',
+  },
+  assistantMessageWrapper: {
+    width: '100%',
+    paddingVertical: 4,
+  },
+  assistantHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  assistantSparkleBadge: {
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  assistantNameText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  modelAttributionText: {
+    fontSize: 11,
+    marginLeft: 4,
+  },
+  assistantMarkdownBox: {
+    width: '100%',
+  },
+  assistantTimestamp: {
+    fontSize: 10,
+    marginTop: 6,
+  },
+  attachmentList: {
+    marginTop: 6,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  attachmentPill: {
+    fontSize: 11,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 8,
+  },
+  emptySparkleCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 20,
+  },
+  samplePromptsContainer: {
+    width: '100%',
+    gap: 10,
+  },
+  samplePromptCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+  },
+  samplePromptTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  samplePromptText: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  streamingIndicatorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  streamingIndicatorText: {
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  composerContainer: {
+    borderTopWidth: 1,
+    padding: 12,
+  },
+  noticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  noticeText: {
+    fontSize: 12,
+    flex: 1,
+  },
+  noticeDismissBtn: {
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  offlineBannerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    flex: 1,
+  },
+  offlineRetryBtn: {
+    minHeight: 48,
+    minWidth: 48,
+    paddingHorizontal: 10,
+    justifyContent: 'center',
+  },
+  offlineRetryText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+    flexWrap: 'wrap',
+  },
+  chipButton: {
+    minHeight: 48,
+    paddingHorizontal: 12,
+    borderRadius: 24,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modelChipButton: {
+    maxWidth: 200,
+  },
+  chipDisabled: {
+    opacity: 0.6,
+  },
+  chipButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  inputControlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  textInput: {
+    flex: 1,
+    minHeight: 48,
+    maxHeight: 120,
+    borderRadius: 24,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 14,
+  },
+  iconBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  btnDisabled: {
+    opacity: 0.5,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  actionsModalCard: {
+    width: '100%',
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingVertical: 12,
+    elevation: 8,
+  },
+  actionsModalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+  },
+  actionModalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 48,
+    paddingHorizontal: 20,
+  },
+  actionModalText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  actionModalCancelBtn: {
+    borderTopWidth: 1,
+    marginTop: 8,
+    minHeight: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actionModalCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });

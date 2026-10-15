@@ -7,11 +7,15 @@ const toAuthUser = (row: {
   id: string;
   email: string;
   passwordHash: string | null;
+  defaultModel?: string | null;
+  defaultMode?: string | null;
   createdAt: Date;
 }): AuthUser => ({
   id: row.id,
   email: row.email,
   passwordHash: row.passwordHash,
+  defaultModel: row.defaultModel ?? null,
+  defaultMode: row.defaultMode ?? 'auto',
   createdAt: row.createdAt,
 });
 
@@ -33,6 +37,22 @@ export class SqlAuthRepository implements AuthRepository {
   async findUserById(id: string): Promise<AuthUser | null> {
     const [row] = await this.db.select().from(users).where(eq(users.id, id)).limit(1);
     return row ? toAuthUser(row) : null;
+  }
+  async updateUserPreferences(
+    userId: string,
+    preferences: { defaultModel?: string | null | undefined; defaultMode?: string | undefined },
+  ): Promise<AuthUser> {
+    const toUpdate: Record<string, unknown> = {};
+    if (preferences.defaultModel !== undefined) toUpdate.defaultModel = preferences.defaultModel;
+    if (preferences.defaultMode !== undefined) toUpdate.defaultMode = preferences.defaultMode;
+
+    const [row] = await this.db
+      .update(users)
+      .set(toUpdate)
+      .where(eq(users.id, userId))
+      .returning();
+    if (!row) throw new Error('user not found');
+    return toAuthUser(row);
   }
   /**
    * Resolves the local user for a provider sign-in. The email is the anchor: an existing account

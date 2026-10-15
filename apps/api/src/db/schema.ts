@@ -25,6 +25,8 @@ export const users = pgTable(
     email: varchar('email', { length: 320 }).notNull(),
     // Null for accounts that only ever signed in through a provider.
     passwordHash: text('password_hash'),
+    defaultModel: varchar('default_model', { length: 200 }),
+    defaultMode: varchar('default_mode', { length: 16 }).default('auto'),
     ...created,
   },
   (table) => [uniqueIndex('users_email_uq').on(table.email)],
@@ -231,14 +233,35 @@ export const modelConfigs = pgTable(
       .references(() => modelProviders.id, { onDelete: 'cascade' }),
     model: varchar('model', { length: 200 }).notNull(),
     capabilities: jsonb('capabilities').notNull(),
+    capabilityDetails: jsonb('capability_details'),
     contextWindow: integer('context_window'),
     costMetadata: jsonb('cost_metadata'),
     enabled: boolean('enabled').default(true).notNull(),
+    isRecommended: boolean('is_recommended').default(false).notNull(),
+    isDefault: boolean('is_default').default(false).notNull(),
+    availabilityStatus: varchar('availability_status', { length: 32 }).default('available').notNull(),
+    lastLatencyMs: integer('last_latency_ms'),
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
     ...created,
   },
   (table) => [
     uniqueIndex('model_configs_provider_model_uq').on(table.providerId, table.model),
     index('model_configs_enabled_idx').on(table.enabled),
+  ],
+);
+
+export const modelRoutingPolicies = pgTable(
+  'model_routing_policies',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    mode: varchar('mode', { length: 32 }).notNull(),
+    modelName: varchar('model_name', { length: 200 }),
+    ...created,
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('model_routing_policies_mode_uq').on(table.mode),
+    index('model_routing_policies_mode_idx').on(table.mode),
   ],
 );
 
@@ -438,3 +461,5 @@ export type SkillRevisionRow = typeof skillRevisions.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;
 export type NotificationPreferencesRow = typeof notificationPreferences.$inferSelect;
+export type ModelConfigRow = typeof modelConfigs.$inferSelect;
+export type ModelRoutingPolicyRow = typeof modelRoutingPolicies.$inferSelect;

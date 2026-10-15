@@ -80,6 +80,20 @@ async function main() {
     console.error(`\n[FAIL] stream() failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  console.log(`[4/4] Testing capability probe with model "${testModel}"...`);
+  try {
+    const probeResult = await gateway.probeModel(testModel);
+    console.log(`[OK] Capability probe completed for "${testModel}":`);
+    console.log(`  - Verified capabilities: [${probeResult.capabilities.join(', ')}]`);
+    console.log(`  - Availability: ${probeResult.availabilityStatus}`);
+    console.log(`  - Average latency: ${probeResult.latencyMs ?? 'N/A'} ms`);
+    for (const [cap, detail] of Object.entries(probeResult.capabilityDetails)) {
+      console.log(`  - ${cap}: status=${detail.status}${detail.latencyMs ? ` (${detail.latencyMs}ms)` : ''}${detail.error ? ` [error: ${detail.error}]` : ''}`);
+    }
+  } catch (err) {
+    console.error(`[FAIL] probeModel() failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   console.log('=== Smoke test completed ===');
 }
 

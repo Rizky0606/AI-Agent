@@ -2,7 +2,14 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { hash, verify } from '@node-rs/argon2';
 import { jwtVerify, SignJWT } from 'jose';
 
-export type AuthUser = { id: string; email: string; passwordHash: string | null; createdAt: Date };
+export type AuthUser = {
+  id: string;
+  email: string;
+  passwordHash: string | null;
+  defaultModel?: string | null | undefined;
+  defaultMode?: string | undefined;
+  createdAt: Date;
+};
 export type RefreshSession = {
   id: string;
   userId: string;
@@ -25,6 +32,10 @@ export interface AuthRepository {
    * someone who already registered with a password keeps the same id when they later use Google.
    */
   upsertProviderUser(provider: string, subject: string, email: string): Promise<AuthUser>;
+  updateUserPreferences(
+    userId: string,
+    preferences: { defaultModel?: string | null | undefined; defaultMode?: string | undefined },
+  ): Promise<AuthUser>;
 }
 
 export class InMemoryAuthRepository implements AuthRepository {
@@ -55,6 +66,23 @@ export class InMemoryAuthRepository implements AuthRepository {
 
   async findUserById(id: string): Promise<AuthUser | null> {
     return this.users.get(id) ?? null;
+  }
+
+  async updateUserPreferences(
+    userId: string,
+    preferences: { defaultModel?: string | null | undefined; defaultMode?: string | undefined },
+  ): Promise<AuthUser> {
+    const user = this.users.get(userId);
+    if (!user) throw new Error('user not found');
+    const updated: AuthUser = {
+      ...user,
+      defaultModel:
+        preferences.defaultModel !== undefined ? preferences.defaultModel : user.defaultModel,
+      defaultMode:
+        preferences.defaultMode !== undefined ? preferences.defaultMode : user.defaultMode,
+    };
+    this.users.set(userId, updated);
+    return updated;
   }
 
   async createRefreshSession(session: RefreshSession): Promise<void> {
@@ -199,6 +227,12 @@ export const createAuthService = (repository: AuthRepository, jwtSecret: string)
       } catch {
         throw new AuthError('UNAUTHENTICATED', 'authentication required');
       }
+    },
+    async updateUserPreferences(
+      userId: string,
+      preferences: { defaultModel?: string | null | undefined; defaultMode?: string | undefined },
+    ): Promise<AuthUser> {
+      return repository.updateUserPreferences(userId, preferences);
     },
     /**
      * Sign-in through a federated provider. The caller has already verified the provider's own

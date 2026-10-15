@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { Database } from './client.ts';
-import { modelConfigs, modelProviders } from './schema.ts';
+import { modelConfigs, modelProviders, modelRoutingPolicies } from './schema.ts';
 import type { ModelCapability } from '@personal-ai-os/model-gateway';
 
 export type ActiveModelRecord = {
@@ -10,8 +10,23 @@ export type ActiveModelRecord = {
   baseUrl: string;
   model: string;
   capabilities: ModelCapability[];
+  capabilityDetails?: Record<string, { status: string; verifiedAt?: string; latencyMs?: number; error?: string }> | undefined;
   contextWindow: number;
   costMetadata?: Record<string, unknown> | undefined;
+  isRecommended?: boolean | undefined;
+  isDefault?: boolean | undefined;
+  availabilityStatus?: 'available' | 'degraded' | 'unavailable' | undefined;
+  lastLatencyMs?: number | undefined;
+  lastVerifiedAt?: Date | undefined;
+};
+
+export type UpsertModelExtra = {
+  capabilityDetails?: Record<string, unknown> | undefined;
+  isRecommended?: boolean | undefined;
+  isDefault?: boolean | undefined;
+  availabilityStatus?: string | undefined;
+  lastLatencyMs?: number | undefined;
+  lastVerifiedAt?: Date | undefined;
 };
 
 export interface ModelConfigRepository {
@@ -27,8 +42,11 @@ export interface ModelConfigRepository {
     contextWindow?: number,
     costMetadata?: Record<string, unknown>,
     enabled?: boolean,
+    extra?: UpsertModelExtra,
   ): Promise<{ id: string; model: string; capabilities: ModelCapability[]; contextWindow: number }>;
   listActiveModels(): Promise<ActiveModelRecord[]>;
+  getRoutingPolicy(mode: string): Promise<string | null>;
+  setRoutingPolicy(mode: string, modelName: string | null): Promise<void>;
 }
 
 export class SqlModelConfigRepository implements ModelConfigRepository {
@@ -84,6 +102,7 @@ export class SqlModelConfigRepository implements ModelConfigRepository {
     contextWindow = 4096,
     costMetadata?: Record<string, unknown>,
     enabled = true,
+    extra?: UpsertModelExtra,
   ): Promise<{
     id: string;
     model: string;
@@ -96,10 +115,25 @@ export class SqlModelConfigRepository implements ModelConfigRepository {
       .where(and(eq(modelConfigs.providerId, providerId), eq(modelConfigs.model, model)))
       .limit(1);
 
+    const extraFields = {
+      capabilityDetails: extra?.capabilityDetails ?? null,
+      isRecommended: extra?.isRecommended ?? false,
+      isDefault: extra?.isDefault ?? false,
+      availabilityStatus: extra?.availabilityStatus ?? 'available',
+      lastLatencyMs: extra?.lastLatencyMs ?? null,
+      lastVerifiedAt: extra?.lastVerifiedAt ?? null,
+    };
+
     if (existing) {
       const [updated] = await this.db
         .update(modelConfigs)
-        .set({ capabilities, contextWindow, costMetadata, enabled })
+        .set({
+          capabilities,
+          contextWindow,
+          costMetadata,
+          enabled,
+          ...(extra ? extraFields : {}),
+        })
         .where(eq(modelConfigs.id, existing.id))
         .returning();
       if (!updated) throw new Error('Failed to update model config');
@@ -113,7 +147,15 @@ export class SqlModelConfigRepository implements ModelConfigRepository {
 
     const [created] = await this.db
       .insert(modelConfigs)
-      .values({ providerId, model, capabilities, contextWindow, costMetadata, enabled })
+      .values({
+        providerId,
+        model,
+        capabilities,
+        contextWindow,
+        costMetadata,
+        enabled,
+        ...extraFields,
+      })
       .returning();
     if (!created) throw new Error('Failed to insert model config');
     return {
@@ -133,8 +175,14 @@ export class SqlModelConfigRepository implements ModelConfigRepository {
         baseUrl: modelProviders.baseUrl,
         model: modelConfigs.model,
         capabilities: modelConfigs.capabilities,
+        capabilityDetails: modelConfigs.capabilityDetails,
         contextWindow: modelConfigs.contextWindow,
         costMetadata: modelConfigs.costMetadata,
+        isRecommended: modelConfigs.isRecommended,
+        isDefault: modelConfigs.isDefault,
+        availabilityStatus: modelConfigs.availabilityStatus,
+        lastLatencyMs: modelConfigs.lastLatencyMs,
+        lastVerifiedAt: modelConfigs.lastVerifiedAt,
       })
       .from(modelConfigs)
       .innerJoin(modelProviders, eq(modelConfigs.providerId, modelProviders.id))
@@ -147,9 +195,43 @@ export class SqlModelConfigRepository implements ModelConfigRepository {
       baseUrl: row.baseUrl,
       model: row.model,
       capabilities: (row.capabilities as ModelCapability[]) ?? ['chat'],
+      capabilityDetails: (row.capabilityDetails as Record<string, { status: string; verifiedAt?: string; latencyMs?: number; error?: string }> | null) ?? undefined,
       contextWindow: row.contextWindow ?? 4096,
       costMetadata: (row.costMetadata as Record<string, unknown> | null) ?? undefined,
+      isRecommended: row.isRecommended,
+      isDefault: row.isDefault,
+      availabilityStatus: (row.availabilityStatus as 'available' | 'degraded' | 'unavailable') ?? 'available',
+      lastLatencyMs: row.lastLatencyMs ?? undefined,
+      lastVerifiedAt: row.lastVerifiedAt ?? undefined,
     }));
+  }
+
+  async getRoutingPolicy(mode: string): Promise<string | null> {
+    const [row] = await this.db
+      .select()
+      .from(modelRoutingPolicies)
+      .where(eq(modelRoutingPolicies.mode, mode))
+      .limit(1);
+    return row?.modelName ?? null;
+  }
+
+  async setRoutingPolicy(mode: string, modelName: string | null): Promise<void> {
+    const [existing] = await this.db
+      .select()
+      .from(modelRoutingPolicies)
+      .where(eq(modelRoutingPolicies.mode, mode))
+      .limit(1);
+
+    if (existing) {
+      await this.db
+        .update(modelRoutingPolicies)
+        .set({ modelName, updatedAt: new Date() })
+        .where(eq(modelRoutingPolicies.id, existing.id));
+    } else {
+      await this.db
+        .insert(modelRoutingPolicies)
+        .values({ mode, modelName, updatedAt: new Date() });
+    }
   }
 }
 
@@ -165,11 +247,18 @@ export class InMemoryModelConfigRepository implements ModelConfigRepository {
       providerId: string;
       model: string;
       capabilities: ModelCapability[];
+      capabilityDetails?: Record<string, { status: string; verifiedAt?: string; latencyMs?: number; error?: string }> | undefined;
       contextWindow: number;
       costMetadata?: Record<string, unknown> | undefined;
+      isRecommended?: boolean | undefined;
+      isDefault?: boolean | undefined;
+      availabilityStatus?: 'available' | 'degraded' | 'unavailable' | undefined;
+      lastLatencyMs?: number | undefined;
+      lastVerifiedAt?: Date | undefined;
       enabled: boolean;
     }
   >();
+  private routingPolicies = new Map<string, string | null>();
 
   async upsertProvider(
     name: string,
@@ -194,6 +283,7 @@ export class InMemoryModelConfigRepository implements ModelConfigRepository {
     contextWindow = 4096,
     costMetadata?: Record<string, unknown>,
     enabled = true,
+    extra?: UpsertModelExtra,
   ): Promise<{
     id: string;
     model: string;
@@ -208,6 +298,14 @@ export class InMemoryModelConfigRepository implements ModelConfigRepository {
       existing.contextWindow = contextWindow;
       existing.costMetadata = costMetadata;
       existing.enabled = enabled;
+      if (extra) {
+        existing.capabilityDetails = extra.capabilityDetails as Record<string, { status: string; verifiedAt?: string; latencyMs?: number; error?: string }> | undefined;
+        existing.isRecommended = extra.isRecommended;
+        existing.isDefault = extra.isDefault;
+        existing.availabilityStatus = extra.availabilityStatus as 'available' | 'degraded' | 'unavailable' | undefined;
+        existing.lastLatencyMs = extra.lastLatencyMs;
+        existing.lastVerifiedAt = extra.lastVerifiedAt;
+      }
       return existing;
     }
     const record = {
@@ -215,8 +313,14 @@ export class InMemoryModelConfigRepository implements ModelConfigRepository {
       providerId,
       model,
       capabilities,
+      capabilityDetails: extra?.capabilityDetails as Record<string, { status: string; verifiedAt?: string; latencyMs?: number; error?: string }> | undefined,
       contextWindow,
       costMetadata,
+      isRecommended: extra?.isRecommended,
+      isDefault: extra?.isDefault,
+      availabilityStatus: extra?.availabilityStatus as 'available' | 'degraded' | 'unavailable' | undefined,
+      lastLatencyMs: extra?.lastLatencyMs,
+      lastVerifiedAt: extra?.lastVerifiedAt,
       enabled,
     };
     this.configs.set(record.id, record);
@@ -236,10 +340,25 @@ export class InMemoryModelConfigRepository implements ModelConfigRepository {
         baseUrl: provider.baseUrl,
         model: config.model,
         capabilities: config.capabilities,
+        capabilityDetails: config.capabilityDetails,
         contextWindow: config.contextWindow,
         costMetadata: config.costMetadata,
+        isRecommended: config.isRecommended,
+        isDefault: config.isDefault,
+        availabilityStatus: config.availabilityStatus,
+        lastLatencyMs: config.lastLatencyMs,
+        lastVerifiedAt: config.lastVerifiedAt,
       });
     }
     return result;
   }
+
+  async getRoutingPolicy(mode: string): Promise<string | null> {
+    return this.routingPolicies.get(mode) ?? null;
+  }
+
+  async setRoutingPolicy(mode: string, modelName: string | null): Promise<void> {
+    this.routingPolicies.set(mode, modelName);
+  }
 }
+

@@ -9,6 +9,9 @@ const bin = join(root, 'bin');
 await mkdir(bin);
 await writeFile(join(root, 'token'), 'a'.repeat(48), { mode: 0o600 });
 await writeFile(join(bin, 'hermes'), '#!/bin/sh\nprintf fake-output\n');
+if (process.platform === 'win32') {
+  await writeFile(join(bin, 'hermes.cmd'), '@<nul set /p =fake-output & exit /b 0\r\n');
+}
 await chmod(join(bin, 'hermes'), 0o755);
 process.env.RUNTIME_BRIDGE_BIND = '127.0.0.1';
 process.env.RUNTIME_BRIDGE_PORT = '0';

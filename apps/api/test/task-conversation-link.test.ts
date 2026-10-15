@@ -24,7 +24,7 @@ test('chat can launch a task bound to its conversation', { timeout: 15000 }, asy
   const aliceProject = await projectRepo.createProject(alice.user.id, 'Alice Project');
   const bobProject = await projectRepo.createProject(bob.user.id, 'Bob Project');
   const aliceConversation = await chatRepo.createConversation(alice.user.id, aliceProject.id, 'Alice chat');
-  const bobConversation = await chatRepo.createConversation(bob.user.id, bobProject.id, 'Bob chat');
+  await chatRepo.createConversation(bob.user.id, bobProject.id, 'Bob chat');
 
   const published: TaskEventEnvelope[] = [];
   broadcaster.subscribe((event) => published.push(event));

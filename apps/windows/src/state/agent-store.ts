@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
-import { ApiClient, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor } from '../api/client.ts';
+import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
@@ -10,6 +10,24 @@ import { type DeviceIdentity, DeviceIdentityManager } from '../connection/device
 import { invoke } from '@tauri-apps/api/core';
 import { buildGoogleStartUrl, codeChallengeFor, parseCallbackQuery, randomBase64Url } from '../auth/google.ts';
 
+export const isTokenExpired = (token: string, bufferSeconds = 30): boolean => {
+  if (!token || typeof token !== 'string') return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return false;
+    const part = parts[1];
+    if (!part) return false;
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonStr = typeof globalThis.atob === 'function'
+      ? globalThis.atob(base64)
+      : Buffer.from(base64, 'base64').toString('utf8');
+    const payload = JSON.parse(jsonStr) as { exp?: number };
+    if (typeof payload.exp !== 'number') return false;
+    return payload.exp * 1000 <= Date.now() + (bufferSeconds * 1000);
+  } catch {
+    return false;
+  }
+};
 
 export interface DiagnosticLog {
   id: string;
@@ -20,12 +38,35 @@ export interface DiagnosticLog {
 
 /** Persisted session; `serverUrl` stays in-memory like it always has. */
 const SESSION_STORAGE_KEY = 'personal-ai-os.windows.session';
+const CLOSE_TO_TRAY_STORAGE_KEY = 'personal-ai-os.windows.close_to_tray';
+const AUTOSTART_STORAGE_KEY = 'personal-ai-os.windows.autostart';
+
+export type AuthState = 'unauthenticated' | 'bootstrapping' | 'authenticating' | 'authenticated';
+
+export type LoginStep =
+  | 'idle'
+  | 'opening_browser'
+  | 'verifying'
+  | 'registering_device'
+  | 'connecting'
+  | 'connected'
+  | 'error';
 
 interface StoredSession {
   accessToken: string;
   refreshToken: string;
   email: string;
 }
+
+const readStoredBoolean = (key: string, defaultValue: boolean): boolean => {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    if (raw === null || raw === undefined) return defaultValue;
+    return JSON.parse(raw);
+  } catch {
+    return defaultValue;
+  }
+};
 
 const readStoredSession = (): StoredSession => {
   const empty: StoredSession = { accessToken: '', refreshToken: '', email: '' };
@@ -52,8 +93,45 @@ const persistSession = (session: StoredSession): void => {
   }
 };
 
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; model?: string | null; }
-export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; projectId?: string; }
+const FAVORITE_MODELS_STORAGE_KEY = 'personal-ai-os.windows.favorite_models';
+
+const readStoredFavorites = (): string[] => {
+  try {
+    const raw = globalThis.localStorage?.getItem(FAVORITE_MODELS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const persistFavorites = (favorites: string[]): void => {
+  try {
+    globalThis.localStorage?.setItem(FAVORITE_MODELS_STORAGE_KEY, JSON.stringify(favorites));
+  } catch {
+    // Ignored when storage unavailable
+  }
+};
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  cancelled?: boolean;
+  model?: string | null;
+  resolvedModel?: string | null;
+  fallbackUsed?: boolean;
+}
+export interface ChatConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  projectId?: string;
+  createdAt?: string;
+  model?: string | null;
+  mode?: 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+}
 export type ChatStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 export interface TaskEventEntry {
@@ -98,6 +176,17 @@ export interface AgentState {
   artifacts: ArtifactItem[];
   artifactPreview: ArtifactPreviewState | null;
   apiError: string | null;
+  authState: AuthState;
+  loginStep: LoginStep;
+  loginError: string | null;
+  bootstrapMessage: string | null;
+  closeToTray: boolean;
+  autostart: boolean;
+  bootstrapAuth: () => Promise<void>;
+  manualLogin: (token: string) => Promise<void>;
+  clearLoginError: () => void;
+  setCloseToTray: (enabled: boolean) => Promise<void>;
+  setAutostart: (enabled: boolean) => Promise<void>;
   setServerUrl: (url: string) => void;
   setAuthToken: (token: string) => void;
   googleLogin: () => Promise<void>;
@@ -139,7 +228,18 @@ export interface AgentState {
   clearApiError: () => void;
   models: ModelDescriptor[];
   modelCatalogStatus: string | null;
+  modelCatalogError: string | null;
+  modelCatalogUnavailable: boolean;
+  modelNotice: string | null;
+  favoriteModels: string[];
+  userDefaultModel: string | null;
+  userDefaultMode: 'fast' | 'coding' | 'complex' | 'research';
   refreshModels: () => Promise<void>;
+  toggleFavoriteModel: (modelId: string) => void;
+  setUserDefaultModel: (modelId: string | null) => Promise<void>;
+  setConversationModel: (model: string | null) => Promise<void>;
+  setConversationMode: (mode: AgentState['selectedMode']) => Promise<void>;
+  clearModelNotice: () => void;
 }
 
 export const createAgentStore = (
@@ -153,6 +253,7 @@ export const createAgentStore = (
   let chatScope: string | null = null;
   let activeConnection: AgentConnection | null = null;
   let loginInFlight = false;
+  let connectingInFlight = false;
   const getInitialCapabilities = (): Record<CapabilityName, boolean> => {
     const rules = registry.getAllRules();
     const map = {} as Record<CapabilityName, boolean>;
@@ -221,12 +322,19 @@ export const createAgentStore = (
       }
     };
     const storedSession = readStoredSession();
+    const hasStoredTokens = Boolean(storedSession.accessToken || storedSession.refreshToken);
     return {
-    serverUrl: import.meta.env.VITE_SERVER_URL ?? 'https://ai.ojixx.my.id',
+    serverUrl: (import.meta as unknown as { env?: { VITE_SERVER_URL?: string } }).env?.VITE_SERVER_URL ?? 'https://ai.ojixx.my.id',
     authToken: storedSession.accessToken,
     refreshToken: storedSession.refreshToken,
     userEmail: storedSession.email,
     connectionStatus: 'disconnected',
+    authState: hasStoredTokens ? 'bootstrapping' : 'unauthenticated',
+    loginStep: 'idle',
+    loginError: null,
+    bootstrapMessage: null,
+    closeToTray: readStoredBoolean(CLOSE_TO_TRAY_STORAGE_KEY, true),
+    autostart: readStoredBoolean(AUTOSTART_STORAGE_KEY, false),
 
     device: identityMgr.getIdentity(),
     capabilities: getInitialCapabilities(),
@@ -254,11 +362,33 @@ export const createAgentStore = (
     apiError: null,
     models: [],
     modelCatalogStatus: null,
+    modelCatalogError: null,
+    modelCatalogUnavailable: false,
+    modelNotice: null,
+    favoriteModels: readStoredFavorites(),
+    userDefaultModel: null,
+    userDefaultMode: 'fast',
 
     setServerUrl: (url) => { if (get().serverUrl === url) return; set({ serverUrl: url }); void get().refreshChat(); },
     setChatDraft: (chatDraft) => set({ chatDraft }),
-    setActiveConversation: (activeConversationId) => { set({ activeConversationId, conversationTasks: [] }); void get().refreshConversationTasks(); },
-    newConversation: () => { const id = `draft-${crypto.randomUUID()}`; set((state) => ({ conversations: [{ id, title: 'New conversation', messages: [] }, ...state.conversations], activeConversationId: id, chatError: null })); },
+    setActiveConversation: (activeConversationId) => {
+      const conv = get().conversations.find((item) => item.id === activeConversationId);
+      set({
+        activeConversationId,
+        conversationTasks: [],
+        selectedModel: conv?.model || 'auto',
+        selectedMode: conv?.mode || 'auto',
+      });
+      void get().refreshConversationTasks();
+    },
+    newConversation: () => {
+      const id = `draft-${crypto.randomUUID()}`;
+      set((state) => ({
+        conversations: [{ id, title: 'Percakapan baru', messages: [], createdAt: new Date().toISOString(), model: state.selectedModel === 'auto' ? null : state.selectedModel, mode: state.selectedMode }, ...state.conversations],
+        activeConversationId: id,
+        chatError: null,
+      }));
+    },
     sendChat: () => {
       const state = get();
       const content = state.chatDraft.trim();
@@ -266,8 +396,22 @@ export const createAgentStore = (
       if (!state.authToken.trim() || !activeChatConnection) { set({ chatError: 'Sign in to send a message.' }); return; }
       const id = state.activeConversationId || `draft-${crypto.randomUUID()}`;
       pendingChat = { content, conversationId: id };
-      set((current) => ({ activeConversationId: id, chatDraft: '', chatStreaming: true, chatError: null, conversations: current.conversations.some((item) => item.id === id) ? current.conversations : [{ id, title: content.slice(0, 48), messages: [] }, ...current.conversations] }));
-      activeChatConnection.sendChatMessage({ type: 'chat.send', ...(!id.startsWith('draft-') ? { conversationId: id } : {}), content, model: state.selectedModel === 'auto' ? undefined : state.selectedModel, mode: state.selectedMode });
+      set((current) => ({
+        activeConversationId: id,
+        chatDraft: '',
+        chatStreaming: true,
+        chatError: null,
+        conversations: current.conversations.some((item) => item.id === id)
+          ? current.conversations
+          : [{ id, title: content.slice(0, 48), messages: [], model: state.selectedModel === 'auto' ? null : state.selectedModel, mode: state.selectedMode }, ...current.conversations],
+      }));
+      activeChatConnection.sendChatMessage({
+        type: 'chat.send',
+        ...(!id.startsWith('draft-') ? { conversationId: id } : {}),
+        content,
+        model: state.selectedModel === 'auto' ? undefined : state.selectedModel,
+        mode: state.selectedMode,
+      });
     },
     cancelChat: () => { activeChatConnection?.cancelChat(); },
     retryChat: () => {
@@ -278,8 +422,65 @@ export const createAgentStore = (
       get().sendChat();
     },
     clearChatError: () => set({ chatError: null }),
-    setSelectedModel: (selectedModel) => set({ selectedModel }),
-    setSelectedMode: (selectedMode) => set({ selectedMode }),
+    setSelectedModel: (selectedModel) => void get().setConversationModel(selectedModel),
+    setSelectedMode: (selectedMode) => void get().setConversationMode(selectedMode),
+    setConversationModel: async (model) => {
+      const state = get();
+      const nextModel = model || 'auto';
+      set({ selectedModel: nextModel });
+      const activeId = state.activeConversationId;
+      if (activeId) {
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === activeId ? { ...c, model: nextModel === 'auto' ? null : nextModel } : c
+          ),
+        }));
+        if (!activeId.startsWith('draft-') && state.authToken.trim()) {
+          try {
+            await api().updateConversation(activeId, { model: nextModel === 'auto' ? null : nextModel });
+          } catch {
+            // Background update
+          }
+        }
+      }
+    },
+    setConversationMode: async (mode) => {
+      const state = get();
+      set({ selectedMode: mode });
+      const activeId = state.activeConversationId;
+      if (activeId) {
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === activeId ? { ...c, mode } : c
+          ),
+        }));
+        if (!activeId.startsWith('draft-') && state.authToken.trim()) {
+          try {
+            await api().updateConversation(activeId, { mode });
+          } catch {
+            // Background update
+          }
+        }
+      }
+    },
+    toggleFavoriteModel: (modelId) => {
+      const favorites = get().favoriteModels;
+      const next = favorites.includes(modelId)
+        ? favorites.filter((id) => id !== modelId)
+        : [...favorites, modelId];
+      persistFavorites(next);
+      set({ favoriteModels: next });
+    },
+    setUserDefaultModel: async (modelId) => {
+      try {
+        const res = await api().updateUserPreferences({ defaultModel: modelId });
+        set({ userDefaultModel: res.defaultModel });
+        void get().refreshModels();
+      } catch (err) {
+        set({ apiError: err instanceof Error ? err.message : String(err) });
+      }
+    },
+    clearModelNotice: () => set({ modelNotice: null }),
     // Tasks spawned from the active conversation. Read straight from the server, never inferred.
     refreshConversationTasks: () => run(async () => {
       const conversationId = get().activeConversationId;
@@ -382,17 +583,128 @@ export const createAgentStore = (
     closeArtifactPreview: () => set({ artifactPreview: null }),
     clearApiError: () => set({ apiError: null }),
 
-    refreshModels: () => run(async () => {
-      const catalog = await api().listModels();
-      set({
-        models: catalog.models,
-        modelCatalogStatus: `Source: ${catalog.source} · ${catalog.models.length} models`,
-      });
-    }),
+    refreshModels: async () => {
+      try {
+        const catalog = await api().listModels();
+        const currentModel = get().selectedModel;
+        const modelExists = currentModel === 'auto' || catalog.models.some((m) => m.id === currentModel);
+        let notice: string | null = null;
+        let nextSelected = currentModel;
+        if (!modelExists) {
+          notice = `Model '${currentModel}' tidak lagi tersedia di katalog. Beralih ke Auto.`;
+          nextSelected = 'auto';
+        }
+        set({
+          models: catalog.models,
+          modelCatalogStatus: `Source: ${catalog.source} · ${catalog.models.length} models`,
+          modelCatalogError: null,
+          modelCatalogUnavailable: false,
+          selectedModel: nextSelected,
+          ...(notice ? { modelNotice: notice } : {}),
+        });
+      } catch (error) {
+        const errMsg = error instanceof ApiError ? error.message : error instanceof Error ? error.message : String(error);
+        const isUnavailable = error instanceof ApiError && (error.status === 503 || error.code === 'PROVIDER_UNAVAILABLE');
+        set({
+          modelCatalogError: isUnavailable ? 'Katalog model tidak dapat dihubungi (503).' : (errMsg || 'Katalog model tidak tersedia.'),
+          modelCatalogUnavailable: true,
+          modelCatalogStatus: null,
+        });
+      }
+    },
 
-    googleLogin: () => run(async () => {
+    bootstrapAuth: async () => {
+      // Sync close-to-tray & autostart from Tauri backend if running inside Tauri
+      try {
+        const ctt = await invoke<boolean>('get_close_to_tray');
+        const as = await invoke<boolean>('get_autostart');
+        set({ closeToTray: ctt, autostart: as });
+      } catch {
+        // Ignored when running outside Tauri (e.g. web tests)
+      }
+
+      const { authToken, refreshToken } = get();
+      if (!authToken && !refreshToken) {
+        set({ authState: 'unauthenticated', loginStep: 'idle', bootstrapMessage: null });
+        return;
+      }
+
+      set({ authState: 'bootstrapping', bootstrapMessage: 'Memverifikasi sesi...' });
+
+      try {
+        let currentToken = authToken;
+        if (!currentToken || isTokenExpired(currentToken)) {
+          if (!refreshToken) {
+            clearSession();
+            set({
+              authState: 'unauthenticated',
+              loginStep: 'idle',
+              loginError: null,
+              bootstrapMessage: null,
+            });
+            return;
+          }
+          set({ bootstrapMessage: 'Menyegarkan sesi autentikasi...' });
+          try {
+            const session = await api().refreshSession(refreshToken);
+            applySession(session);
+            currentToken = session.accessToken;
+          } catch (refreshErr) {
+            const isOffline =
+              (refreshErr instanceof TypeError && refreshErr.message.toLowerCase().includes('fetch')) ||
+              (refreshErr instanceof ApiError && (refreshErr.status === 502 || refreshErr.status === 503 || refreshErr.status === 504 || refreshErr.status === 0)) ||
+              (refreshErr instanceof Error && (refreshErr.message.toLowerCase().includes('network') || refreshErr.message.toLowerCase().includes('failed to fetch') || refreshErr.message.toLowerCase().includes('econnrefused')));
+
+            if (isOffline) {
+              set({
+                authState: 'unauthenticated',
+                loginStep: 'error',
+                loginError: 'Server tidak terjangkau. Periksa koneksi internet Anda.',
+                bootstrapMessage: null,
+              });
+              return;
+            }
+
+            clearSession();
+            set({
+              authState: 'unauthenticated',
+              loginStep: 'error',
+              loginError: 'Sesi Anda telah kedaluwarsa. Silakan masuk kembali.',
+              bootstrapMessage: null,
+            });
+            return;
+          }
+        }
+
+        set({ bootstrapMessage: 'Mendaftarkan perangkat...' });
+        await get().syncDeviceIdentity();
+
+        set({ bootstrapMessage: 'Menghubungkan ke layanan...' });
+        await get().connectToServer();
+        void get().refreshChat();
+
+        set({
+          authState: 'authenticated',
+          loginStep: 'connected',
+          loginError: null,
+          bootstrapMessage: null,
+        });
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const isOffline = errMsg.toLowerCase().includes('network') || errMsg.toLowerCase().includes('fetch') || errMsg.toLowerCase().includes('econnrefused');
+        set({
+          authState: 'unauthenticated',
+          loginStep: 'error',
+          loginError: isOffline ? 'Server tidak terjangkau. Periksa koneksi internet Anda.' : errMsg,
+          bootstrapMessage: null,
+        });
+      }
+    },
+
+    googleLogin: async () => {
       if (loginInFlight) return;
       loginInFlight = true;
+      set({ authState: 'authenticating', loginStep: 'opening_browser', loginError: null });
       try {
         const codeVerifier = randomBase64Url(32);
         const state = randomBase64Url(16);
@@ -401,21 +713,140 @@ export const createAgentStore = (
           await codeChallengeFor(codeVerifier),
           state,
         );
-        const rawQuery = await invoke<string>('google_login', { startUrlTemplate });
+
+        let rawQuery: string;
+        try {
+          rawQuery = await invoke<string>('google_login', { startUrlTemplate });
+        } catch (invokeErr) {
+          const rawMsg = invokeErr instanceof Error ? invokeErr.message : String(invokeErr);
+          if (
+            rawMsg.toLowerCase().includes('timeout') ||
+            rawMsg.toLowerCase().includes('cancel') ||
+            rawMsg.toLowerCase().includes('closed') ||
+            rawMsg.toLowerCase().includes('dibatalkan')
+          ) {
+            throw new Error('Proses login dibatalkan atau jendela browser ditutup sebelum selesai.');
+          }
+          throw new Error(`Gagal membuka alur login Google: ${rawMsg}`);
+        }
+
+        set({ loginStep: 'verifying' });
         const callback = parseCallbackQuery(rawQuery);
-        if (callback.state !== state) throw new Error('State OAuth tidak cocok — login dibatalkan.');
-        const session = await api().exchangeLoginCode(callback.code, codeVerifier);
+        if (callback.state !== state) {
+          throw new Error('State OAuth tidak cocok. Login dibatalkan demi keamanan.');
+        }
+
+        let session: AuthSession;
+        try {
+          session = await api().exchangeLoginCode(callback.code, codeVerifier);
+        } catch (exchangeErr) {
+          if (exchangeErr instanceof ApiError && (exchangeErr.status === 403 || exchangeErr.code === 'FORBIDDEN')) {
+            throw new Error('Akun Google Anda tidak memiliki izin untuk mengakses sistem ini.');
+          }
+          throw exchangeErr;
+        }
+
         applySession(session);
         get().addLog('info', `Login Google berhasil sebagai ${session.user.email}`);
+
+        set({ loginStep: 'registering_device' });
+        await get().syncDeviceIdentity();
+
+        set({ loginStep: 'connecting' });
+        await get().connectToServer();
+        void get().refreshChat();
+
+        set({
+          loginStep: 'connected',
+          authState: 'authenticated',
+          loginError: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        get().addLog('error', `Login gagal: ${message}`);
+        set({
+          authState: 'unauthenticated',
+          loginStep: 'error',
+          loginError: message,
+        });
       } finally {
         loginInFlight = false;
       }
-    }),
+    },
+
+    manualLogin: async (token: string) => {
+      const trimmed = token.trim();
+      if (!trimmed) {
+        set({ loginError: 'Masukkan token autentikasi yang valid.' });
+        return;
+      }
+      set({ authState: 'authenticating', loginStep: 'verifying', loginError: null });
+      try {
+        get().setAuthToken(trimmed);
+
+        set({ loginStep: 'registering_device' });
+        await get().syncDeviceIdentity();
+
+        set({ loginStep: 'connecting' });
+        await get().connectToServer();
+        void get().refreshChat();
+
+        set({
+          loginStep: 'connected',
+          authState: 'authenticated',
+          loginError: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        get().addLog('error', `Login manual gagal: ${message}`);
+        set({
+          authState: 'unauthenticated',
+          loginStep: 'error',
+          loginError: message,
+        });
+      }
+    },
+
+    clearLoginError: () => set({ loginError: null, loginStep: 'idle' }),
+
+    setCloseToTray: async (enabled: boolean) => {
+      try {
+        globalThis.localStorage?.setItem(CLOSE_TO_TRAY_STORAGE_KEY, JSON.stringify(enabled));
+      } catch {
+        // storage fallback
+      }
+      set({ closeToTray: enabled });
+      try {
+        await invoke('set_close_to_tray', { enabled });
+      } catch {
+        // ignore non-tauri runtime
+      }
+    },
+
+    setAutostart: async (enabled: boolean) => {
+      try {
+        globalThis.localStorage?.setItem(AUTOSTART_STORAGE_KEY, JSON.stringify(enabled));
+      } catch {
+        // storage fallback
+      }
+      set({ autostart: enabled });
+      try {
+        await invoke('set_autostart', { enabled });
+      } catch {
+        // ignore non-tauri runtime
+      }
+    },
 
     logout: () => run(async () => {
       const { refreshToken } = get();
       get().disconnectFromServer();
       clearSession();
+      set({
+        authState: 'unauthenticated',
+        loginStep: 'idle',
+        loginError: null,
+        bootstrapMessage: null,
+      });
       if (!refreshToken) return;
       try {
         await api().logout(refreshToken);
@@ -441,29 +872,42 @@ export const createAgentStore = (
     connectToServer: async () => {
       const state = get();
       if (!state.authToken.trim()) {
-        state.addLog('warn', 'Belum masuk. Gunakan "Masuk dengan Google" di tab Settings.');
+        state.addLog('warn', 'Belum masuk. Silakan lakukan autentikasi terlebih dahulu.');
         return;
       }
-      if (activeConnection) {
-        activeConnection.disconnect();
+      if (connectingInFlight) {
+        return;
+      }
+      if (activeConnection && (activeConnection.getStatus() === 'connected' || activeConnection.getStatus() === 'connecting')) {
+        return;
       }
 
-      const { TauriCommandExecutor } = await import('../security/tauri-executor.ts');
-      const exec = executor ?? new TauriCommandExecutor(registry, pathValidator);
+      connectingInFlight = true;
+      try {
+        if (activeConnection) {
+          activeConnection.disconnect();
+          activeConnection = null;
+        }
 
-      activeConnection = new AgentConnection({
-        serverUrl: state.serverUrl,
-        token: state.authToken,
-        identity: state.device,
-        keyStore: identityMgr.keys,
-        executor: exec,
-        onStatusChange: (status) => set({ connectionStatus: status }),
-        onDeviceId: (deviceId) => set({ device: identityMgr.setServerDeviceId(deviceId) }),
-        onLogMessage: (level, msg) => get().addLog(level, msg),
-        // Chat runs on its own account-authenticated socket.
-      });
+        const { TauriCommandExecutor } = await import('../security/tauri-executor.ts');
+        const exec = executor ?? new TauriCommandExecutor(registry, pathValidator);
 
-      await activeConnection.connect();
+        activeConnection = new AgentConnection({
+          serverUrl: state.serverUrl,
+          token: state.authToken,
+          identity: state.device,
+          keyStore: identityMgr.keys,
+          executor: exec,
+          onStatusChange: (status) => set({ connectionStatus: status }),
+          onDeviceId: (deviceId) => set({ device: identityMgr.setServerDeviceId(deviceId) }),
+          onLogMessage: (level, msg) => get().addLog(level, msg),
+          // Chat runs on its own account-authenticated socket.
+        });
+
+        await activeConnection.connect();
+      } finally {
+        connectingInFlight = false;
+      }
     },
 
     refreshChat: async () => {
@@ -496,7 +940,17 @@ export const createAgentStore = (
             if (conversation.id !== conversationId) return conversation;
             const existing = conversation.messages.find((message) => message.id === id);
             const content = frame.delta ? `${existing?.content ?? ''}${frame.delta}` : incoming?.content ?? frame.content ?? existing?.content ?? '';
-            const message = { id, role: role === 'system' ? 'assistant' : role, content, cancelled: Boolean(incoming?.cancelled || incoming?.metadata?.['cancelled']), model: frame.resolvedModel ?? existing?.model } as ChatMessage;
+            const resolvedModel = frame.resolvedModel ?? incoming?.metadata?.['resolvedModel'] ?? existing?.resolvedModel ?? (typeof frame.model === 'string' ? frame.model : existing?.model);
+            const fallbackUsed = Boolean(frame.fallbackUsed ?? incoming?.metadata?.['fallbackUsed'] ?? existing?.fallbackUsed);
+            const message = {
+              id,
+              role: role === 'system' ? 'assistant' : role,
+              content,
+              cancelled: Boolean(incoming?.cancelled || incoming?.metadata?.['cancelled']),
+              model: resolvedModel,
+              resolvedModel,
+              fallbackUsed,
+            } as ChatMessage;
             return { ...conversation, messages: existing ? conversation.messages.map((item) => item.id === id ? { ...item, ...message } : item) : [...conversation.messages, message] };
           });
           const done = frame.type === 'message.completed' || frame.type === 'message.cancelled';
@@ -520,7 +974,25 @@ export const createAgentStore = (
       chatEventsStream.connect();
       try {
         const history = await api().listConversations();
-        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Conversation', projectId: item.projectId ?? undefined, messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']), model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null }] : []) })));
+        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({
+          id: item.id,
+          title: item.title ?? 'Percakapan',
+          projectId: item.projectId ?? undefined,
+          createdAt: item.createdAt,
+          messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] =>
+            message.role === 'user' || message.role === 'assistant'
+              ? [{
+                  id: message.id,
+                  role: message.role,
+                  content: message.content,
+                  cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']),
+                  model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : (typeof message.metadata?.['model'] === 'string' ? message.metadata['model'] : null),
+                  resolvedModel: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null,
+                  fallbackUsed: Boolean(message.metadata?.['fallbackUsed']),
+                }]
+              : []
+          ),
+        })));
         if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
         set((current) => {
           const merged = conversations.map((conversation) => {

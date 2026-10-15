@@ -4,10 +4,13 @@ import { AuthError } from '../auth/service.ts';
 import type { ChatRepository } from '../db/chat-repository.ts';
 import type { ProjectRepository } from '../db/project-repository.ts';
 
+import type { AuditRepository } from '../db/audit-repository.ts';
+
 export interface ProjectRouteDependencies {
   auth: AuthService;
   projectRepo: ProjectRepository;
   chatRepo: ChatRepository;
+  audit?: AuditRepository | undefined;
 }
 
 const extractUser = async (request: FastifyRequest, auth: AuthService) => {
@@ -206,20 +209,32 @@ export const registerProjectRoutes = (
       schema: {
         body: {
           type: 'object',
-          required: ['title'],
           properties: {
             title: { type: 'string', minLength: 1, maxLength: 200 },
+            model: { type: ['string', 'null'], maxLength: 200 },
+            mode: { type: 'string', enum: ['auto', 'fast', 'coding', 'complex', 'research'] },
+            workspaceId: { type: ['string', 'null'] },
           },
         },
       },
     },
     async (request, reply) => {
       const user = await extractUser(request, deps.auth);
-      const body = request.body as { title: string };
+      const body = request.body as {
+        title?: string;
+        model?: string | null;
+        mode?: 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+        workspaceId?: string | null;
+      };
       const updated = await deps.chatRepo.updateConversation(
         user.id,
         request.params.conversationId,
-        { title: body.title },
+        {
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.model !== undefined ? { model: body.model } : {}),
+          ...(body.mode !== undefined ? { mode: body.mode } : {}),
+          ...(body.workspaceId !== undefined ? { workspaceId: body.workspaceId } : {}),
+        },
       );
       if (!updated) {
         return reply.code(404).send({
@@ -230,6 +245,18 @@ export const registerProjectRoutes = (
           },
         });
       }
+
+      if (deps.audit && (body.model !== undefined || body.mode !== undefined)) {
+        await deps.audit.log({
+          userId: user.id,
+          action: 'conversation.model.updated',
+          resourceType: 'conversation',
+          resourceId: request.params.conversationId,
+          decision: 'allow',
+          metadata: { model: body.model, mode: body.mode },
+        });
+      }
+
       return reply.send(updated);
     },
   );

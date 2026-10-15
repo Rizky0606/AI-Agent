@@ -5,39 +5,46 @@ import {
   StatusBar,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { theme } from '../components/Theme.ts';
-import { ApprovalInboxScreen } from '../screens/ApprovalInboxScreen.tsx';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createNavigationContainerRef, NavigationContainer } from '@react-navigation/native';
+import { Activity, MessageSquare, MoreHorizontal } from 'lucide-react-native';
+import { useAppTheme } from '../hooks/use-theme.ts';
+import { useApprovals } from '../hooks/use-queries.ts';
+import { idID } from '../locales/id-ID.ts';
+import { ActivityScreen } from '../screens/ActivityScreen.tsx';
 import { ArtifactsScreen } from '../screens/ArtifactsScreen.tsx';
 import { ChatScreen } from '../screens/ChatScreen.tsx';
 import { ConversationListScreen } from '../screens/ConversationListScreen.tsx';
 import { LoginScreen } from '../screens/LoginScreen.tsx';
+import { MemoryScreen } from '../screens/MemoryScreen.tsx';
 import { ProjectsScreen } from '../screens/ProjectsScreen.tsx';
 import { SettingsScreen } from '../screens/SettingsScreen.tsx';
 import { TaskDetailScreen } from '../screens/TaskDetailScreen.tsx';
-import { TaskListScreen } from '../screens/TaskListScreen.tsx';
 import { DeepLinkService, type DeepLinkTarget } from '../services/deep-link.ts';
 import { defaultFcmService } from '../services/fcm-service.ts';
 import { useAuthStore } from '../state/auth-store.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
-type Tab = 'chat' | 'tasks' | 'approvals' | 'projects' | 'settings';
+const Tab = createBottomTabNavigator();
+export const navigationRef = createNavigationContainerRef();
 
 export const AppNavigator: React.FC = () => {
+  const theme = useAppTheme();
   const { isAuthenticated, isLoading, initialize } = useAuthStore();
   const { toastMessage, clearToast } = useUiStore();
 
-  const [currentTab, setCurrentTab] = useState<Tab>('chat');
-
-  // Sub-screen navigation states
+  // Navigation states for sub-screens
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [activeConversationTitle, setActiveConversationTitle] = useState<string | undefined>(
-    undefined,
-  );
+  const [activeConversationTitle, setActiveConversationTitle] = useState<string | undefined>(undefined);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [showingArtifacts, setShowingArtifacts] = useState(false);
+  const [activityInitialTab, setActivityInitialTab] = useState<'tasks' | 'approvals'>('tasks');
+  const [moreSubscreen, setMoreSubscreen] = useState<'artifacts' | 'projects' | 'memory' | null>(null);
+
+  // Pending approvals count for tab badge
+  const { data: pendingApprovals } = useApprovals('pending');
+  const pendingCount = pendingApprovals?.length ?? 0;
 
   useEffect(() => {
     void initialize();
@@ -53,15 +60,25 @@ export const AppNavigator: React.FC = () => {
   const handleDeepLinkTarget = (target: DeepLinkTarget | null) => {
     if (!target) return;
     if (target.screen === 'Chat') {
-      setCurrentTab('chat');
       setActiveConversationId(target.conversationId);
+      if (navigationRef.isReady()) {
+        (navigationRef as { navigate: (name: string) => void }).navigate('ChatTab');
+      }
     } else if (target.screen === 'ApprovalDetail') {
-      setCurrentTab('approvals');
+      setActivityInitialTab('approvals');
+      if (navigationRef.isReady()) {
+        (navigationRef as { navigate: (name: string) => void }).navigate('ActivityTab');
+      }
     } else if (target.screen === 'TaskDetail') {
-      setCurrentTab('tasks');
       setActiveTaskId(target.taskId);
+      if (navigationRef.isReady()) {
+        (navigationRef as { navigate: (name: string) => void }).navigate('ActivityTab');
+      }
     } else if (target.screen === 'ProjectDetail') {
-      setCurrentTab('projects');
+      setMoreSubscreen('projects');
+      if (navigationRef.isReady()) {
+        (navigationRef as { navigate: (name: string) => void }).navigate('MoreTab');
+      }
     }
   };
 
@@ -86,7 +103,7 @@ export const AppNavigator: React.FC = () => {
 
   if (isLoading) {
     return (
-      <View style={styles.centerContainer}>
+      <View style={[styles.centerContainer, { backgroundColor: theme.colors.background }]}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
       </View>
     );
@@ -96,146 +113,177 @@ export const AppNavigator: React.FC = () => {
     return <LoginScreen />;
   }
 
-  const renderTabContent = () => {
-    switch (currentTab) {
-      case 'chat':
-        if (activeConversationId) {
-          return (
-            <ChatScreen
-              conversationId={activeConversationId}
-              conversationTitle={activeConversationTitle}
-              onBack={() => {
-                setActiveConversationId(null);
-                setActiveConversationTitle(undefined);
-              }}
-            />
-          );
-        }
-        return (
-          <ConversationListScreen
-            onSelectConversation={(id, title) => {
-              setActiveConversationId(id);
-              setActiveConversationTitle(title);
-            }}
-          />
-        );
-
-      case 'tasks':
-        if (activeTaskId) {
-          return (
-            <TaskDetailScreen
-              taskId={activeTaskId}
-              onBack={() => setActiveTaskId(null)}
-              onNavigateToApproval={() => {
-                setActiveTaskId(null);
-                setCurrentTab('approvals');
-              }}
-            />
-          );
-        }
-        return <TaskListScreen onSelectTask={(id) => setActiveTaskId(id)} />;
-
-      case 'approvals':
-        return <ApprovalInboxScreen />;
-
-      case 'projects':
-        return <ProjectsScreen />;
-
-      case 'settings':
-        if (showingArtifacts) {
-          return <ArtifactsScreen />;
-        }
-        return <SettingsScreen onNavigateToArtifacts={() => setShowingArtifacts(true)} />;
+  // Subscreen renderers for tabs
+  const renderChatStack = () => {
+    if (activeConversationId) {
+      return (
+        <ChatScreen
+          conversationId={activeConversationId}
+          conversationTitle={activeConversationTitle}
+          onBack={() => {
+            setActiveConversationId(null);
+            setActiveConversationTitle(undefined);
+          }}
+        />
+      );
     }
+    return (
+      <ConversationListScreen
+        onSelectConversation={(id, title) => {
+          setActiveConversationId(id);
+          setActiveConversationTitle(title);
+        }}
+      />
+    );
+  };
+
+  const renderActivityStack = () => {
+    if (activeTaskId) {
+      return (
+        <TaskDetailScreen
+          taskId={activeTaskId}
+          onBack={() => setActiveTaskId(null)}
+          onNavigateToApproval={() => {
+            setActiveTaskId(null);
+            setActivityInitialTab('approvals');
+          }}
+        />
+      );
+    }
+    return (
+      <ActivityScreen
+        onSelectTask={(id) => setActiveTaskId(id)}
+        initialTab={activityInitialTab}
+      />
+    );
+  };
+
+  const renderMoreStack = () => {
+    if (moreSubscreen === 'artifacts') {
+      return <ArtifactsScreen onBack={() => setMoreSubscreen(null)} />;
+    }
+    if (moreSubscreen === 'projects') {
+      return <ProjectsScreen onBack={() => setMoreSubscreen(null)} />;
+    }
+    if (moreSubscreen === 'memory') {
+      return <MemoryScreen onBack={() => setMoreSubscreen(null)} />;
+    }
+    return (
+      <SettingsScreen
+        onNavigateToArtifacts={() => setMoreSubscreen('artifacts')}
+        onNavigateToProjects={() => setMoreSubscreen('projects')}
+        onNavigateToMemory={() => setMoreSubscreen('memory')}
+      />
+    );
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor={theme.colors.background} />
-
-      {/* Main Screen Content */}
-      <View style={styles.contentContainer}>{renderTabContent()}</View>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
+      <StatusBar
+        barStyle={theme.scheme === 'dark' ? 'light-content' : 'dark-content'}
+        backgroundColor={theme.colors.background}
+      />
 
       {/* Floating Toast Notice */}
       {toastMessage ? (
-        <View style={styles.toast}>
-          <Text style={styles.toastText}>{toastMessage}</Text>
+        <View
+          style={[
+            styles.toast,
+            {
+              backgroundColor: theme.colors.surfaceElevated,
+              borderColor: theme.colors.primary,
+            },
+          ]}
+        >
+          <Text style={[styles.toastText, { color: theme.colors.textPrimary }]}>
+            {toastMessage}
+          </Text>
         </View>
       ) : null}
 
-      {/* Bottom Tab Bar */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity accessibilityRole="tab" accessibilityLabel="Chat" accessibilityState={{ selected: currentTab === 'chat' }} style={styles.tabItem} onPress={() => {
-            setShowingArtifacts(false);
-            setCurrentTab('chat');
+      <NavigationContainer ref={navigationRef}>
+        <Tab.Navigator
+          screenOptions={{
+            headerShown: false,
+            tabBarStyle: {
+              backgroundColor: theme.colors.surface,
+              borderTopColor: theme.colors.surfaceBorder,
+              borderTopWidth: 1,
+              height: 60,
+              paddingBottom: 6,
+              paddingTop: 6,
+            },
+            tabBarItemStyle: {
+              minHeight: 48,
+              justifyContent: 'center',
+              alignItems: 'center',
+            },
+            tabBarActiveTintColor: theme.colors.primary,
+            tabBarInactiveTintColor: theme.colors.textSecondary,
+            tabBarLabelStyle: {
+              fontSize: 11,
+              fontWeight: '600',
+              marginTop: 2,
+            },
           }}
         >
-          <Text style={[styles.tabIcon, currentTab === 'chat' && styles.tabActive]}>💬</Text>
-          <Text style={[styles.tabLabel, currentTab === 'chat' && styles.tabActive]}>Chat</Text>
-        </TouchableOpacity>
+          <Tab.Screen
+            name="ChatTab"
+            options={{
+              tabBarLabel: idID.nav.chat,
+              tabBarAccessibilityLabel: idID.nav.chat,
+              tabBarIcon: ({ color, size }) => (
+                <MessageSquare size={size || 22} color={color} />
+              ),
+            }}
+          >
+            {renderChatStack}
+          </Tab.Screen>
 
-        <TouchableOpacity
-          accessibilityRole="tab"
-          accessibilityLabel="Tasks"
-          accessibilityState={{ selected: currentTab === 'tasks' }}
-          style={styles.tabItem}
-          onPress={() => {
-            setShowingArtifacts(false);
-            setCurrentTab('tasks');
-          }}
-        >
-          <Text style={[styles.tabIcon, currentTab === 'tasks' && styles.tabActive]}>📋</Text>
-          <Text style={[styles.tabLabel, currentTab === 'tasks' && styles.tabActive]}>Tasks</Text>
-        </TouchableOpacity>
+          <Tab.Screen
+            name="ActivityTab"
+            options={{
+              tabBarLabel: idID.nav.activity,
+              tabBarAccessibilityLabel: `${idID.nav.activity}${
+                pendingCount > 0 ? `, ${pendingCount} pending` : ''
+              }`,
+              ...(pendingCount > 0
+                ? {
+                    tabBarBadge: pendingCount,
+                    tabBarBadgeStyle: {
+                      backgroundColor: theme.colors.riskHigh,
+                      color: '#fff',
+                      fontSize: 10,
+                      fontWeight: '800' as const,
+                      minWidth: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      lineHeight: 16,
+                    },
+                  }
+                : {}),
+              tabBarIcon: ({ color, size }) => (
+                <Activity size={size || 22} color={color} />
+              ),
+            }}
+          >
+            {renderActivityStack}
+          </Tab.Screen>
 
-        <TouchableOpacity
-          accessibilityRole="tab"
-          accessibilityLabel="Approvals"
-          accessibilityState={{ selected: currentTab === 'approvals' }}
-          style={styles.tabItem}
-          onPress={() => {
-            setShowingArtifacts(false);
-            setCurrentTab('approvals');
-          }}
-        >
-          <Text style={[styles.tabIcon, currentTab === 'approvals' && styles.tabActive]}>🛡️</Text>
-          <Text style={[styles.tabLabel, currentTab === 'approvals' && styles.tabActive]}>
-            Approval
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          accessibilityRole="tab"
-          accessibilityLabel="Workspace"
-          accessibilityState={{ selected: currentTab === 'projects' }}
-          style={styles.tabItem}
-          onPress={() => {
-            setShowingArtifacts(false);
-            setCurrentTab('projects');
-          }}
-        >
-          <Text style={[styles.tabIcon, currentTab === 'projects' && styles.tabActive]}>📁</Text>
-          <Text style={[styles.tabLabel, currentTab === 'projects' && styles.tabActive]}>
-            Workspace
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          accessibilityRole="tab"
-          accessibilityLabel="Settings"
-          accessibilityState={{ selected: currentTab === 'settings' }}
-          style={styles.tabItem}
-          onPress={() => {
-            setShowingArtifacts(false);
-            setCurrentTab('settings');
-          }}
-        >
-          <Text style={[styles.tabIcon, currentTab === 'settings' && styles.tabActive]}>⚙️</Text>
-          <Text style={[styles.tabLabel, currentTab === 'settings' && styles.tabActive]}>
-            Setting
-          </Text>
-        </TouchableOpacity>
-      </View>
+          <Tab.Screen
+            name="MoreTab"
+            options={{
+              tabBarLabel: idID.nav.more,
+              tabBarAccessibilityLabel: idID.nav.more,
+              tabBarIcon: ({ color, size }) => (
+                <MoreHorizontal size={size || 22} color={color} />
+              ),
+            }}
+          >
+            {renderMoreStack}
+          </Tab.Screen>
+        </Tab.Navigator>
+      </NavigationContainer>
     </SafeAreaView>
   );
 };
@@ -243,61 +291,27 @@ export const AppNavigator: React.FC = () => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: theme.colors.background,
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: theme.colors.background,
-  },
-  contentContainer: {
-    flex: 1,
   },
   toast: {
     position: 'absolute',
     top: 50,
     alignSelf: 'center',
-    backgroundColor: theme.colors.surfaceElevated,
-    borderColor: theme.colors.primary,
     borderWidth: 1,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.borderRadius.full,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
     elevation: 6,
-    zIndex: 999,
+    zIndex: 9999,
+    maxWidth: '90%',
   },
   toastText: {
-    color: theme.colors.textPrimary,
     fontSize: 12,
-    fontWeight: '600',
-  },
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: theme.colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.surfaceBorder,
-    paddingVertical: theme.spacing.xs,
-  },
-  tabItem: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: theme.controls.minTouchTarget,
-    paddingVertical: theme.spacing.xs,
-  },
-  tabIcon: {
-    fontSize: 18,
-    opacity: 0.6,
-  },
-  tabLabel: {
-    fontSize: 10,
-    color: theme.colors.textSecondary,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  tabActive: {
-    opacity: 1,
-    color: theme.colors.primary,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });

@@ -50,4 +50,6 @@ export interface TaskRepository {
     options?: { afterEventId?: string | undefined; limit?: number | undefined },
   ): Promise<TaskEventEnvelope[]>;
   getDanglingRunningTasks(): Promise<TaskRecord[]>;
+  claimTaskForRecovery?(taskId: string): Promise<boolean>;
+  releaseTaskRecovery?(taskId: string): Promise<void>;
 }

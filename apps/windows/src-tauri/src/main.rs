@@ -152,9 +152,13 @@ fn get_device_identity() -> DeviceIdentity {
     }
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Manager;
+
 struct AppState {
     capabilities: Arc<CapabilityRegistry>,
     allowlist: Arc<PathAllowlistManager>,
+    close_to_tray: Arc<AtomicBool>,
 }
 
 #[tauri::command]
@@ -320,7 +324,15 @@ fn open_in_browser(url: &str) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn open_in_browser(_url: &str) -> Result<(), String> {
-    Err("Google login is only supported on Windows".into())
+    Err("Browser opening is only supported on Windows".into())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("Hanya URL http:// dan https:// yang diizinkan".into());
+    }
+    open_in_browser(&url)
 }
 
 /// Runs the browser half of the Authorization Code + PKCE flow: binds a loopback port, hands the
@@ -356,14 +368,128 @@ async fn google_login(start_url_template: String) -> Result<String, String> {
         })?
 }
 
+#[tauri::command]
+fn get_close_to_tray(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.close_to_tray.load(Ordering::Relaxed))
+}
+
+#[tauri::command]
+fn set_close_to_tray(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    state.close_to_tray.store(enabled, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_autostart() -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let output = Command::new("reg")
+            .args(["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "PersonalAIOS"])
+            .output()
+            .map_err(|e| format!("Gagal memeriksa autostart: {e}"))?;
+        Ok(output.status.success())
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe_str = exe.to_string_lossy();
+        if enabled {
+            Command::new("reg")
+                .args(["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "PersonalAIOS", "/t", "REG_SZ", "/d", &format!("\"{}\"", exe_str), "/f"])
+                .output()
+                .map_err(|e| format!("Gagal mengaktifkan autostart: {e}"))?;
+        } else {
+            Command::new("reg")
+                .args(["delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "PersonalAIOS", "/f"])
+                .output()
+                .map_err(|e| format!("Gagal mematikan autostart: {e}"))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enabled;
+        Ok(())
+    }
+}
+
 fn main() {
     let capabilities = Arc::new(CapabilityRegistry::new());
     let allowlist = Arc::new(PathAllowlistManager::new());
+    let close_to_tray = Arc::new(AtomicBool::new(true));
+    let close_to_tray_for_event = Arc::clone(&close_to_tray);
 
     tauri::Builder::default()
         .manage(AppState {
             capabilities,
             allowlist,
+            close_to_tray,
+        })
+        .on_window_event(move |window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if close_to_tray_for_event.load(Ordering::Relaxed) {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let open_item = MenuItemBuilder::with_id("open", "Buka Personal AI OS").build(app)?;
+                let status_item = MenuItemBuilder::with_id("status", "Status: Aktif").enabled(false).build(app)?;
+                let quit_item = MenuItemBuilder::with_id("quit", "Keluar").build(app)?;
+                let menu = MenuBuilder::new(app)
+                    .items(&[&open_item, &status_item, &quit_item])
+                    .build()?;
+
+                let mut tray_builder = TrayIconBuilder::new()
+                    .menu(&menu)
+                    .tooltip("Personal AI OS — Windows Agent")
+                    .on_menu_event(|app, event| {
+                        match event.id.as_ref() {
+                            "open" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    });
+
+                if let Some(icon) = app.default_window_icon() {
+                    tray_builder = tray_builder.icon(icon.clone());
+                }
+
+                let _tray = tray_builder.build(app)?;
+            }
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_device_identity,
@@ -379,7 +505,12 @@ fn main() {
             read_allowed_text,
             get_allowed_file_metadata,
             write_allowed_file,
-            google_login
+            google_login,
+            open_external_url,
+            get_close_to_tray,
+            set_close_to_tray,
+            get_autostart,
+            set_autostart
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

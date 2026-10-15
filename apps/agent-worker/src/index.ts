@@ -14,6 +14,7 @@ import type { TaskRepository } from '@personal-ai-os/shared';
 import {
   artifactWriteAuditEntry,
   createDatabase,
+  DrizzleMemoryRepository,
   SqlApprovalRepository,
   SqlAuditRepository,
   SqlTaskRepository,
@@ -271,6 +272,8 @@ export const startWorkerProcess = async (): Promise<{
       })
     : undefined;
 
+  const memoryRepo = new DrizzleMemoryRepository(db);
+
   const workerHandle = createAgentWorker({
     redisUrl,
     concurrency: workerConcurrency,
@@ -285,6 +288,9 @@ export const startWorkerProcess = async (): Promise<{
       guard,
       registry,
       deviceDispatcher,
+      memoryProposalHandler: async (proposal) => {
+        await memoryRepo.createProposal(proposal);
+      },
     },
   });
 

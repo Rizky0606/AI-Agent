@@ -20,6 +20,9 @@ const token = 'isolated-runtime-bridge-test-token-0123456789';
 await mkdir(binaryDir);
 await writeFile(join(temporaryRoot, 'token'), token, { mode: 0o600 });
 await writeFile(join(binaryDir, 'omp'), '#!/bin/sh\nprintf "isolated-runtime-output\\n"\n');
+if (process.platform === 'win32') {
+  await writeFile(join(binaryDir, 'omp.cmd'), '@echo off\r\necho isolated-runtime-output\r\n');
+}
 await chmod(join(binaryDir, 'omp'), 0o755);
 
 const env = {

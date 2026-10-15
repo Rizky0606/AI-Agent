@@ -66,9 +66,12 @@ export interface ResearchContradiction {
   resolution?: string | undefined;
 }
 
+export type UrlFetcher = (url: string) => Promise<string | { content: string }>;
+
 export interface ResearchEvidence {
   sources: readonly ResearchSource[];
   claims: readonly ResearchClaim[];
+  query?: string | undefined;
   contradictions?: readonly ResearchContradiction[] | undefined;
   topicsCoveredCount?: number | undefined;
   totalTopicsCount?: number | undefined;

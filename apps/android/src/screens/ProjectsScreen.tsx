@@ -13,7 +13,11 @@ import { theme } from '../components/Theme.ts';
 import { useCreateProject, useProjects } from '../hooks/use-queries.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
-export const ProjectsScreen: React.FC = () => {
+export interface ProjectsScreenProps {
+  onBack?: () => void;
+}
+
+export const ProjectsScreen: React.FC<ProjectsScreenProps> = ({ onBack }) => {
   const { data: projects, isLoading, refetch } = useProjects();
   const { activeProjectId, setActiveProjectId } = useUiStore();
   const createProject = useCreateProject();
@@ -36,7 +40,17 @@ export const ProjectsScreen: React.FC = () => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Workspaces & Projects</Text>
+        {onBack ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Kembali"
+            style={{ width: 48, height: 48, justifyContent: 'center', alignItems: 'center', marginRight: 4 }}
+            onPress={onBack}
+          >
+            <Text style={{ color: theme.colors.primary, fontSize: 24, fontWeight: '700' }}>‹</Text>
+          </TouchableOpacity>
+        ) : null}
+        <Text style={[styles.headerTitle, { flex: 1 }]}>Workspaces & Projects</Text>
         <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
           <Text style={styles.addButtonText}>+ Buat Baru</Text>
         </TouchableOpacity>

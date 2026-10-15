@@ -700,6 +700,11 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
     assert.equal(finalTask?.progress, 100);
 
     // 4. Verify live events were streamed to the client WebSocket
+    const wsWaitStart = Date.now();
+    while (Date.now() - wsWaitStart < 3000) {
+      if (receivedEvents.some((e) => e.eventType === 'task.completed')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const completedEvent = receivedEvents.find((e) => e.eventType === 'task.completed');
     assert.ok(completedEvent, 'Client must receive realtime task.completed event via WebSocket');
     assert.equal(
