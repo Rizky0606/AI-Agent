@@ -503,6 +503,47 @@ async function main(req: IncomingMessage, res: ServerResponse): Promise<void> {
         ],
       });
     }
+    if (req.method === 'GET' && pathname === '/v1/runtimes/hermes/skills') {
+      return json(res, 200, {
+        skills: [
+          {
+            name: 'telegram_messenger',
+            description: 'Kirim notifikasi dan terima pesan interaktif melalui bot Telegram',
+            source: 'hermes',
+            isReadOnly: true,
+            parameters: { target: 'string', message: 'string' },
+          },
+          {
+            name: 'web_search',
+            description: 'Pencarian web publik dan pengumpulan kutipan informasi',
+            source: 'hermes',
+            isReadOnly: true,
+            parameters: { query: 'string' },
+          },
+          {
+            name: 'browser_automation',
+            description: 'Otomasi navigasi web dan ekstraksi data halaman',
+            source: 'hermes',
+            isReadOnly: true,
+            parameters: { url: 'string', action: 'string' },
+          },
+          {
+            name: 'memory_recall',
+            description: 'Pencarian catatan riwayat percakapan dan preferensi pengguna',
+            source: 'hermes',
+            isReadOnly: true,
+            parameters: { key: 'string' },
+          },
+          {
+            name: 'script_runner',
+            description: 'Eksekusi skrip otomasi Python/Bash dalam lingkungan terkontrol',
+            source: 'hermes',
+            isReadOnly: true,
+            parameters: { script: 'string', language: 'string' },
+          },
+        ],
+      });
+    }
     if (req.method === 'POST' && pathname === '/v1/runs') {
       if (rateLimited()) return json(res, 429, { error: 'rate limit exceeded' });
       if (queue.length + activeRuns.size >= MAX_QUEUE) return json(res, 429, { error: 'queue full' });

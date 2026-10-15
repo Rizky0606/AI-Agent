@@ -259,3 +259,18 @@ test('cancellation: kills process group and transitions status to cancelled', as
   }
   assert.equal(record.status, 'cancelled');
 });
+
+test('GET /v1/runtimes/hermes/skills returns read-only Hermes skills list', async () => {
+  const response = await fetch(`${url}/v1/runtimes/hermes/skills`, { headers });
+  assert.equal(response.status, 200);
+  const data = (await response.json()) as { skills: Array<{ name: string; isReadOnly: boolean }> };
+  assert.ok(Array.isArray(data.skills));
+  assert.ok(data.skills.length >= 4);
+  const names = data.skills.map((s) => s.name);
+  assert.ok(names.includes('telegram_messenger'));
+  assert.ok(names.includes('web_search'));
+  assert.ok(names.includes('browser_automation'));
+  assert.ok(names.includes('memory_recall'));
+  assert.ok(data.skills.every((s) => s.isReadOnly === true));
+});
+

@@ -218,15 +218,31 @@ export const startWorkerProcess = async (): Promise<{
   if (isProduction && (!runtimeBridgeUrl || !runtimeBridgeToken)) throw new Error('Production worker requires RUNTIME_BRIDGE_URL and RUNTIME_BRIDGE_TOKEN.');
   const runtimeManager = new RuntimeManager();
   if (runtimeBridgeUrl && runtimeBridgeToken) {
-    for (const runtimeId of ['omp', 'hermes'] as const) {
-      runtimeManager.register(new RemoteRuntimeAdapter({
-        id: runtimeId,
-        name: runtimeId === 'omp' ? 'OMP host bridge' : 'Hermes host bridge',
-        version: runtimeId === 'omp' ? '18.6.1' : '0.20.5',
-        baseUrl: runtimeBridgeUrl,
-        token: runtimeBridgeToken,
-      }));
-    }
+    runtimeManager.register(new RemoteRuntimeAdapter({
+      id: 'omp',
+      name: 'OMP host bridge',
+      version: '18.6.1',
+      baseUrl: runtimeBridgeUrl,
+      token: runtimeBridgeToken,
+      capabilities: [
+        { name: 'coding', description: 'Coding engine & repo editing', level: 'write' },
+        { name: 'repo', description: 'Workspace repository inspect & edit', level: 'write' },
+        { name: 'terminal', description: 'Host runtime execution', level: 'execute' },
+      ],
+    }));
+    runtimeManager.register(new RemoteRuntimeAdapter({
+      id: 'hermes',
+      name: 'Hermes host bridge',
+      version: '0.20.5',
+      baseUrl: runtimeBridgeUrl,
+      token: runtimeBridgeToken,
+      capabilities: [
+        { name: 'automation', description: 'Task automation & workflow orchestration', level: 'execute' },
+        { name: 'skill', description: 'Hermes skills execution & tools', level: 'execute' },
+        { name: 'general', description: 'General assistant tasks', level: 'read' },
+        { name: 'terminal', description: 'Host runtime execution', level: 'execute' },
+      ],
+    }));
     await runtimeManager.initializeAll();
   }
   if (runtimeBridgeUrl && runtimeBridgeToken) {

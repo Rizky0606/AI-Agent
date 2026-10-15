@@ -5,7 +5,7 @@ import { idID } from '../src/ui/locales/id-ID.ts';
 import type { ChatConversation } from '../src/state/agent-store.ts';
 
 test('Conversation Grouping: correctly groups by today, yesterday, and older', () => {
-  const now = new Date();
+  const now = new Date(2026, 9, 16, 15, 0, 0); // 3 PM reference
 
   const convToday: ChatConversation = {
     id: 'c-today',

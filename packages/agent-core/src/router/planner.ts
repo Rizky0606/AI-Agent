@@ -13,6 +13,8 @@ export class Planner {
         return this.createWindowsLocalPlan(planId, prompt);
       case 'heavy_untrusted':
         return this.createSandboxPlan(planId, prompt);
+      case 'automation':
+        return this.createAutomationPlan(planId, prompt);
       case 'simple_chat':
       default:
         return this.createChatPlan(planId, prompt);
@@ -311,4 +313,45 @@ export class Planner {
       estimatedRisk: 'LOW',
     };
   }
+
+  private createAutomationPlan(planId: string, prompt: string): TaskPlan {
+    return {
+      planId,
+      taskKind: 'automation',
+      title: `Otomasi: ${prompt.slice(0, 50)}...`,
+      objective: prompt,
+      steps: [
+        {
+          id: 'step-1-analyze-automation',
+          stepNumber: 1,
+          name: 'analyze_automation',
+          description: 'Menganalisis parameter otomasi, skill yang dibutuhkan, dan input pengguna.',
+          actionType: 'internal',
+          expectedOutput: 'Parameter alur kerja otomasi dan skill teridentifikasi.',
+          acceptanceCriteria: ['Parameter otomasi tervalidasi', 'Target aksi terdefinisi'],
+        },
+        {
+          id: 'step-2-execute-workflow',
+          stepNumber: 2,
+          name: 'execute_workflow',
+          description: 'Mengeksekusi alur kerja otomasi atau skill melalui runtime Hermes dengan pengawasan izin.',
+          actionType: 'external_tool',
+          expectedOutput: 'Eksekusi otomasi selesai dan menghasilkan output terverifikasi.',
+          acceptanceCriteria: ['Aksi dieksekusi dengan izin yang sah', 'Output otomasi diperoleh'],
+        },
+        {
+          id: 'step-3-report-result',
+          stepNumber: 3,
+          name: 'report_result',
+          description: 'Menyusun laporan hasil otomasi dan mencatat artefak hasil bila ada.',
+          actionType: 'reporting',
+          expectedOutput: 'Ringkasan hasil eksekusi otomasi disajikan kepada pengguna.',
+          acceptanceCriteria: ['Hasil dilaporkan secara jelas', 'Artefak tersimpan jika relevan'],
+        },
+      ],
+      requiredPermissions: ['tool:execute'],
+      estimatedRisk: 'LOW',
+    };
+  }
 }
+

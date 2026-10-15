@@ -20,7 +20,12 @@ import type { RiskLevel } from '@personal-ai-os/permissions';
 export type AgentMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
 export type ExecutionRuntime = 'sandbox' | 'windows_agent' | 'repo_runtime' | 'fast_model';
 export type AgentTaskIntent =
-  'simple_chat' | 'coding' | 'research' | 'windows_local' | 'heavy_untrusted';
+  | 'simple_chat'
+  | 'coding'
+  | 'research'
+  | 'windows_local'
+  | 'heavy_untrusted'
+  | 'automation';
 
 export interface IntentAnalysisResult {
   intent: AgentTaskIntent;

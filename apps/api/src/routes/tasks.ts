@@ -71,6 +71,18 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
           error: { code: 'INVALID_MODE', message: 'payload.mode must be auto, fast, coding, complex, or research', requestId: request.id },
         });
       }
+      const requestedRuntime = body.payload.runtime;
+      if (
+        requestedRuntime !== undefined &&
+        requestedRuntime !== 'auto' &&
+        requestedRuntime !== 'omp' &&
+        requestedRuntime !== 'hermes' &&
+        requestedRuntime !== 'native'
+      ) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_RUNTIME', message: 'payload.runtime must be auto, omp, hermes, or native', requestId: request.id },
+        });
+      }
       // Ensure project exists and belongs to user
       const project = await deps.projectRepo.getProject(user.id, body.projectId);
       if (!project) {

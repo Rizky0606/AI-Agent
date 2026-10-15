@@ -81,6 +81,12 @@ export const idID = {
     runAsTask: 'Jalankan sebagai tugas',
     runAsTaskRunning: 'Membuat tugas…',
     taskFromChatTitle: 'Tugas dari percakapan ini',
+    runtimeLabel: 'Runtime:',
+    runtimeAuto: 'Runtime: Auto',
+    runtimeOmp: 'Runtime: OMP (Coding)',
+    runtimeHermes: 'Runtime: Hermes (Otomasi)',
+    runtimeNative: 'Runtime: Bawaan',
+    runtimeFallbackBanner: 'Pengalihan Runtime (Fallback Otomatis)',
   },
   activity: {
     title: 'Aktivitas & Persetujuan',

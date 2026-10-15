@@ -1,6 +1,17 @@
-export type { TaskRecord, TaskEventEnvelope, TaskStatus } from '@personal-ai-os/shared';
-import type { TaskRecord } from '@personal-ai-os/shared';
+import type { TaskRecord, TaskEventEnvelope, TaskStatus } from '@personal-ai-os/shared';
+export type { TaskRecord, TaskEventEnvelope, TaskStatus };
 export type TaskItem = TaskRecord;
+
+export type RuntimeId = 'auto' | 'omp' | 'hermes' | 'native';
+
+export interface RuntimeDescriptor {
+  id: 'omp' | 'hermes' | 'native';
+  name: string;
+  version: string;
+  status: 'ready' | 'offline';
+  healthText: string;
+  capabilities: string[];
+}
 
 export interface User {
   id: string;

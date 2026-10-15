@@ -18,6 +18,7 @@ import {
   type RefreshResponse,
   type User,
   type UserPreferences,
+  type RuntimeDescriptor,
 } from './types.ts';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
 
@@ -529,6 +530,14 @@ export class ApiClient {
     return this.request<{ success: boolean; status: string }>(`/v1/memories/proposals/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
     });
+  }
+
+  async listRuntimes(): Promise<{ runtimes: RuntimeDescriptor[] }> {
+    return this.request<{ runtimes: RuntimeDescriptor[] }>('/v1/runtimes');
+  }
+
+  async listSkills(): Promise<{ skills: Array<{ id: string; name: string; isEnabled: boolean; isReadOnly?: boolean; manifest?: { name: string; description: string; category?: string } }> }> {
+    return this.request<{ skills: Array<{ id: string; name: string; isEnabled: boolean; isReadOnly?: boolean; manifest?: { name: string; description: string; category?: string } }> }>('/v1/skills');
   }
 }
 

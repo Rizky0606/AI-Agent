@@ -101,6 +101,9 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
           path = typeof evt.payload?.path === 'string' ? evt.payload.path : undefined;
           diff = typeof evt.payload?.diff === 'string' ? evt.payload.diff : undefined;
           detail = path ? `Mengubah file: ${path}` : 'Perubahan file diterapkan.';
+        } else if (evt.payload?.action === 'runtime_fallback') {
+          title = 'Pengalihan Runtime (Fallback)';
+          detail = String(evt.payload?.fallbackReason ?? 'Runtime dialihkan karena kendala kesiapan sistem.');
         } else if (evt.payload?.action === 'runtime_stream') {
           title = 'Output Runtime (Streaming)';
           detail = String(evt.payload?.text ?? '');
@@ -198,7 +201,23 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
 
         {/* Overview Card */}
         <View style={styles.card}>
-          <Text style={styles.taskKindTitle}>{task.kind.replace('_', ' ').toUpperCase()}</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.taskKindTitle}>{task.kind.replace('_', ' ').toUpperCase()}</Text>
+            {Boolean(task.payload?.runtime || task.payload?.selectedRuntimeId) && (
+              <Text style={styles.runtimeBadgeText}>
+                {String(task.payload?.runtime || task.payload?.selectedRuntimeId)}
+              </Text>
+            )}
+          </View>
+
+          {task.payload?.runtimeFallback === true ? (
+            <View style={styles.fallbackNotice}>
+              <Text style={styles.fallbackNoticeTitle}>⚠️ Pengalihan Runtime Otomatis</Text>
+              <Text style={styles.fallbackNoticeText}>
+                {String(task.payload?.fallbackReason || `Dialihkan dari ${task.payload?.originalRuntimeId}`)}
+              </Text>
+            </View>
+          ) : null}
 
           <View style={styles.progressRow}>
             <Text style={styles.label}>Penyelesaian</Text>
@@ -423,6 +442,42 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '700',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: theme.spacing.sm,
+  },
+  runtimeBadgeText: {
+    color: theme.colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    backgroundColor: theme.colors.surfaceElevated,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+  },
+  fallbackNotice: {
+    backgroundColor: theme.colors.riskHighBg,
+    borderColor: theme.colors.warning,
+    borderWidth: 1,
+    padding: theme.spacing.sm,
+    borderRadius: theme.borderRadius.sm,
+    marginBottom: theme.spacing.md,
+  },
+  fallbackNoticeTitle: {
+    color: theme.colors.warning,
+    fontWeight: '700',
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  fallbackNoticeText: {
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    lineHeight: 16,
   },
   errorNotice: {
     backgroundColor: theme.colors.dangerBg,

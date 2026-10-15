@@ -29,7 +29,7 @@ import {
 import { ModelSelectorModal } from '../components/ModelSelectorModal.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { useAppTheme } from '../hooks/use-theme.ts';
-import { useHealth } from '../hooks/use-queries.ts';
+import { useHealth, useSkills } from '../hooks/use-queries.ts';
 import { idID } from '../locales/id-ID.ts';
 import { useAuthStore } from '../state/auth-store.ts';
 import { useChatStore } from '../state/chat-store.ts';
@@ -56,6 +56,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   } = useUiStore();
   const { userDefaultModel } = useChatStore();
   const { data: health, isLoading: healthLoading } = useHealth();
+  const { data: skills, isLoading: skillsLoading } = useSkills();
 
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -323,7 +324,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         ) : null}
       </View>
 
-      {/* 6. Skill & MCP (Kerangka Sesi 14) */}
+      {/* 6. Skill & MCP (Hermes Read-Only & Manajer Skill) */}
       <View
         style={[
           styles.card,
@@ -345,14 +346,45 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             ]}
           >
             <Text style={[styles.comingSoonText, { color: theme.colors.primary }]}>
-              Sesi 14
+              Hermes 0.20.5
             </Text>
           </View>
         </View>
 
-        <Text style={[styles.cardDesc, { color: theme.colors.textMuted }]}>
-          {idID.more.skillsScaffoldDesc}
+        <Text style={[styles.cardDesc, { color: theme.colors.textSecondary }]}>
+          Daftar skill Hermes terhubung read-only. Pemanfaatan memori/eksekusi dilakukan dengan sanitasi output ketat.
         </Text>
+
+        {skillsLoading ? (
+          <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginTop: 10 }} />
+        ) : (
+          <View style={{ marginTop: 10, gap: 8 }}>
+            {(skills ?? []).map((skill) => (
+              <View
+                key={skill.id}
+                style={{
+                  padding: 10,
+                  borderRadius: 8,
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderWidth: 1,
+                  borderColor: theme.colors.surfaceBorder,
+                }}
+              >
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <Text style={{ color: theme.colors.textPrimary, fontWeight: '700', fontSize: 13 }}>
+                    {skill.name}
+                  </Text>
+                  <Text style={{ color: theme.colors.primary, fontSize: 10, fontWeight: '600' }}>
+                    {skill.isReadOnly ? 'Read-Only' : 'Aktif'}
+                  </Text>
+                </View>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 11, lineHeight: 15 }}>
+                  {skill.manifest?.description || 'Skill otomasi Hermes'}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
       {/* 7. Lanjutan (Collapsible) */}

@@ -151,4 +151,42 @@ export class RuntimeManager {
     }
     await runtime.cancel(taskId);
   }
+
+  getHumanFriendlyStatus(runtimeId: string, health: RuntimeHealth): {
+    id: string;
+    label: string;
+    description: string;
+    status: 'ready' | 'degraded' | 'offline';
+    error?: string;
+  } {
+    if (runtimeId === 'omp') {
+      return {
+        id: 'omp',
+        label: 'OMP Coding Engine (v18.6.1)',
+        description: health.healthy
+          ? 'Siap untuk koding, manipulasi repositori, dan pemecahan bug.'
+          : `Tidak tersedia: ${health.error ?? 'koneksi bridge host terputus'}.`,
+        status: health.healthy ? 'ready' : 'offline',
+        ...(health.error ? { error: health.error } : {}),
+      };
+    }
+    if (runtimeId === 'hermes') {
+      return {
+        id: 'hermes',
+        label: 'Hermes Agent (v0.20.5)',
+        description: health.healthy
+          ? 'Siap untuk otomasi tugas, eksekusi skill, dan integrasi layanan.'
+          : `Tidak tersedia: ${health.error ?? 'koneksi bridge host terputus'}.`,
+        status: health.healthy ? 'ready' : 'offline',
+        ...(health.error ? { error: health.error } : {}),
+      };
+    }
+    return {
+      id: runtimeId,
+      label: `Runtime ${runtimeId}`,
+      description: health.healthy ? 'Siap digunakan.' : `Tidak tersedia: ${health.error ?? 'pemeriksaan gagal'}.`,
+      status: health.healthy ? 'ready' : 'offline',
+      ...(health.error ? { error: health.error } : {}),
+    };
+  }
 }

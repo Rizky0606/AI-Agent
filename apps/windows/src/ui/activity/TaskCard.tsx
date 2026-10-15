@@ -39,7 +39,31 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       <div className="card-meta-row">
         <span>ID: <code>{task.id.slice(0, 8)}</code></span>
         {task.progress != null && <span>{task.progress}%</span>}
+        {Boolean(task.payload?.runtime || task.payload?.selectedRuntimeId) && (
+          <span style={{ fontSize: 11, color: 'var(--accent-cyan, #06b6d4)', fontWeight: 500 }}>
+            Runtime: {String(task.payload?.runtime || task.payload?.selectedRuntimeId)}
+          </span>
+        )}
       </div>
+
+      {task.payload?.runtimeFallback === true && (
+        <div
+          className="task-fallback-banner"
+          style={{
+            marginTop: '8px',
+            marginBottom: '8px',
+            padding: '6px 10px',
+            backgroundColor: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(245, 158, 11, 0.3)',
+            borderRadius: '6px',
+            color: '#f59e0b',
+            fontSize: '12px',
+            lineHeight: 1.4,
+          }}
+        >
+          <strong>Pengalihan Runtime:</strong> {String(task.payload.fallbackReason || `Dialihkan dari ${task.payload.originalRuntimeId}`)}
+        </div>
+      )}
 
       {task.checkpoint && (
         <div className="card-meta-row">
@@ -138,14 +162,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                       {ev.createdAt ? new Date(ev.createdAt).toLocaleTimeString() : ''}
                     </span>
                   </div>
-                  {Boolean(payload.text) ? (
+                  {payload.text ? (
                     <div style={{ color: 'var(--text-main)', whiteSpace: 'pre-wrap', marginBottom: 4 }}>
                       {String(payload.text)}
                     </div>
                   ) : null}
                   {isDiff ? (
                     <div style={{ marginTop: 4, padding: 6, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11, overflowX: 'auto' }}>
-                      {Boolean(payload.path) ? <div style={{ color: 'var(--accent-cyan)', marginBottom: 2 }}>{String(payload.path)}</div> : null}
+                      {payload.path ? <div style={{ color: 'var(--accent-cyan)', marginBottom: 2 }}>{String(payload.path)}</div> : null}
                       <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                         {String(payload.diff).split('\n').map((line, lIdx) => {
                           let color = 'inherit';

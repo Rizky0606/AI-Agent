@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
-import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor } from '../api/client.ts';
+import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
@@ -240,6 +240,11 @@ export interface AgentState {
   setConversationModel: (model: string | null) => Promise<void>;
   setConversationMode: (mode: AgentState['selectedMode']) => Promise<void>;
   clearModelNotice: () => void;
+  selectedRuntime: RuntimeId;
+  runtimes: RuntimeDescriptor[];
+  runtimeStatus: string | null;
+  setSelectedRuntime: (runtime: RuntimeId) => void;
+  refreshRuntimes: () => Promise<void>;
 }
 
 export const createAgentStore = (
@@ -368,6 +373,9 @@ export const createAgentStore = (
     favoriteModels: readStoredFavorites(),
     userDefaultModel: null,
     userDefaultMode: 'fast',
+    selectedRuntime: 'auto',
+    runtimes: [],
+    runtimeStatus: null,
 
     setServerUrl: (url) => { if (get().serverUrl === url) return; set({ serverUrl: url }); void get().refreshChat(); },
     setChatDraft: (chatDraft) => set({ chatDraft }),
@@ -492,6 +500,8 @@ export const createAgentStore = (
       set({ conversationTasks: tasks });
     }),
 
+    setSelectedRuntime: (selectedRuntime) => set({ selectedRuntime }),
+
     launchChatTask: async ({ kind, prompt }) => {
       const state = get();
       const conversation = state.conversations.find((item) => item.id === state.activeConversationId);
@@ -504,7 +514,15 @@ export const createAgentStore = (
       if (!conversation.projectId) { set({ taskLaunchError: 'This conversation has no project to run the task in.' }); return; }
       set({ taskLaunchError: null });
       await run(async () => {
-        await api().createTask({ projectId: conversation.projectId!, kind, payload: { prompt: content }, conversationId: conversation.id });
+        await api().createTask({
+          projectId: conversation.projectId!,
+          kind,
+          payload: {
+            prompt: content,
+            ...(state.selectedRuntime !== 'auto' ? { runtime: state.selectedRuntime } : {}),
+          },
+          conversationId: conversation.id,
+        });
         const { tasks } = await api().listTasks({ conversationId: conversation.id });
         set({ conversationTasks: tasks });
       });
@@ -610,6 +628,17 @@ export const createAgentStore = (
           modelCatalogUnavailable: true,
           modelCatalogStatus: null,
         });
+      }
+    },
+
+    refreshRuntimes: async () => {
+      try {
+        const { runtimes } = await api().listRuntimes();
+        const readyCount = runtimes.filter((r) => r.status === 'ready').length;
+        const statusSummary = `${readyCount}/${runtimes.length} runtime siap`;
+        set({ runtimes, runtimeStatus: statusSummary });
+      } catch {
+        set({ runtimeStatus: 'Status runtime tidak dapat diperiksa' });
       }
     },
 

@@ -16,16 +16,21 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
   readonly id: string;
   readonly name: string;
   readonly version: string;
-  readonly capabilities: readonly RuntimeCapability[] = [
-    { name: 'coding', description: 'Host runtime coding', level: 'write' },
-    { name: 'terminal', description: 'Host runtime execution', level: 'execute' },
-  ];
+  readonly capabilities: readonly RuntimeCapability[];
   private readonly baseUrl: string;
   private readonly token: string;
   private readonly fetcher: typeof fetch;
   private readonly taskRuns = new Map<string, string>();
 
-  constructor(options: { id: string; name: string; version: string; baseUrl: string; token: string; fetcher?: typeof fetch }) {
+  constructor(options: {
+    id: string;
+    name: string;
+    version: string;
+    baseUrl: string;
+    token: string;
+    capabilities?: readonly RuntimeCapability[] | undefined;
+    fetcher?: typeof fetch;
+  }) {
     super();
     this.id = options.id;
     this.name = options.name;
@@ -33,6 +38,10 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.token = options.token;
     this.fetcher = options.fetcher ?? fetch;
+    this.capabilities = options.capabilities ?? [
+      { name: 'coding', description: 'Host runtime coding', level: 'write' },
+      { name: 'terminal', description: 'Host runtime execution', level: 'execute' },
+    ];
   }
 
   private async request<T>(path: string, init?: RequestInit, retries = 1): Promise<T> {

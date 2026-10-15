@@ -25,14 +25,16 @@ test('Skills API: sync from disk, list, detail, enable/disable, execute, and rol
     },
   });
 
-  // 1. Initial list is empty
-  const emptyRes = await app.inject({
+  // 1. Initial list contains Hermes read-only skills
+  const initialRes = await app.inject({
     method: 'GET',
     url: '/v1/skills',
     headers: { authorization: `Bearer ${user.accessToken}` },
   });
-  assert.equal(emptyRes.statusCode, 200);
-  assert.deepEqual(emptyRes.json().skills, []);
+  assert.equal(initialRes.statusCode, 200);
+  const initialSkills = initialRes.json().skills;
+  assert.ok(initialSkills.length >= 4);
+  assert.ok(initialSkills.every((s: { source: string; isReadOnly: boolean }) => s.source === 'hermes' && s.isReadOnly === true));
 
   // 2. Sync from disk folder
   const syncRes = await app.inject({
@@ -134,3 +136,53 @@ test('Skills API: sync from disk, list, detail, enable/disable, execute, and rol
   assert.equal(rollbackRes.json().skill.version, '1.0.0');
   assert.match(rollbackRes.json().message, /berhasil di-rollback/i);
 });
+
+test('Hermes Skills: exposed read-only, forbids enable/disable modifications', async () => {
+  const authRepo = new InMemoryAuthRepository();
+  const auth = createAuthService(authRepo, secret);
+  const skillRepo = new InMemorySkillRepository();
+  const user = await auth.register('bob-hermes@example.com', 'ValidPassword123!');
+  const app = await buildApp({
+    auth,
+    skills: { skillRepo },
+  });
+
+  const detailRes = await app.inject({
+    method: 'GET',
+    url: '/v1/skills/hermes_telegram_messenger',
+    headers: { authorization: `Bearer ${user.accessToken}` },
+  });
+  assert.equal(detailRes.statusCode, 200);
+  assert.equal(detailRes.json().skill.isReadOnly, true);
+
+  const disableRes = await app.inject({
+    method: 'POST',
+    url: '/v1/skills/hermes_telegram_messenger/disable',
+    headers: { authorization: `Bearer ${user.accessToken}` },
+  });
+  assert.equal(disableRes.statusCode, 403);
+  assert.match(disableRes.json().error, /read-only/i);
+});
+
+test('Runtimes API: GET /v1/runtimes returns plain Indonesian status for omp, hermes, native', async () => {
+  const authRepo = new InMemoryAuthRepository();
+  const auth = createAuthService(authRepo, secret);
+  const user = await auth.register('carol-runtimes@example.com', 'ValidPassword123!');
+  const app = await buildApp({ auth });
+
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/runtimes',
+    headers: { authorization: `Bearer ${user.accessToken}` },
+  });
+  assert.equal(res.statusCode, 200);
+  const { runtimes } = res.json() as { runtimes: Array<{ id: string; name: string; status: string; healthText: string }> };
+  assert.ok(Array.isArray(runtimes));
+  assert.equal(runtimes.length, 3);
+  const ids = runtimes.map((r) => r.id);
+  assert.ok(ids.includes('omp'));
+  assert.ok(ids.includes('hermes'));
+  assert.ok(ids.includes('native'));
+  assert.ok(runtimes.every((r) => typeof r.healthText === 'string' && r.healthText.length > 0));
+});
+

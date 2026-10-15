@@ -194,3 +194,11 @@ export const useHealth = () =>
     queryFn: () => defaultApiClient.checkHealth(),
     refetchInterval: 30_000,
   });
+
+// --- Skills ---
+export const useSkills = () =>
+  useQuery({
+    queryKey: ['skills'],
+    queryFn: () => defaultApiClient.listSkills().then((r) => r.skills),
+  });
+

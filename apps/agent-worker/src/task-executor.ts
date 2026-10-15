@@ -315,6 +315,25 @@ export class TaskExecutor {
           startPayload,
         );
         this.broadcaster.publish(startEvent);
+
+        if (routeResult.route.fallbackUsed || task.payload?.runtimeFallback) {
+          const originalId = routeResult.route.originalRuntimeId ?? (task.payload?.originalRuntimeId as string);
+          const selectedId = routeResult.route.selectedRuntimeId ?? (task.payload?.runtime as string) ?? 'native';
+          const reason = routeResult.route.fallbackReason ?? (task.payload?.fallbackReason as string);
+          const fallbackEvent = await this.taskRepo.createTaskEvent(
+            task.userId,
+            task.id,
+            'task.progress',
+            {
+              action: 'runtime_fallback',
+              originalRuntimeId: originalId,
+              selectedRuntimeId: selectedId,
+              fallbackReason: reason,
+              text: `PEMBERITAHUAN RUNTIME: ${reason}`,
+            },
+          );
+          this.broadcaster.publish(fallbackEvent);
+        }
       }
 
       // Ensure state is running when starting/resuming steps
@@ -336,8 +355,15 @@ export class TaskExecutor {
         task.payload?.type === 'research' ||
         (task.payload?.intent === 'research' && !isSimulation);
 
-      if (task.payload?.useRuntime === true) {
-        await this.executeRuntimeTrack(task, prompt, selectedRuntimeId ?? (task.payload?.runtime as string) ?? this.preferredRuntimeId, span);
+      const targetRuntime = selectedRuntimeId ?? (task.payload?.runtime as string) ?? this.preferredRuntimeId;
+      const shouldUseRuntime =
+        task.payload?.useRuntime === true ||
+        task.payload?.runtime === 'omp' ||
+        task.payload?.runtime === 'hermes' ||
+        (task.payload?.runtime !== 'native' && (targetRuntime === 'omp' || targetRuntime === 'hermes'));
+
+      if (shouldUseRuntime && targetRuntime && targetRuntime !== 'native' && this.runtimeManager?.getRuntime(targetRuntime)) {
+        await this.executeRuntimeTrack(task, prompt, targetRuntime, span);
         return;
       }
 
@@ -595,7 +621,10 @@ export class TaskExecutor {
       this.broadcaster.publish(failed);
       return;
     }
-    const artifact = { id: `runtime-output-${task.id}`, type: 'runtime_output', title: `${runtimeId} output`, content: output };
+    const sanitizedOutput = result.untrustedOutputWarning || runtimeId === 'hermes'
+      ? `<untrusted_content is_instruction="false">\n${output}\n</untrusted_content>`
+      : output;
+    const artifact = { id: `runtime-output-${task.id}`, type: 'runtime_output', title: `${runtimeId} output`, content: sanitizedOutput };
     const evaluation = new GenericEvaluator().evaluate((task.payload?.acceptanceCriteria as AcceptanceCriterion[]) ?? [{ id: 'runtime_output', description: 'Runtime menghasilkan output', category: 'runtime', required: true, expectedEvidenceType: 'artifact' }], { artifacts: [artifact], outputs: { runtimeOutput: output }, logs: [`runtime:${runtimeId}`] });
     if (!evaluation.passed) throw new Error(evaluation.completionBlockedReason ?? 'Runtime output rejected by evaluator.');
     await this.taskRepo.updateTaskProgress(task.userId, task.id, 100, createVersionedCheckpoint({ version: (task.checkpoint?.version ?? 0) + 1, stepIndex: 1, totalSteps: 1, lastExecutedAction: `runtime:${runtimeId}`, actionType: 'external_tool', verified: true }));

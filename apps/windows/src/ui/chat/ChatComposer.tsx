@@ -8,6 +8,7 @@ import {
   RefreshCw,
   X,
   AlertCircle,
+  Terminal,
 } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import { idID } from '../locales/id-ID.ts';
@@ -27,6 +28,11 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
     selectedModel,
     selectedMode,
     setSelectedMode,
+    selectedRuntime,
+    setSelectedRuntime,
+    runtimes,
+    runtimeStatus,
+    refreshRuntimes,
     modelCatalogUnavailable,
     modelNotice,
     clearModelNotice,
@@ -36,6 +42,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
   const [isModelPopoverOpen, setIsModelPopoverOpen] = useState(false);
   const localRef = useRef<HTMLTextAreaElement | null>(null);
   const modelChipAnchorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (runtimes.length === 0) {
+      void refreshRuntimes();
+    }
+  }, [runtimes.length, refreshRuntimes]);
 
   // Auto resize textarea height based on content up to 140px
   useEffect(() => {
@@ -127,6 +139,30 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
                 <option value="coding">{idID.chat.modes.coding}</option>
                 <option value="complex">{idID.chat.modes.complex}</option>
                 <option value="research">{idID.chat.modes.research}</option>
+              </select>
+            </div>
+
+            {/* Runtime Chip */}
+            <div className="composer-chip" title={runtimeStatus || 'Pilih target eksekusi runtime'}>
+              <Terminal size={12} color="var(--accent-emerald, #10b981)" />
+              <select
+                value={selectedRuntime}
+                onChange={(e) => setSelectedRuntime(e.target.value as typeof selectedRuntime)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: 11,
+                  color: 'inherit',
+                  cursor: 'pointer',
+                  outline: 'none',
+                  padding: 0,
+                }}
+                aria-label={idID.chat.runtimeLabel}
+              >
+                <option value="auto">{idID.chat.runtime.auto}</option>
+                <option value="omp">{idID.chat.runtime.omp}</option>
+                <option value="hermes">{idID.chat.runtime.hermes}</option>
+                <option value="native">{idID.chat.runtime.native}</option>
               </select>
             </div>
 

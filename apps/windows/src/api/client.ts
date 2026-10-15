@@ -442,4 +442,20 @@ export class ApiClient {
       method: 'POST',
     });
   }
+
+  async listRuntimes(): Promise<{ runtimes: RuntimeDescriptor[] }> {
+    return this.request<{ runtimes: RuntimeDescriptor[] }>('/v1/runtimes');
+  }
 }
+
+export type RuntimeId = 'auto' | 'omp' | 'hermes' | 'native';
+
+export interface RuntimeDescriptor {
+  id: 'omp' | 'hermes' | 'native';
+  name: string;
+  version: string;
+  status: 'ready' | 'offline';
+  healthText: string;
+  capabilities: string[];
+}
+

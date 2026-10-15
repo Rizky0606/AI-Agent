@@ -7,6 +7,7 @@ import {
   onTopicGuardHandler,
   researchQualityChecklistHandler,
   type SkillHandler,
+  type SkillRecord,
   SkillDisabledError,
   SkillExecutor,
   SkillLoader,
@@ -63,6 +64,109 @@ export function registerSkillRoutes(
     );
   };
 
+  const HERMES_READONLY_SKILLS: SkillRecord[] = [
+    {
+      id: 'hermes-skill-telegram',
+      name: 'hermes_telegram_messenger',
+      version: '0.20.5',
+      isEnabled: true,
+      source: 'hermes',
+      isReadOnly: true,
+      manifest: {
+        name: 'hermes_telegram_messenger',
+        version: '0.20.5',
+        description: 'Kirim notifikasi dan interaksi pesan melalui bot Telegram terhubung',
+        category: 'communication',
+        toolRequirements: ['telegram:send'],
+        permissions: ['tool:execute'],
+        compatibility: { platforms: ['backend'] },
+        metadata: { source: 'hermes', readOnly: true, risk: 'LOW' },
+      },
+      createdAt: new Date('2026-10-15T00:00:00.000Z'),
+      updatedAt: new Date('2026-10-15T00:00:00.000Z'),
+    } as unknown as SkillRecord,
+    {
+      id: 'hermes-skill-search',
+      name: 'hermes_web_search',
+      version: '0.20.5',
+      isEnabled: true,
+      source: 'hermes',
+      isReadOnly: true,
+      manifest: {
+        name: 'hermes_web_search',
+        version: '0.20.5',
+        description: 'Pencarian web publik dan perangkuman informasi berbasis Hermes',
+        category: 'research',
+        toolRequirements: ['web:search'],
+        permissions: ['tool:execute'],
+        compatibility: { platforms: ['backend'] },
+        metadata: { source: 'hermes', readOnly: true, risk: 'LOW' },
+      },
+      createdAt: new Date('2026-10-15T00:00:00.000Z'),
+      updatedAt: new Date('2026-10-15T00:00:00.000Z'),
+    } as unknown as SkillRecord,
+    {
+      id: 'hermes-skill-browser',
+      name: 'hermes_browser_automation',
+      version: '0.20.5',
+      isEnabled: true,
+      source: 'hermes',
+      isReadOnly: true,
+      manifest: {
+        name: 'hermes_browser_automation',
+        version: '0.20.5',
+        description: 'Otomasi navigasi browser dan ekstraksi konten halaman',
+        category: 'automation',
+        toolRequirements: ['browser:navigate'],
+        permissions: ['tool:execute'],
+        compatibility: { platforms: ['backend'] },
+        metadata: { source: 'hermes', readOnly: true, risk: 'MEDIUM' },
+      },
+      createdAt: new Date('2026-10-15T00:00:00.000Z'),
+      updatedAt: new Date('2026-10-15T00:00:00.000Z'),
+    } as unknown as SkillRecord,
+    {
+      id: 'hermes-skill-memory',
+      name: 'hermes_memory_recall',
+      version: '0.20.5',
+      isEnabled: true,
+      source: 'hermes',
+      isReadOnly: true,
+      manifest: {
+        name: 'hermes_memory_recall',
+        version: '0.20.5',
+        description: 'Pencarian memori dan preferensi interaksi pengguna Hermes',
+        category: 'memory',
+        toolRequirements: ['memory:read'],
+        permissions: ['tool:execute'],
+        compatibility: { platforms: ['backend'] },
+        metadata: { source: 'hermes', readOnly: true, risk: 'LOW' },
+      },
+      createdAt: new Date('2026-10-15T00:00:00.000Z'),
+      updatedAt: new Date('2026-10-15T00:00:00.000Z'),
+    } as unknown as SkillRecord,
+    {
+      id: 'hermes-skill-runner',
+      name: 'hermes_script_runner',
+      version: '0.20.5',
+      isEnabled: true,
+      source: 'hermes',
+      isReadOnly: true,
+      manifest: {
+        name: 'hermes_script_runner',
+        version: '0.20.5',
+        description: 'Eksekusi skrip otomasi Python/Bash dalam lingkungan terkontrol',
+        category: 'tools',
+        toolRequirements: ['terminal:execute'],
+        permissions: ['tool:execute'],
+        compatibility: { platforms: ['backend'] },
+        metadata: { source: 'hermes', readOnly: true, risk: 'MEDIUM' },
+      },
+      createdAt: new Date('2026-10-15T00:00:00.000Z'),
+      updatedAt: new Date('2026-10-15T00:00:00.000Z'),
+    } as unknown as SkillRecord,
+  ];
+
   // 1. List Skills
   app.get(
     '/v1/skills',
@@ -74,10 +178,11 @@ export function registerSkillRoutes(
       const isEnabledFilter =
         req.query.isEnabled !== undefined ? req.query.isEnabled === 'true' : undefined;
 
-      const skills = await skillRepo.listSkills(
+      const dbSkills = await skillRepo.listSkills(
         isEnabledFilter !== undefined ? { isEnabled: isEnabledFilter } : undefined,
       );
-      return reply.code(200).send({ skills });
+      const allSkills = isEnabledFilter === false ? dbSkills : [...dbSkills, ...HERMES_READONLY_SKILLS];
+      return reply.code(200).send({ skills: allSkills });
     },
   );
   // Catalog exposes manifest policy fields without creating a parallel tool registry.
@@ -114,12 +219,13 @@ export function registerSkillRoutes(
     '/v1/skills/:name',
     async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
       await getUser(req);
-      const skill = await skillRepo.getSkillByName(req.params.name);
+      const skill = (await skillRepo.getSkillByName(req.params.name)) ??
+        HERMES_READONLY_SKILLS.find((s) => s.name === req.params.name);
       if (!skill) {
         return reply.code(404).send({ error: `Skill '${req.params.name}' tidak ditemukan.` });
       }
 
-      const revisions = await skillRepo.getSkillRevisions(req.params.name);
+      const revisions = skill.isReadOnly ? [] : await skillRepo.getSkillRevisions(req.params.name);
       return reply.code(200).send({ skill, revisions });
     },
   );
@@ -129,6 +235,9 @@ export function registerSkillRoutes(
     '/v1/skills/:name/enable',
     async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
       await getUser(req);
+      if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
+        return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
+      }
       try {
         const skill = await skillRepo.enableSkill(req.params.name);
         return reply.code(200).send({ skill });
@@ -144,6 +253,9 @@ export function registerSkillRoutes(
     '/v1/skills/:name/disable',
     async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
       await getUser(req);
+      if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
+        return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
+      }
       try {
         const skill = await skillRepo.disableSkill(req.params.name);
         return reply.code(200).send({ skill });

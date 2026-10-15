@@ -191,8 +191,74 @@ test('Agent Worker executes explicit runtime task through RuntimeManager and eva
   await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
   const updated = await repo.getTask(task.userId, task.id);
   assert.equal(updated?.status, 'completed');
-  assert.equal((updated?.artifacts?.[0] as Record<string, unknown>)?.content, 'OK');
+  assert.equal(
+    (updated?.artifacts?.[0] as Record<string, unknown>)?.content,
+    '<untrusted_content is_instruction="false">\nOK\n</untrusted_content>',
+  );
   assert.ok(broadcaster.published.some((event) => event.eventType === 'task.tool_call' && event.payload.untrustedOutputWarning === true));
+});
+
+test('Agent Worker executes Hermes runtime task and emits untrusted warning', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new TestBroadcaster();
+  const manager = new RuntimeManager();
+  const hermesRuntime: AgentRuntime = {
+    id: 'hermes',
+    name: 'Hermes Agent',
+    version: '0.20.5',
+    capabilities: [{ name: 'automation', level: 'execute' }],
+    getStatus: () => 'idle',
+    initialize: async () => undefined,
+    healthCheck: async () => ({ healthy: true, lastChecked: new Date().toISOString() }),
+    execute: async (input) => ({
+      taskId: input.taskId,
+      status: 'completed',
+      output: 'Hermes automation workflow completed.',
+      durationMs: 12,
+      untrustedOutputWarning: true,
+    }),
+    pause: async () => undefined,
+    resume: async () => undefined,
+    cancel: async () => undefined,
+  };
+  manager.register(hermesRuntime);
+  const executor = new TaskExecutor(repo, broadcaster, { runtimeManager: manager });
+  const { task } = await repo.createTask({
+    userId: 'user-1',
+    projectId: 'proj-1',
+    kind: 'generic_task',
+    payload: { runtime: 'hermes', prompt: 'Run telegram automation' },
+  });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+  const updated = await repo.getTask(task.userId, task.id);
+  assert.equal(updated?.status, 'completed');
+  assert.ok(
+    String((updated?.artifacts?.[0] as Record<string, unknown>)?.content).includes('<untrusted_content is_instruction="false">'),
+  );
+});
+
+test('Agent Worker emits explicit fallback event when task payload indicates runtimeFallback', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new TestBroadcaster();
+  const executor = new TaskExecutor(repo, broadcaster);
+  const { task } = await repo.createTask({
+    userId: 'user-1',
+    projectId: 'proj-1',
+    kind: 'generic_task',
+    payload: {
+      goal: 'Check system status',
+      isSimulation: true,
+      runtimeFallback: true,
+      originalRuntimeId: 'omp',
+      fallbackReason: 'OMP socket down. Dialihkan ke Bawaan.',
+    },
+  });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+  const fallbackEvents = broadcaster.published.filter(
+    (ev) => ev.eventType === 'task.progress' && ev.payload.action === 'runtime_fallback',
+  );
+  assert.equal(fallbackEvents.length, 1);
+  assert.equal(fallbackEvents[0]?.payload.fallbackReason, 'OMP socket down. Dialihkan ke Bawaan.');
 });
 
 test('Agent Worker streams runtime events (tool_start, file_edit with diff) into task events', async () => {

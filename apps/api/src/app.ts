@@ -33,6 +33,7 @@ import { registerSkillRoutes } from './routes/skills.ts';
 import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
 import { registerSchedulesRoutes } from './routes/schedules.ts';
 import { registerModelRoutes } from './routes/models.ts';
+import { registerRuntimeRoutes } from './routes/runtimes.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
@@ -151,6 +152,7 @@ export type AppDependencies = {
         allowedRedirectUris: string[];
       }
     | undefined;
+  runtimeBridgeUrl?: string | undefined;
 };
 
 const requestId = (request: { headers: Record<string, string | string[] | undefined> }): string => {
@@ -642,6 +644,12 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       notificationEngine: dependencies.schedules.notificationEngine ?? new NotificationEngine(),
     });
   }
+
+  registerRuntimeRoutes(app, {
+    auth: dependencies.auth,
+    runtimeBridgeUrl: dependencies.runtimeBridgeUrl ?? process.env.RUNTIME_BRIDGE_URL,
+    runtimeBridgeToken: dependencies.internalBridgeToken ?? process.env.RUNTIME_BRIDGE_TOKEN,
+  });
 
   return app;
 };

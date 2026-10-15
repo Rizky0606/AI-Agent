@@ -8,6 +8,7 @@ export interface ChatState {
   models: ModelDescriptor[];
   selectedModel: string;
   selectedMode: ChatMode;
+  selectedRuntime: 'auto' | 'omp' | 'hermes' | 'native';
   modelCatalogError: string | null;
   modelCatalogUnavailable: boolean;
   modelNotice: string | null;
@@ -28,6 +29,7 @@ export interface ChatState {
   loadCatalog: () => Promise<void>;
   setSelectedModel: (model: string) => void;
   setSelectedMode: (mode: ChatMode) => void;
+  setSelectedRuntime: (runtime: 'auto' | 'omp' | 'hermes' | 'native') => void;
   setConversationModel: (model: string | null) => Promise<void>;
   setConversationMode: (mode: ChatMode) => Promise<void>;
   toggleFavoriteModel: (modelId: string) => void;
@@ -63,6 +65,7 @@ export const createChatStore = () =>
     models: [],
     selectedModel: 'auto',
     selectedMode: 'auto',
+    selectedRuntime: 'auto',
     modelCatalogError: null,
     modelCatalogUnavailable: false,
     modelNotice: null,
@@ -113,6 +116,7 @@ export const createChatStore = () =>
 
     setSelectedModel: (selectedModel) => void get().setConversationModel(selectedModel),
     setSelectedMode: (selectedMode) => void get().setConversationMode(selectedMode),
+    setSelectedRuntime: (selectedRuntime) => set({ selectedRuntime }),
 
     setConversationModel: async (model) => {
       const nextModel = model || 'auto';

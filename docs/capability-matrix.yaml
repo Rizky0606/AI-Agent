@@ -1,5 +1,5 @@
 version: 1
-updated: 2026-10-15
+updated: 2026-10-16
 capabilities:
   control_plane:
     status: implemented
@@ -139,18 +139,19 @@ capabilities:
       Android theme unified to consume @personal-ai-os/shared theme generator with lucide-react-native + react-native-svg. Screen-level migration is scheduled for Sesi 4.
   runtime_bridges_and_execution:
     status: implemented
-    code: apps/runtime-bridge/src/index.ts; packages/agent-core/src/runtimes/remote-adapter.ts; apps/agent-worker/src/task-executor.ts; docs/adr/0013-sesi-omp-persisten-dan-streaming.md
-    permission_boundary: SecuredCapabilityGuard; child_process execution allowlist; strict rejection of push/merge/deploy; approval halting for HIGH/CRITICAL actions
-    clients: backend (worker/runtime-bridge); windows (chat & activity cards); android (task detail timeline)
-    proof: apps/runtime-bridge/test/index.test.ts; apps/agent-worker/test/worker.test.ts; packages/agent-core/test/runtime-adapters.test.ts; docs/adr/0013-sesi-omp-persisten-dan-streaming.md
+    code: apps/runtime-bridge/src/index.ts; packages/agent-core/src/runtimes/remote-adapter.ts; apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts; apps/api/src/routes/runtimes.ts; apps/api/src/routes/skills.ts; docs/adr/0014-integrasi-hermes-dan-runtime-picker.md
+    permission_boundary: SecuredCapabilityGuard; child_process execution allowlist; strict rejection of push/merge/deploy; approval halting for HIGH/CRITICAL actions; untrusted output wrapping
+    clients: backend (worker/runtime-bridge); windows (chat composer chips, activity cards, runtime status); android (chat chips, task detail, settings skills)
+    proof: packages/agent-core/test/agent-router.test.ts; apps/agent-worker/test/worker.test.ts; apps/api/test/skills.test.ts; apps/runtime-bridge/test/index.test.ts; apps/windows/test/layout-and-components.test.ts
     limitation: |
-      Persistent omp session and streaming JSONL event normalization implemented in Sesi 12 (ADR 0013, 2026-10-15):
-      - Persistent Session & Resume: omp runs support persistent sessions via `--session <sessionId>` scoped within realpath-validated workspace directories. Conversations can resume across worker and container restarts. One-shot executions fall back to `--no-session`.
-      - Event Normalization: omp JSONL stdout lines are dynamically parsed into internal `NormalizedRuntimeEvent`s (text, tool_start, tool_end, file_edit with diff and path, error, completed). Emitted over SSE `/v1/runs/:id/events` and broadcast live as `task.tool_call` and `task.progress` over WebSocket (`/v1/events/ws`).
-      - Permission Engine & Safe Boundaries: Proposed runtime actions (command, file_write, file_delete) pass through `SecuredCapabilityGuard`. Git push, git merge, and production deployments are strictly forbidden and rejected immediately. Actions with HIGH or CRITICAL risk suspend the task at `waiting_approval` with a versioned checkpoint.
-      - Client Step Timelines: Windows (Chat ToolStepCard and Activity TaskCard) and Android (TaskDetailScreen) render visual step timelines, tool calls, status indicators, and file edit diffs with syntax coloring (+ green, - red, @@ cyan). Semantic honesty is strictly maintained: Jeda/Lanjutkan (Pause/Resume) controls are only rendered when `task.payload?.supportsPause === true`. Both clients provide a responsive 'Hentikan' (Stop) control.
-      - Resource Limits & Process Safety: Max concurrency of 2 (`RUNTIME_MAX_CONCURRENCY`), bounded FIFO queue, hard timeout, and cross-platform process tree termination (Windows `taskkill /pid ... /T /F` and Unix process group `SIGKILL`). Child environment isolation (`cleanEnv`) strips all product secrets (`DATABASE_URL`, `NINEROUTER_API_KEY`, `JWT_SECRET`, etc.).
-      - Remaining gaps: Physical Android rendering and live Windows UI interaction require manual verification; deep LSP diagnostics and hashline editing scheduled for Sesi 13.
+      Hermes Integration, Policy Routing, and Runtime Picker implemented in Sesi 13 (ADR 0014, 2026-10-16):
+      - Policy-based Routing & Auto Intent: `coding` intents route to `omp`, `automation` / skill / cron intents route to `hermes`, and fast chat routes to `native`.
+      - User Runtime Override: Composer in Windows (`ChatComposer.tsx`) and Android (`ChatScreen.tsx`) features interactive Runtime Chip (`Auto`, `omp`, `Hermes`, `Bawaan`), passing `payload.runtime` to task creation.
+      - Explicit Health & Fallback: `AgentRouter.routeWithHealth` verifies runtime health via `RuntimeManager.healthCheckAll`. If the primary runtime is down, execution transparently and explicitly falls back to a healthy runtime or `native`, records `runtimeFallback: true`, `originalRuntimeId`, and plain Indonesian `fallbackReason`, and emits event `task.progress` with `action: 'runtime_fallback'`. Windows `TaskCard` and Android `TaskDetailScreen` display visual warning banners.
+      - Hermes Skills Read-Only: Hermes skills (`hermes_telegram_messenger`, `hermes_web_search`, `hermes_browser_automation`, `hermes_memory_recall`, `hermes_script_runner`) are exposed read-only at `GET /v1/skills` and `GET /v1/runtimes/hermes/skills`. Attempts to toggle enable/disable return HTTP 403 Forbidden. Android `SettingsScreen` renders the read-only Hermes skill list in Section 6.
+      - Untrusted Output Sanitization: Output from external runtimes is strictly isolated and wrapped in `<untrusted_content is_instruction="false">...</untrusted_content>` before ingestion into artifacts or context.
+      - Telegram & Deep Link Safety: Single Telegram instance policy enforced (no second bot). Notifications carry deep links (`personal-ai://tasks/:taskId`, `personal-ai://approvals/:approvalId`). HIGH and CRITICAL approvals strictly require authenticated application JWT sessions and secondary modal confirmation; approvals cannot be made directly from unauthenticated Telegram messages.
+      - Remaining gaps: Physical Android device visual rendering and live Hermes VPS network binding require manual runtime verification.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

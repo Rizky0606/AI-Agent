@@ -49,6 +49,14 @@ const MODE_LABELS: Record<ChatMode, string> = {
 
 const MODES: ChatMode[] = ['auto', 'fast', 'coding', 'complex', 'research'];
 
+const RUNTIMES: Array<'auto' | 'omp' | 'hermes' | 'native'> = ['auto', 'omp', 'hermes', 'native'];
+const RUNTIME_LABELS: Record<'auto' | 'omp' | 'hermes' | 'native', string> = {
+  auto: idID.chat.runtimeAuto,
+  omp: idID.chat.runtimeOmp,
+  hermes: idID.chat.runtimeHermes,
+  native: idID.chat.runtimeNative,
+};
+
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   conversationId,
   conversationTitle,
@@ -72,6 +80,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     error,
     selectedModel,
     selectedMode,
+    selectedRuntime,
+    setSelectedRuntime,
     setConversationMode,
     connectionStatus,
     loadCatalog,
@@ -151,7 +161,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       await createTask.mutateAsync({
         projectId: activeProjectId,
         kind: 'generic_task',
-        payload: { prompt: instruction },
+        payload: {
+          prompt: instruction,
+          ...(selectedRuntime !== 'auto' ? { runtime: selectedRuntime } : {}),
+        },
         conversationId,
       });
       await refetchConversationTasks();
@@ -545,6 +558,28 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               style={[styles.chipButtonText, { color: theme.colors.textPrimary }]}
             >
               ⚡ {MODE_LABELS[selectedMode]}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Ubah runtime eksekusi, saat ini ${RUNTIME_LABELS[selectedRuntime]}`}
+            style={[
+              styles.chipButton,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+            onPress={() => {
+              const nextIndex = (RUNTIMES.indexOf(selectedRuntime) + 1) % RUNTIMES.length;
+              setSelectedRuntime(RUNTIMES[nextIndex]!);
+            }}
+          >
+            <Text
+              style={[styles.chipButtonText, { color: theme.colors.textPrimary }]}
+            >
+              ⚙️ {RUNTIME_LABELS[selectedRuntime]}
             </Text>
           </TouchableOpacity>
 

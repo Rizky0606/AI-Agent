@@ -61,6 +61,13 @@ export const idID = {
     ready: 'Siap',
     modeLabel: 'Mode:',
     modelLabel: 'Model:',
+    runtimeLabel: 'Runtime:',
+    runtime: {
+      auto: 'Runtime: Auto',
+      omp: 'Runtime: OMP (Coding)',
+      hermes: 'Runtime: Hermes (Otomasi)',
+      native: 'Runtime: Bawaan',
+    },
     modes: {
       auto: 'Otomatis',
       fast: 'Cepat',
