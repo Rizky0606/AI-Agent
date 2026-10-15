@@ -94,7 +94,7 @@ const persistSession = (session: StoredSession): void => {
 };
 
 export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; cancelled?: boolean; model?: string | null; }
-export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; projectId?: string; }
+export interface ChatConversation { id: string; title: string; messages: ChatMessage[]; projectId?: string; createdAt?: string; }
 export type ChatStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 export interface TaskEventEntry {
@@ -318,7 +318,7 @@ export const createAgentStore = (
     setServerUrl: (url) => { if (get().serverUrl === url) return; set({ serverUrl: url }); void get().refreshChat(); },
     setChatDraft: (chatDraft) => set({ chatDraft }),
     setActiveConversation: (activeConversationId) => { set({ activeConversationId, conversationTasks: [] }); void get().refreshConversationTasks(); },
-    newConversation: () => { const id = `draft-${crypto.randomUUID()}`; set((state) => ({ conversations: [{ id, title: 'New conversation', messages: [] }, ...state.conversations], activeConversationId: id, chatError: null })); },
+    newConversation: () => { const id = `draft-${crypto.randomUUID()}`; set((state) => ({ conversations: [{ id, title: 'Percakapan baru', messages: [], createdAt: new Date().toISOString() }, ...state.conversations], activeConversationId: id, chatError: null })); },
     sendChat: () => {
       const state = get();
       const content = state.chatDraft.trim();
@@ -801,7 +801,7 @@ export const createAgentStore = (
       chatEventsStream.connect();
       try {
         const history = await api().listConversations();
-        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Conversation', projectId: item.projectId ?? undefined, messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']), model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null }] : []) })));
+        const conversations: ChatConversation[] = await Promise.all(history.conversations.map(async (item) => ({ id: item.id, title: item.title ?? 'Percakapan', projectId: item.projectId ?? undefined, createdAt: item.createdAt, messages: (await api().listMessages(item.id)).messages.flatMap((message): ChatMessage[] => message.role === 'user' || message.role === 'assistant' ? [{ id: message.id, role: message.role, content: message.content, cancelled: Boolean(message.cancelled || message.metadata?.['cancelled']), model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null }] : []) })));
         if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
         set((current) => {
           const merged = conversations.map((conversation) => {
