@@ -79,6 +79,33 @@ export interface AuthSession {
 export interface WindowsChatMessage { id: string; conversationId: string; role: 'user' | 'assistant' | 'system'; content: string; metadata?: Record<string, unknown>; createdAt: string; cancelled?: boolean; }
 export interface WindowsConversation { id: string; title: string | null; projectId: string; createdAt: string; }
 
+export interface MemoryItem {
+  id: string;
+  userId: string;
+  projectId?: string | null | undefined;
+  type: 'preference' | 'decision' | 'knowledge' | 'session' | 'project' | 'task';
+  content: string;
+  scope: string;
+  provenance: string;
+  retention: string;
+  metadata?: Record<string, unknown> | undefined;
+  isProposal?: boolean | undefined;
+  status?: string | undefined;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemorySearchResult {
+  data: Array<{
+    memory: MemoryItem;
+    score: number;
+    searchMode?: 'semantic' | 'text_fallback' | undefined;
+  }>;
+  semanticSearchActive: boolean;
+  searchMode: 'semantic' | 'text_fallback';
+  status: 'active' | 'inactive';
+  notice?: string | undefined;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -356,5 +383,63 @@ export class ApiClient {
 
   async listMessages(conversationId: string): Promise<{ messages: WindowsChatMessage[] }> {
     return this.request<{ messages: WindowsChatMessage[] }>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`);
+  }
+
+  // --- Memories ---
+  async listMemories(params?: { projectId?: string | undefined; type?: string | undefined; scope?: string | undefined }): Promise<{ data: MemoryItem[] }> {
+    const q = new URLSearchParams();
+    if (params?.projectId) q.set('projectId', params.projectId);
+    if (params?.type) q.set('type', params.type);
+    if (params?.scope) q.set('scope', params.scope);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<{ data: MemoryItem[] }>(`/v1/memories${qs}`);
+  }
+
+  async searchMemories(query: string, projectId?: string | undefined): Promise<MemorySearchResult> {
+    const q = new URLSearchParams({ query });
+    if (projectId) q.set('projectId', projectId);
+    return this.request<MemorySearchResult>(`/v1/memories/search?${q.toString()}`);
+  }
+
+  async createMemory(payload: {
+    content: string;
+    type: string;
+    scope?: string | undefined;
+    projectId?: string | undefined;
+  }): Promise<{ data: MemoryItem }> {
+    return this.request<{ data: MemoryItem }>('/v1/memories', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateMemory(id: string, content: string): Promise<{ data: MemoryItem }> {
+    return this.request<{ data: MemoryItem }>(`/v1/memories/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async deleteMemory(id: string): Promise<void> {
+    await this.request<void>(`/v1/memories/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listMemoryProposals(projectId?: string | undefined): Promise<{ data: MemoryItem[] }> {
+    const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    return this.request<{ data: MemoryItem[] }>(`/v1/memories/proposals${qs}`);
+  }
+
+  async approveMemoryProposal(id: string): Promise<{ data: MemoryItem; status: string }> {
+    return this.request<{ data: MemoryItem; status: string }>(`/v1/memories/proposals/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectMemoryProposal(id: string): Promise<{ success: boolean; status: string }> {
+    return this.request<{ success: boolean; status: string }>(`/v1/memories/proposals/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+    });
   }
 }

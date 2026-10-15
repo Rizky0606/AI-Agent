@@ -154,3 +154,32 @@ export interface ModelCatalogResponse {
   source: 'live' | 'persisted';
   models: ModelDescriptor[];
 }
+
+export interface MemoryItem {
+  id: string;
+  userId: string;
+  projectId?: string | null | undefined;
+  type: 'preference' | 'decision' | 'knowledge' | 'session' | 'project' | 'task';
+  content: string;
+  scope: string;
+  provenance: string;
+  retention: string;
+  metadata?: Record<string, unknown> | undefined;
+  isProposal?: boolean | undefined;
+  status?: string | undefined;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemorySearchResult {
+  data: Array<{
+    memory: MemoryItem;
+    score: number;
+    searchMode?: 'semantic' | 'text_fallback' | undefined;
+  }>;
+  semanticSearchActive: boolean;
+  searchMode: 'semantic' | 'text_fallback';
+  status: 'active' | 'inactive';
+  notice?: string | undefined;
+}
+

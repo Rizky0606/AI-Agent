@@ -1,11 +1,11 @@
 import React from 'react';
-import { PanelLeft, MessageSquare, FolderGit2, Settings, Bell } from 'lucide-react';
+import { PanelLeft, MessageSquare, FolderGit2, Brain, Settings, Bell } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import { StatusDot, type StatusDotKind } from '../components/StatusDot.tsx';
 import { ThemeSwitcher } from '../components/ThemeSwitcher.tsx';
 import { idID } from '../locales/id-ID.ts';
 
-export type ActiveView = 'chat' | 'project' | 'settings';
+export type ActiveView = 'chat' | 'project' | 'memory' | 'settings';
 
 interface AppHeaderProps {
   activeView: ActiveView;
@@ -54,6 +54,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           >
             <FolderGit2 size={15} />
             <span>{idID.nav.project}</span>
+          </button>
+          <button
+            className={`header-nav-btn ${activeView === 'memory' ? 'active' : ''}`}
+            onClick={() => onChangeView('memory')}
+            aria-current={activeView === 'memory' ? 'page' : undefined}
+          >
+            <Brain size={15} />
+            <span>{idID.nav.memory}</span>
           </button>
           <button
             className={`header-nav-btn ${activeView === 'settings' ? 'active' : ''}`}

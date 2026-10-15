@@ -8,6 +8,7 @@ export const idID = {
   nav: {
     chat: 'Obrolan',
     project: 'Proyek',
+    memory: 'Memori',
     settings: 'Pengaturan',
     activity: 'Aktivitas',
     toggleSidebar: 'Buka/Tutup Sidebar',

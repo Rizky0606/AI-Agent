@@ -18,6 +18,7 @@ import { ArtifactsScreen } from '../screens/ArtifactsScreen.tsx';
 import { ChatScreen } from '../screens/ChatScreen.tsx';
 import { ConversationListScreen } from '../screens/ConversationListScreen.tsx';
 import { LoginScreen } from '../screens/LoginScreen.tsx';
+import { MemoryScreen } from '../screens/MemoryScreen.tsx';
 import { ProjectsScreen } from '../screens/ProjectsScreen.tsx';
 import { SettingsScreen } from '../screens/SettingsScreen.tsx';
 import { TaskDetailScreen } from '../screens/TaskDetailScreen.tsx';
@@ -39,7 +40,7 @@ export const AppNavigator: React.FC = () => {
   const [activeConversationTitle, setActiveConversationTitle] = useState<string | undefined>(undefined);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [activityInitialTab, setActivityInitialTab] = useState<'tasks' | 'approvals'>('tasks');
-  const [moreSubscreen, setMoreSubscreen] = useState<'artifacts' | 'projects' | null>(null);
+  const [moreSubscreen, setMoreSubscreen] = useState<'artifacts' | 'projects' | 'memory' | null>(null);
 
   // Pending approvals count for tab badge
   const { data: pendingApprovals } = useApprovals('pending');
@@ -164,10 +165,14 @@ export const AppNavigator: React.FC = () => {
     if (moreSubscreen === 'projects') {
       return <ProjectsScreen onBack={() => setMoreSubscreen(null)} />;
     }
+    if (moreSubscreen === 'memory') {
+      return <MemoryScreen onBack={() => setMoreSubscreen(null)} />;
+    }
     return (
       <SettingsScreen
         onNavigateToArtifacts={() => setMoreSubscreen('artifacts')}
         onNavigateToProjects={() => setMoreSubscreen('projects')}
+        onNavigateToMemory={() => setMoreSubscreen('memory')}
       />
     );
   };

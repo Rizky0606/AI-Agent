@@ -11,6 +11,8 @@ import {
   type Device,
   type HealthResponse,
   type ModelCatalogResponse,
+  type MemoryItem,
+  type MemorySearchResult,
   type Project,
   type ReadyResponse,
   type RefreshResponse,
@@ -470,6 +472,65 @@ export class ApiClient {
       body: JSON.stringify(prefs),
     });
   }
+
+  // --- Memories ---
+  async listMemories(params?: { projectId?: string | undefined; type?: string | undefined; scope?: string | undefined }): Promise<{ data: MemoryItem[] }> {
+    const q = new URLSearchParams();
+    if (params?.projectId) q.set('projectId', params.projectId);
+    if (params?.type) q.set('type', params.type);
+    if (params?.scope) q.set('scope', params.scope);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<{ data: MemoryItem[] }>(`/v1/memories${qs}`);
+  }
+
+  async searchMemories(query: string, projectId?: string | undefined): Promise<MemorySearchResult> {
+    const q = new URLSearchParams({ query });
+    if (projectId) q.set('projectId', projectId);
+    return this.request<MemorySearchResult>(`/v1/memories/search?${q.toString()}`);
+  }
+
+  async createMemory(payload: {
+    content: string;
+    type: string;
+    scope?: string | undefined;
+    projectId?: string | undefined;
+  }): Promise<{ data: MemoryItem }> {
+    return this.request<{ data: MemoryItem }>('/v1/memories', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateMemory(id: string, content: string): Promise<{ data: MemoryItem }> {
+    return this.request<{ data: MemoryItem }>(`/v1/memories/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async deleteMemory(id: string): Promise<void> {
+    await this.request<void>(`/v1/memories/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listMemoryProposals(projectId?: string | undefined): Promise<{ data: MemoryItem[] }> {
+    const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    return this.request<{ data: MemoryItem[] }>(`/v1/memories/proposals${qs}`);
+  }
+
+  async approveMemoryProposal(id: string): Promise<{ data: MemoryItem; status: string }> {
+    return this.request<{ data: MemoryItem; status: string }>(`/v1/memories/proposals/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectMemoryProposal(id: string): Promise<{ success: boolean; status: string }> {
+    return this.request<{ success: boolean; status: string }>(`/v1/memories/proposals/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+    });
+  }
 }
 
 export const defaultApiClient = new ApiClient();
+

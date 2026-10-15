@@ -7,6 +7,7 @@ import { Sidebar } from './layout/Sidebar.tsx';
 import { AppHeader, type ActiveView } from './layout/AppHeader.tsx';
 import { ChatView } from './chat/ChatView.tsx';
 import { ProjectView } from './project/ProjectView.tsx';
+import { MemoryView } from './memory/MemoryView.tsx';
 import { SettingsView } from './settings/SettingsView.tsx';
 import { ActivityPanel } from './activity/ActivityPanel.tsx';
 import { idID } from './locales/id-ID.ts';
@@ -142,6 +143,7 @@ const AppShell: React.FC = () => {
 
         {activeView === 'chat' && <ChatView />}
         {activeView === 'project' && <ProjectView />}
+        {activeView === 'memory' && <MemoryView />}
         {activeView === 'settings' && <SettingsView />}
       </div>
 

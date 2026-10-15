@@ -20,6 +20,7 @@ export interface ContextAssemblyInput {
         tokenBudget?: number | undefined;
         toolOutputMaxChars?: number | undefined;
         maxHistoryMessages?: number | undefined;
+        topK?: number | undefined;
       }
     | undefined;
 }
@@ -32,6 +33,8 @@ export interface ContextAssemblyResult {
   truncatedSections: readonly string[];
   summarizedHistoryCount: number;
   preservedSecurityPoliciesCount: number;
+  usedMemories: readonly MemoryRecord[];
+  usedMemoryIds: readonly string[];
 }
 
 export function estimateTokens(text: string): number {
@@ -118,14 +121,21 @@ export class ContextManager {
       }
     }
 
-    // 5. ASSEMBLE MEMORIES
+    // 5. ASSEMBLE MEMORIES (respect topK and token budget)
+    const usedMemories: MemoryRecord[] = [];
     if (deduplicatedMemories.length > 0) {
       const memoryLines: string[] = [];
-      for (const mem of deduplicatedMemories) {
+      const candidateList =
+        typeof input.options?.topK === 'number' && input.options.topK > 0
+          ? deduplicatedMemories.slice(0, input.options.topK)
+          : deduplicatedMemories;
+
+      for (const mem of candidateList) {
         const line = `- [${mem.type.toUpperCase()}] (${mem.scope}) ${mem.content}`;
         const lineTokens = estimateTokens(line);
         if (remainingBudget >= lineTokens) {
           memoryLines.push(line);
+          usedMemories.push(mem);
           remainingBudget -= lineTokens;
         } else {
           truncatedSections.push(`memory:${mem.id}`);
@@ -225,6 +235,8 @@ export class ContextManager {
       truncatedSections,
       summarizedHistoryCount,
       preservedSecurityPoliciesCount: input.systemPolicies.length,
+      usedMemories,
+      usedMemoryIds: usedMemories.map((m) => m.id),
     };
   }
 }

@@ -38,11 +38,13 @@ import { useUiStore } from '../state/ui-store.ts';
 export interface SettingsScreenProps {
   onNavigateToArtifacts?: () => void;
   onNavigateToProjects?: () => void;
+  onNavigateToMemory?: () => void;
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onNavigateToArtifacts,
   onNavigateToProjects,
+  onNavigateToMemory,
 }) => {
   const theme = useAppTheme();
   const { user, device, serverUrl, logout } = useAuthStore();
@@ -270,7 +272,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         </View>
       </View>
 
-      {/* 5. Memori (Kerangka Sesi 10) */}
+      {/* 5. Memori */}
       <View
         style={[
           styles.card,
@@ -285,21 +287,40 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           <Text style={[styles.cardTitle, { color: theme.colors.textPrimary }]}>
             {idID.more.sectionMemory}
           </Text>
-          <View
-            style={[
-              styles.comingSoonBadge,
-              { backgroundColor: theme.colors.surfaceElevated },
-            ]}
-          >
-            <Text style={[styles.comingSoonText, { color: theme.colors.primary }]}>
-              Sesi 10
-            </Text>
-          </View>
         </View>
 
-        <Text style={[styles.cardDesc, { color: theme.colors.textMuted }]}>
-          {idID.more.memoryScaffoldDesc}
+        <Text style={[styles.cardDesc, { color: theme.colors.textSecondary }]}>
+          Kelola memori aktif (global & proyek), cari catatan, dan setujui usulan memori baru dari agen.
         </Text>
+
+        {onNavigateToMemory ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Buka Pusat Memori"
+            style={[
+              styles.navLinkBtn,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+                marginTop: 10,
+              },
+            ]}
+            onPress={onNavigateToMemory}
+          >
+            <View style={styles.navLinkLeft}>
+              <Brain size={16} color={theme.colors.primary} />
+              <Text
+                style={[
+                  styles.navLinkText,
+                  { color: theme.colors.textPrimary },
+                ]}
+              >
+                Buka Pusat Memori
+              </Text>
+            </View>
+            <ChevronRight size={16} color={theme.colors.textMuted} />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {/* 6. Skill & MCP (Kerangka Sesi 14) */}

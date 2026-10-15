@@ -8,6 +8,8 @@ import type { ModelConfigRepository } from '../db/model-config-repository.ts';
 import type { ModelRouter } from '../services/model-router.ts';
 import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import { ModelGatewayError } from '@personal-ai-os/model-gateway';
+import { MemoryCandidateExtractor } from '@personal-ai-os/memory';
+import type { MemoryRepository } from '../db/memory-repository.ts';
 
 export type ChatRouteDependencies = {
   auth: AuthService;
@@ -15,6 +17,7 @@ export type ChatRouteDependencies = {
   router: ModelRouter;
   modelConfigs: ModelConfigRepository;
   gateway: ModelGateway;
+  memoryRepo?: MemoryRepository | undefined;
 };
 
 type ChatMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
@@ -186,6 +189,23 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
           workspaceId: body.workspaceId ?? null,
         },
       );
+
+      if (deps.memoryRepo) {
+        try {
+          const extractor = new MemoryCandidateExtractor();
+          const proposals = extractor.extractFromConversation({
+            userId: user.id,
+            projectId: conversation?.projectId ?? body.projectId,
+            userMessage: body.content,
+            assistantMessage: response.content,
+          });
+          for (const p of proposals) {
+            await deps.memoryRepo.createProposal(p);
+          }
+        } catch {
+          // Non-blocking
+        }
+      }
 
       return reply.send({
         conversationId,
@@ -464,6 +484,24 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
               model: data.model ?? null,
               workspaceId: data.workspaceId ?? null,
             }, assistantMessageId);
+
+            if (deps.memoryRepo) {
+              try {
+                const extractor = new MemoryCandidateExtractor();
+                const proposals = extractor.extractFromConversation({
+                  userId: user.id,
+                  projectId: data.projectId,
+                  userMessage: data.content,
+                  assistantMessage: accumulated,
+                });
+                for (const p of proposals) {
+                  await deps.memoryRepo.createProposal(p);
+                }
+              } catch {
+                // Non-blocking
+              }
+            }
+
             send({
               type: 'message.completed',
               conversationId,

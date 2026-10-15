@@ -571,6 +571,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       router: dependencies.chat.router,
       modelConfigs: dependencies.chat.modelConfigs,
       gateway: dependencies.chat.gateway,
+      memoryRepo: dependencies.memory?.memoryRepo,
     });
   }
 

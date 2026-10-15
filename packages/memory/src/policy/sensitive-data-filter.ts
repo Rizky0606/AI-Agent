@@ -39,8 +39,18 @@ const SENSITIVE_PATTERNS: Array<{
     replacement: '[REDACTED_CONNECTION_STRING]',
   },
   {
+    category: 'identity_number',
+    pattern: /\b[1-9]\d{15}\b/g,
+    replacement: '[REDACTED_IDENTITY_NUMBER]',
+  },
+  {
+    category: 'credit_card',
+    pattern: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|(?:[0-9]{4}[ -]?){3}[0-9]{4})\b/g,
+    replacement: '[REDACTED_CREDIT_CARD]',
+  },
+  {
     category: 'password_assignment',
-    pattern: /(?:password|passwd|api_key|apikey|secret|token)\s*[:=]\s*["']([^"']{4,})["']/gi,
+    pattern: /(?:password|passwd|kata[_\s-]?sandi|api[_\s-]?key|apikey|secret|token)\s*[:=]\s*(?:["']([^"']{3,})["']|([^\s,;]{3,}))/gi,
     replacement: 'secret: "[REDACTED_SECRET]"',
   },
 ];

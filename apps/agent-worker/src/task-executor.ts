@@ -55,6 +55,7 @@ import type {
 } from '@personal-ai-os/model-gateway';
 import { sanitizeUntrustedToolOutput, type ToolRegistry } from '@personal-ai-os/tools';
 import { DeviceOfflineError, type DeviceCommandResult } from '@personal-ai-os/api/services';
+import { MemoryCandidateExtractor, type MemoryCandidate } from '@personal-ai-os/memory';
 import type { DeviceDispatcher } from './device-dispatcher.ts';
 
 export const PLACEHOLDER_WORKER_LABEL =
@@ -110,6 +111,7 @@ export interface TaskExecutorOptions {
   genericAgent?: GenericAgent | undefined;
   modelGateway?: ModelGateway | undefined;
   defaultModel?: string | undefined;
+  memoryProposalHandler?: ((proposal: MemoryCandidate) => Promise<unknown>) | undefined;
 }
 
 export class TaskExecutor {
@@ -131,12 +133,16 @@ export class TaskExecutor {
   private readonly modelGateway?: ModelGateway | undefined;
   private readonly defaultModel?: string | undefined;
   private readonly codingWorkspaceRoot: string;
+  private readonly candidateExtractor = new MemoryCandidateExtractor();
+  private readonly memoryProposalHandler?:
+    ((proposal: MemoryCandidate) => Promise<unknown>) | undefined;
 
   constructor(
     taskRepo: TaskRepository,
     broadcaster: EventPublisher,
     options?: TaskExecutorOptions,
   ) {
+    this.memoryProposalHandler = options?.memoryProposalHandler;
     this.taskRepo = taskRepo;
     this.broadcaster = broadcaster;
     this.guard = options?.guard;
@@ -437,6 +443,37 @@ export class TaskExecutor {
     }
   }
 
+  private async onTaskCompleted(
+    task: TaskRecord,
+    outcome?: { result?: string | undefined; summary?: string | undefined } | undefined,
+  ): Promise<void> {
+    if (!this.memoryProposalHandler) return;
+    try {
+      const candidates = this.candidateExtractor.extractFromTask({
+        taskId: task.id,
+        userId: task.userId,
+        projectId: task.projectId,
+        kind: task.kind,
+        title: (task.payload?.title as string) ?? (task.payload?.category as string),
+        instructions: (task.payload?.instructions as string) ?? (task.payload?.prompt as string),
+        result: outcome?.result ?? outcome?.summary,
+      });
+
+      for (const candidate of candidates) {
+        await this.memoryProposalHandler({
+          ...candidate,
+          metadata: {
+            ...(candidate.metadata ?? {}),
+            isProposal: true,
+            status: 'proposed',
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to extract memory proposal from task:', err);
+    }
+  }
+
   private async executeRuntimeTrack(task: TaskRecord, prompt: string, runtimeId: string, span: TelemetrySpan): Promise<void> {
     if (!this.runtimeManager) throw new Error('Runtime execution requested but no RuntimeManager configured.');
     // `RuntimeManager.execute` applies the per-runtime concurrency/rate cap; `getRuntime` +
@@ -460,6 +497,7 @@ export class TaskExecutor {
     await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed', { artifacts: [artifact] });
     const completed = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { runtimeId, result: 'Runtime output received and recorded.', artifacts: [artifact] });
     this.broadcaster.publish(completed);
+    await this.onTaskCompleted(task, { result: 'Runtime output received and recorded.' });
     defaultTracer.endSpan(span, { status: 'ok' });
   }
 
@@ -627,6 +665,7 @@ export class TaskExecutor {
         },
       );
       this.broadcaster.publish(completeEvent);
+      await this.onTaskCompleted(task, { result: report.summary });
       defaultTracer.endSpan(span, { status: 'ok' });
     }
   }
@@ -731,6 +770,7 @@ export class TaskExecutor {
         },
       );
       this.broadcaster.publish(completeEvent);
+      await this.onTaskCompleted(task, { result: report.summary });
       defaultTracer.endSpan(span, { status: 'ok' });
     }
   }
@@ -967,6 +1007,7 @@ export class TaskExecutor {
       artifacts: [artifact],
     });
     this.broadcaster.publish(completeEvent);
+    await this.onTaskCompleted(task, { result: completeEvent.payload?.result as string });
     defaultTracer.endSpan(span, { status: 'ok' });
   }
 
@@ -1049,6 +1090,7 @@ export class TaskExecutor {
     await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed');
     const completeEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.completed', { result: result.data, tool: toolName, evaluationResult });
     this.broadcaster.publish(completeEvent);
+    await this.onTaskCompleted(task, { result: typeof result.data === 'string' ? result.data : JSON.stringify(result.data) });
     defaultTracer.endSpan(span, { status: 'ok' });
   }
 
@@ -1557,6 +1599,7 @@ export class TaskExecutor {
       ...(fallbackUsed ? { fallbackUsed: true, note: fallbackNote } : {}),
     });
     this.broadcaster.publish(completeEvent);
+    await this.onTaskCompleted(task, { result: finalAnswer });
     defaultTracer.endSpan(span, { status: 'ok', attributes: { 'task.telemetry': JSON.stringify(telemetry) } });
   }
 
@@ -2129,6 +2172,7 @@ export class TaskExecutor {
         },
       );
       this.broadcaster.publish(completeEvent);
+      await this.onTaskCompleted(task, { result: completionContent });
       defaultTracer.endSpan(span, { status: 'ok' });
     }
   }

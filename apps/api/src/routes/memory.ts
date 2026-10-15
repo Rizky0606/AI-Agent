@@ -81,7 +81,166 @@ export function registerMemoryRoutes(
     },
   );
 
-  // 2. Store memory (evaluated first)
+  // 2. Search memories (POST & GET registered BEFORE /:id to prevent route collision)
+  const handleSearch = async (
+    userId: string,
+    query: string,
+    projectId: string | undefined,
+    type: MemoryType | undefined,
+    limit: number,
+    threshold: number,
+  ) => {
+    const isActive =
+      typeof memoryRepo.isSemanticSearchActive === 'function'
+        ? memoryRepo.isSemanticSearchActive()
+        : false;
+
+    const results = await memoryRepo.searchSemantic(userId, {
+      query,
+      projectId,
+      type,
+      limit,
+      threshold,
+    });
+
+    return {
+      data: results,
+      semanticSearchActive: isActive,
+      searchMode: isActive ? 'semantic' : 'text_fallback',
+      status: isActive ? 'active' : 'inactive',
+      notice: isActive
+        ? undefined
+        : 'Pencarian semantik saat ini inactive / nonaktif (belum ada provider embedding terverifikasi). Menggunakan pencarian teks hybrid PostgreSQL.',
+    };
+  };
+
+  app.post(
+    '/v1/memories/search',
+    async (
+      req: FastifyRequest<{
+        Body: {
+          query: string;
+          projectId?: string;
+          type?: MemoryType;
+          limit?: number;
+          threshold?: number;
+        };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const user = await getUser(req);
+      const { query, projectId, type, limit = 10, threshold = 0.0 } = req.body;
+      const response = await handleSearch(user.id, query, projectId, type, limit, threshold);
+      return reply.send(response);
+    },
+  );
+
+  app.get(
+    '/v1/memories/search',
+    async (
+      req: FastifyRequest<{
+        Querystring: {
+          q?: string;
+          query?: string;
+          projectId?: string;
+          type?: MemoryType;
+          limit?: string;
+          threshold?: string;
+        };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const user = await getUser(req);
+      const query = req.query.query || req.query.q || '';
+      const limit = req.query.limit ? parseInt(req.query.limit, 10) : 10;
+      const threshold = req.query.threshold ? parseFloat(req.query.threshold) : 0.0;
+      const response = await handleSearch(
+        user.id,
+        query,
+        req.query.projectId,
+        req.query.type,
+        limit,
+        threshold,
+      );
+      return reply.send(response);
+    },
+  );
+
+  // 3. Proposals queue management (registered BEFORE /:id)
+  app.get(
+    '/v1/memories/proposals',
+    async (
+      req: FastifyRequest<{
+        Querystring: { projectId?: string };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const user = await getUser(req);
+      const proposals = await memoryRepo.listProposals(
+        user.id,
+        req.query.projectId ? { projectId: req.query.projectId } : undefined,
+      );
+      return reply.send({ data: proposals });
+    },
+  );
+
+  app.post(
+    '/v1/memories/proposals/:id/approve',
+    { schema: idParamsSchema },
+    async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const user = await getUser(req);
+      try {
+        const approved = await memoryRepo.approveProposal(user.id, req.params.id);
+        return reply.send({ data: approved, status: 'approved' });
+      } catch (err) {
+        return reply.status(404).send({
+          error: { code: 'NOT_FOUND', message: err instanceof Error ? err.message : String(err) },
+        });
+      }
+    },
+  );
+
+  app.post(
+    '/v1/memories/proposals/:id/reject',
+    { schema: idParamsSchema },
+    async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const user = await getUser(req);
+      const rejected = await memoryRepo.rejectProposal(user.id, req.params.id);
+      if (!rejected) {
+        return reply.status(404).send({
+          error: { code: 'NOT_FOUND', message: 'Proposal not found' },
+        });
+      }
+      return reply.send({ success: true, status: 'rejected' });
+    },
+  );
+
+  // 4. Sweeper endpoint
+  app.post('/v1/memories/sweep', async (req: FastifyRequest, reply: FastifyReply) => {
+    await getUser(req);
+    const result = await memoryRepo.sweepExpiredMemories();
+    return reply.send({ data: result });
+  });
+
+  // 5. Backfill embeddings endpoint
+  app.post(
+    '/v1/memories/backfill',
+    async (
+      req: FastifyRequest<{
+        Body?: { batchSize?: number; maxRows?: number };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      await getUser(req);
+      const { batchSize = 20, maxRows = 100 } = req.body ?? {};
+      const result = memoryRepo.backfillEmbeddings
+        ? await memoryRepo.backfillEmbeddings(batchSize, maxRows)
+        : { processed: 0, success: 0, failed: 0 };
+      return reply.send({ data: result });
+    },
+  );
+
+  // 6. Store memory (evaluated first)
   app.post(
     '/v1/memories',
     async (
@@ -94,6 +253,7 @@ export function registerMemoryRoutes(
           provenance?: MemoryProvenance;
           metadata?: Record<string, unknown>;
           force?: boolean;
+          isProposal?: boolean;
         };
       }>,
       reply: FastifyReply,
@@ -107,6 +267,7 @@ export function registerMemoryRoutes(
         provenance = 'user_explicit',
         metadata,
         force = false,
+        isProposal = false,
       } = req.body;
 
       const candidate: MemoryCandidate = {
@@ -116,7 +277,10 @@ export function registerMemoryRoutes(
         type,
         scope,
         provenance,
-        metadata,
+        metadata: {
+          ...(metadata ?? {}),
+          ...(isProposal ? { isProposal: true, status: 'proposed' } : {}),
+        },
       };
 
       const evaluation = memoryRepo.evaluateCandidate(candidate);
@@ -130,16 +294,20 @@ export function registerMemoryRoutes(
         });
       }
 
-      const stored = await memoryRepo.createMemory({
+      const sanitizedCandidate = {
         ...candidate,
         content: evaluation.sanitizedContent || candidate.content,
-      });
+      };
+
+      const stored = isProposal
+        ? await memoryRepo.createProposal(sanitizedCandidate)
+        : await memoryRepo.createMemory(sanitizedCandidate);
 
       return reply.status(201).send({ data: stored, evaluation });
     },
   );
 
-  // 3. List memories
+  // 7. List memories
   app.get(
     '/v1/memories',
     async (
@@ -149,6 +317,7 @@ export function registerMemoryRoutes(
           type?: MemoryType;
           scope?: string;
           limit?: string;
+          includeProposals?: string;
         };
       }>,
       reply: FastifyReply,
@@ -158,6 +327,7 @@ export function registerMemoryRoutes(
         projectId: req.query.projectId,
         type: req.query.type,
         scope: req.query.scope,
+        includeProposals: req.query.includeProposals === 'true',
         limit: req.query.limit ? parseInt(req.query.limit, 10) : undefined,
       };
 
@@ -166,7 +336,8 @@ export function registerMemoryRoutes(
     },
   );
 
-  // 4. Get memory by ID
+  // 8. Parameterized :id routes (registered AFTER all static routes)
+  // Get memory by ID
   app.get(
     '/v1/memories/:id',
     { schema: idParamsSchema },
@@ -182,7 +353,7 @@ export function registerMemoryRoutes(
     },
   );
 
-  // 5. Correct memory
+  // Correct memory
   app.patch(
     '/v1/memories/:id',
     { schema: idParamsSchema },
@@ -207,7 +378,7 @@ export function registerMemoryRoutes(
     },
   );
 
-  // 6. Delete memory
+  // Delete memory
   app.delete(
     '/v1/memories/:id',
     { schema: idParamsSchema },
@@ -223,49 +394,7 @@ export function registerMemoryRoutes(
     },
   );
 
-  // 7. Semantic search
-  app.post(
-    '/v1/memories/search',
-    async (
-      req: FastifyRequest<{
-        Body: {
-          query: string;
-          projectId?: string;
-          type?: MemoryType;
-          limit?: number;
-          threshold?: number;
-        };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      const user = await getUser(req);
-      const { query, projectId, type, limit = 5, threshold = 0.0 } = req.body;
-
-      const isActive =
-        typeof memoryRepo.isSemanticSearchActive === 'function'
-          ? memoryRepo.isSemanticSearchActive()
-          : false;
-
-      const results = await memoryRepo.searchSemantic(user.id, {
-        query,
-        projectId,
-        type,
-        limit,
-        threshold,
-      });
-
-      return reply.send({
-        data: results,
-        semanticSearchActive: isActive,
-        status: isActive ? 'active' : 'inactive',
-        notice: isActive
-          ? undefined
-          : 'Semantic search is currently inactive: No live embedding provider has been verified or configured per assessment decisions.',
-      });
-    },
-  );
-
-  // 8. Assemble context with Context Manager
+  // 9. Assemble context with Context Manager (includes topK and returns usedMemories)
   app.post(
     '/v1/context/assemble',
     async (
@@ -280,6 +409,7 @@ export function registerMemoryRoutes(
           toolOutputs?: Array<{ toolName: string; output: string }>;
           projectId?: string;
           tokenBudget?: number;
+          topK?: number;
         };
       }>,
       reply: FastifyReply,
@@ -295,9 +425,10 @@ export function registerMemoryRoutes(
         toolOutputs = [],
         projectId,
         tokenBudget = 4096,
+        topK,
       } = req.body;
 
-      // Fetch relevant memories for this user
+      // Fetch relevant active memories for this user
       const memoriesList = await memoryRepo.listMemories(user.id, {
         projectId,
         limit: 10,
@@ -310,7 +441,7 @@ export function registerMemoryRoutes(
         relevantMemories:
           memoriesList as unknown as readonly import('@personal-ai-os/memory').MemoryRecord[],
         toolOutputs,
-        options: { tokenBudget },
+        options: { tokenBudget, topK },
       });
 
       return reply.send({ data: assembled });
