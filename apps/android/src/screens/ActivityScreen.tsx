@@ -349,6 +349,15 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
                     </Text>
                   </View>
 
+                  {item.status === 'failed' && item.error ? (
+                    <Text
+                      style={{ color: theme.colors.riskHigh, fontSize: 12, marginTop: 4 }}
+                      numberOfLines={2}
+                    >
+                      Keterangan: {item.error}
+                    </Text>
+                  ) : null}
+
                   <Text
                     style={[styles.taskTime, { color: theme.colors.textMuted }]}
                   >

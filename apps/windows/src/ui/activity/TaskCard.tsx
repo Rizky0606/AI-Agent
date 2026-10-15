@@ -50,6 +50,25 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         </div>
       )}
 
+      {task.status === 'failed' && task.error && (
+        <div
+          className="task-error-banner"
+          style={{
+            marginTop: '8px',
+            marginBottom: '8px',
+            padding: '6px 10px',
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            borderRadius: '6px',
+            color: '#f87171',
+            fontSize: '12px',
+            lineHeight: 1.4,
+          }}
+        >
+          <strong>Keterangan Masalah:</strong> {task.error}
+        </div>
+      )}
+
       {/* Task Controls */}
       <div className="card-header-row" onClick={(e) => e.stopPropagation()}>
         <div className="chat-error-actions">

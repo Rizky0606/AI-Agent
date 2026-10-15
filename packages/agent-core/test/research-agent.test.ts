@@ -207,10 +207,16 @@ test('ResearchAgent: fetches every searched source and cites the page it came fr
     },
   });
 
-  assert.deepEqual(fetched, [
+  // Verify initial browse fetches all searched sources (including failing one)
+  assert.deepEqual(fetched.slice(0, 3), [
     'https://example.org/durable',
     'https://example.com/checkpoints',
     'https://example.net/broken',
+  ]);
+  // Verify ResearchEvaluator independently re-fetches valid sources to verify claim support
+  assert.deepEqual(fetched.slice(3), [
+    'https://example.org/durable',
+    'https://example.com/checkpoints',
   ]);
   assert.equal(report.status, 'completed');
   assert.equal(report.workflowStage, 'report');

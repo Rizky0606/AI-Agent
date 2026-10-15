@@ -1,3 +1,4 @@
+import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import {
   ResearchEvaluator,
   type ResearchClaim,
@@ -44,6 +45,9 @@ export interface ResearchTaskInput {
    * evaluator rejects the run — there is no built-in fallback source list.
    */
   environment?: ResearchEnvironment | undefined;
+  /** Model gateway for multi-source claim synthesis with citations. */
+  modelGateway?: ModelGateway | undefined;
+  model?: string | undefined;
   /** Test seams: injected sources/claims bypass search and browse entirely. */
   mockSources?: ResearchSource[] | undefined;
   mockClaims?: ResearchClaim[] | undefined;
@@ -54,6 +58,8 @@ export interface ResearchTaskInput {
 export interface ResolvedResearchAgentConfig {
   maxSources: number;
   minCredibilityScore: number;
+  modelGateway?: ModelGateway | undefined;
+  defaultModel?: string | undefined;
 }
 
 export class ResearchAgent {
@@ -64,6 +70,8 @@ export class ResearchAgent {
     this.config = {
       maxSources: config?.maxSources ?? 10,
       minCredibilityScore: config?.minCredibilityScore ?? 0.6,
+      modelGateway: config?.modelGateway,
+      defaultModel: config?.defaultModel,
     };
     this.evaluator = evaluator ?? new ResearchEvaluator();
   }
@@ -173,19 +181,96 @@ export class ResearchAgent {
     // ========================================================
     currentStage = 'synthesize';
     let claims: ResearchClaim[] = [];
+    let synthesizedByModel = false;
 
     if (input.mockClaims && input.mockClaims.length > 0) {
       claims = input.mockClaims;
     } else {
-      // Each fact is the opening text of a page that was actually fetched, cited to that page.
-      // `NO_SYNTHESIS_LIMITATION` states the ceiling in every report produced here.
-      claims = sources.map((source, index) => ({
-        id: `claim-${index + 1}`,
-        statement: source.snippet.trim() || source.title,
-        type: 'sourced_fact' as const,
-        sourceIds: [source.id],
-        confidence: source.credibilityScore,
-      }));
+      const gateway = input.modelGateway ?? this.config.modelGateway;
+      const model = input.model ?? this.config.defaultModel;
+
+      if (gateway && model && sources.length > 0) {
+        try {
+          const sourceListText = sources
+            .map(
+              (s) =>
+                `[${s.id}]\nJudul: ${s.title}\nURL: ${s.url}\nKonten: ${s.snippet}`,
+            )
+            .join('\n\n');
+
+          const systemPrompt =
+            'Anda adalah Asisten Peneliti AI terpercaya. Tugas Anda adalah melakukan sintesis temuan faktual secara komprehensif dalam Bahasa Indonesia berdasarkan sumber-sumber yang disediakan.\n' +
+            'Aturan Wajib:\n' +
+            '1. Setiap klaim fakta ("sourced_fact") HARUS didukung oleh konten sumber dan menyertakan sourceIds yang tepat (contoh: ["src-1"]).\n' +
+            '2. Gunakan HANYA ID sumber yang terdaftar (contoh: src-1, src-2).\n' +
+            '3. Untuk kesimpulan yang ditarik secara logis dari fakta, gunakan tipe "inference". Untuk hal yang belum terverifikasi secara tuntas, gunakan tipe "unverified".\n' +
+            '4. Format luaran HARUS berupa objek JSON valid dengan struktur persis berikut (tanpa blok percakapan tambahan):\n' +
+            '{\n' +
+            '  "claims": [\n' +
+            '    { "statement": "Klaim fakta konkret", "type": "sourced_fact", "sourceIds": ["src-1"] },\n' +
+            '    { "statement": "Inferensi analitis", "type": "inference", "sourceIds": ["src-1"] }\n' +
+            '  ]\n' +
+            '}';
+
+          const userPrompt = `Pertanyaan Riset: "${input.query}"\n\nDaftar Sumber:\n${sourceListText}`;
+
+          const chatRes = await gateway.chat({
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0,
+          });
+
+          const jsonMatch = chatRes.content.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]) as {
+              claims?: Array<{ statement?: string; type?: string; sourceIds?: string[] }>;
+            };
+            if (Array.isArray(parsed.claims) && parsed.claims.length > 0) {
+              const validSourceIds = new Set(sources.map((s) => s.id));
+              const validClaims = parsed.claims
+                .filter((c) => typeof c.statement === 'string' && c.statement.trim().length > 0)
+                .map((c, index) => {
+                  const sIds = Array.isArray(c.sourceIds)
+                    ? c.sourceIds.filter((sid) => validSourceIds.has(sid))
+                    : [];
+                  const type =
+                    c.type === 'inference' || c.type === 'unverified' ? c.type : 'sourced_fact';
+                  return {
+                    id: `claim-${index + 1}`,
+                    statement: (c.statement ?? '').trim(),
+                    type: (sIds.length > 0 || type !== 'sourced_fact' ? type : 'unverified') as
+                      | 'sourced_fact'
+                      | 'inference'
+                      | 'unverified',
+                    sourceIds: sIds.length > 0 ? sIds : undefined,
+                    confidence: 0.9,
+                  };
+                });
+              if (validClaims.length > 0) {
+                claims = validClaims;
+                synthesizedByModel = true;
+              }
+            }
+          }
+        } catch {
+          // Fall back gracefully to snippet claims
+        }
+      }
+
+      if (claims.length === 0) {
+        // Each fact is the opening text of a page that was actually fetched, cited to that page.
+        // `NO_SYNTHESIS_LIMITATION` states the ceiling in every report produced here.
+        claims = sources.map((source, index) => ({
+          id: `claim-${index + 1}`,
+          statement: source.snippet.trim() || source.title,
+          type: 'sourced_fact' as const,
+          sourceIds: [source.id],
+          confidence: source.credibilityScore,
+        }));
+      }
     }
 
     const contradictions: ResearchContradiction[] = input.mockContradictions ?? [];
@@ -229,15 +314,19 @@ export class ResearchAgent {
     const researchEvidence: ResearchEvidence = {
       sources,
       claims,
+      query: input.query,
       contradictions,
       hasFabricatedCitations,
       totalTopicsCount: subTopics.length,
       topicsCoveredCount: subTopics.length,
     };
 
-    const evalResult = this.evaluator.evaluate(researchEvidence);
+    const evalResult = await this.evaluator.evaluateAsync(researchEvidence, {
+      urlFetcher: environment?.fetchContent ? (url) => environment.fetchContent!(url) : undefined,
+      query: input.query,
+    });
     const issues = [
-      ...(input.mockClaims ? [] : [NO_SYNTHESIS_LIMITATION]),
+      ...(input.mockClaims || synthesizedByModel ? [] : [NO_SYNTHESIS_LIMITATION]),
       ...(searchErrors.length > 0
         ? [`${searchErrors.length} pencarian gagal: ${searchErrors.join(' | ')}`]
         : []),

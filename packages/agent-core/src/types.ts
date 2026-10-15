@@ -191,9 +191,13 @@ export type ResearchWorkflowStage =
   | 'cite'
   | 'report';
 
+import type { ModelGateway } from '@personal-ai-os/model-gateway';
+
 export interface ResearchAgentConfig {
   maxSources?: number | undefined;
   minCredibilityScore?: number | undefined;
+  modelGateway?: ModelGateway | undefined;
+  defaultModel?: string | undefined;
 }
 
 export interface CategorizedResearchClaims {
