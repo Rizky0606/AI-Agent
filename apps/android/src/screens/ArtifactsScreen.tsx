@@ -8,7 +8,11 @@ import { useUiStore } from '../state/ui-store.ts';
 const previewable = (artifact: ArtifactItem): boolean =>
   artifact.mimeType.startsWith('text/') || /json|javascript|typescript|xml|yaml|markdown/.test(artifact.mimeType);
 
-export const ArtifactsScreen: React.FC = () => {
+export interface ArtifactsScreenProps {
+  onBack?: () => void;
+}
+
+export const ArtifactsScreen: React.FC<ArtifactsScreenProps> = ({ onBack }) => {
   const { showToast } = useUiStore();
   const [filterType, setFilterType] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
@@ -56,8 +60,20 @@ export const ArtifactsScreen: React.FC = () => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Manajer Artefak</Text>
-        <Text style={styles.headerSubtitle}>Metadata dan pratinjau file hasil tugas AI</Text>
+        {onBack ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Kembali"
+            style={{ width: 48, height: 48, justifyContent: 'center', alignItems: 'center', marginRight: 4 }}
+            onPress={onBack}
+          >
+            <Text style={{ color: theme.colors.primary, fontSize: 24, fontWeight: '700' }}>‹</Text>
+          </TouchableOpacity>
+        ) : null}
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>Manajer Artefak</Text>
+          <Text style={styles.headerSubtitle}>Metadata dan pratinjau file hasil tugas AI</Text>
+        </View>
       </View>
       <View style={styles.filterRow}>
         {['Semua', 'markdown', 'code', 'report'].map((filter) => {
