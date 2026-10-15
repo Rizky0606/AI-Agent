@@ -486,17 +486,26 @@ export class NineRouterGateway implements ModelGateway {
   }
 
   async chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+    const bodyPayload: Record<string, unknown> = {
+      model: request.model,
+      messages: request.messages,
+      temperature: request.temperature,
+      max_tokens: request.maxTokens,
+      stream: false,
+    };
+
+    if (request.tools && request.tools.length > 0) {
+      bodyPayload['tools'] = request.tools;
+      if (request.toolChoice) {
+        bodyPayload['tool_choice'] = request.toolChoice;
+      }
+    }
+
     const response = await this.fetchWithRetry(
       '/chat/completions',
       {
         method: 'POST',
-        body: JSON.stringify({
-          model: request.model,
-          messages: request.messages,
-          temperature: request.temperature,
-          max_tokens: request.maxTokens,
-          stream: false,
-        }),
+        body: JSON.stringify(bodyPayload),
       },
       request.signal,
     );
@@ -505,18 +514,30 @@ export class NineRouterGateway implements ModelGateway {
     const parsed = JSON.parse(bodyText) as {
       id?: string;
       model?: string;
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{
+        message?: {
+          content?: string;
+          tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            function: { name: string; arguments: string };
+          }>;
+        };
+      }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       cost?: number;
     };
 
     const choice = parsed.choices?.[0];
     const content = choice?.message?.content ?? '';
+    const rawToolCalls = choice?.message?.tool_calls;
+    const toolCalls = Array.isArray(rawToolCalls) && rawToolCalls.length > 0 ? rawToolCalls : undefined;
 
     return {
       id: parsed.id ?? `chat-${Date.now()}`,
       model: parsed.model ?? request.model,
       content,
+      toolCalls,
       usage: parsed.usage
         ? {
             promptTokens: parsed.usage.prompt_tokens,

@@ -13,6 +13,12 @@ import type {
 export type MockGatewayOptions = {
   models?: ModelDescriptor[];
   chatResponse?: string;
+  toolCalls?: import('./types.ts').ToolCallDefinition[];
+  chatHandler?: (
+    request: ChatCompletionRequest,
+  ) =>
+    | Promise<{ content: string; toolCalls?: import('./types.ts').ToolCallDefinition[] | undefined }>
+    | { content: string; toolCalls?: import('./types.ts').ToolCallDefinition[] | undefined };
   streamChunks?: string[];
   streamDelayMs?: number;
   throwOnChat?: Error;
@@ -121,6 +127,21 @@ export class MockModelGateway implements ModelGateway {
       throw this.options.throwOnChat;
     }
 
+    if (this.options.chatHandler) {
+      const handled = await this.options.chatHandler(request);
+      return {
+        id: `mock-${Date.now()}`,
+        model: request.model,
+        content: handled.content,
+        toolCalls: handled.toolCalls,
+        usage: {
+          promptTokens: 10,
+          completionTokens: 20,
+          totalTokens: 30,
+        },
+      };
+    }
+
     const content =
       this.options.chatResponse ??
       `Mock response to: ${typeof request.messages.at(-1)?.content === 'string' ? (request.messages.at(-1)?.content as string) : 'structured content'}`;
@@ -129,6 +150,7 @@ export class MockModelGateway implements ModelGateway {
       id: `mock-${Date.now()}`,
       model: request.model,
       content,
+      toolCalls: this.options.toolCalls,
       usage: {
         promptTokens: 10,
         completionTokens: 20,
