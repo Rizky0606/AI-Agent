@@ -1,5 +1,24 @@
 export type ModelCapability = 'chat' | 'streaming' | 'tool_calling' | 'vision';
 
+export type CapabilityProvenance = 'probed' | 'declared' | 'unknown';
+
+export type CapabilityDetail = {
+  capability: ModelCapability;
+  status: CapabilityProvenance;
+  verifiedAt?: string | undefined;
+  latencyMs?: number | undefined;
+  error?: string | undefined;
+};
+
+export type CapabilityProbeResult = {
+  model: string;
+  capabilities: ModelCapability[];
+  capabilityDetails: Record<ModelCapability, CapabilityDetail>;
+  latencyMs?: number | undefined;
+  availabilityStatus: 'available' | 'degraded' | 'unavailable';
+  probedAt: string;
+};
+
 export type ModelCostMetadata = {
   promptPerMillion?: number | undefined;
   completionPerMillion?: number | undefined;
@@ -9,9 +28,14 @@ export type ModelDescriptor = {
   provider: string;
   model: string;
   capabilities: readonly ModelCapability[];
+  capabilityDetails?: Record<string, CapabilityDetail> | undefined;
   contextWindow?: number | undefined;
   costMetadata?: ModelCostMetadata | undefined;
   latencyMs?: number | undefined;
+  isRecommended?: boolean | undefined;
+  isDefault?: boolean | undefined;
+  availabilityStatus?: 'available' | 'degraded' | 'unavailable' | undefined;
+  lastVerifiedAt?: string | undefined;
 };
 
 export type ChatContentPart =
@@ -58,6 +82,10 @@ export interface ModelGateway {
   chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   stream(request: ChatCompletionRequest): AsyncIterable<ChatStreamChunk>;
   listModels(): Promise<readonly ModelDescriptor[]>;
+  probeModel?(
+    model: string,
+    options?: { signal?: AbortSignal | undefined; timeoutMs?: number | undefined } | undefined,
+  ): Promise<CapabilityProbeResult>;
 }
 
 export type EmbeddingRequest = {

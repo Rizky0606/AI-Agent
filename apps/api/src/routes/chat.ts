@@ -122,7 +122,9 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         sessionMetadata,
       );
       if (body.conversationId && (body.mode || body.model || body.workspaceId)) {
-        await deps.chatRepo.updateConversation(user.id, conversationId, sessionMetadata);
+        if (typeof deps.chatRepo.updateConversation === 'function') {
+          await deps.chatRepo.updateConversation(user.id, conversationId, sessionMetadata);
+        }
       }
 
       await deps.chatRepo.appendMessage(user.id, conversationId, 'user', body.content, {
@@ -138,7 +140,21 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         content: m.content,
       }));
 
-      const requirements = { requiresVision: hasVisionAttachments, preferredModel: body.model, taskType: taskTypeForMode(body.mode) };
+      const conversation =
+        typeof deps.chatRepo.getConversation === 'function'
+          ? await deps.chatRepo.getConversation(user.id, conversationId)
+          : null;
+      const effectiveMode: ChatMode =
+        body.mode ?? (conversation?.mode as ChatMode) ?? (user.defaultMode as ChatMode) ?? 'auto';
+
+      const requirements = {
+        requiresVision: hasVisionAttachments,
+        preferredModel: body.model,
+        conversationModel: conversation?.model,
+        userDefaultModel: user.defaultModel,
+        mode: effectiveMode,
+        taskType: taskTypeForMode(effectiveMode),
+      };
       const resolution = await deps.router.resolveModel(requirements);
       if (!resolution.ok) {
         return reply.code(400).send({
@@ -164,8 +180,8 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         {
           usage: response.usage,
           resolvedModel: response.resolvedModel,
-          fallbackUsed: response.fallbackUsed,
-          mode: body.mode ?? 'auto',
+          fallbackUsed: response.fallbackUsed ?? false,
+          mode: effectiveMode,
           model: body.model ?? null,
           workspaceId: body.workspaceId ?? null,
         },
@@ -181,7 +197,8 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         },
         usage: response.usage,
         resolvedModel: response.resolvedModel,
-        mode: body.mode ?? 'auto',
+        fallbackUsed: response.fallbackUsed ?? false,
+        mode: effectiveMode,
       });
     },
   );
@@ -288,13 +305,6 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         }
         const hasVisionAttachments = Boolean(data.attachments && data.attachments.length > 0);
 
-        const requirements = {
-          requiresVision: hasVisionAttachments,
-          requiresStreaming: true,
-          preferredModel: data.model,
-          taskType: taskTypeForMode(data.mode),
-        };
-
         if (activeStreams.size > 0) { send({ type: 'error', code: 'CHAT_BUSY', message: 'Wait for the active response before sending another message' }); return; }
         const user = currentUser;
         const assistantMessageId = randomUUID();
@@ -304,13 +314,6 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         let conversationId = data.conversationId;
         let accumulated = '';
         try {
-        try {
-          const resolution = await deps.router.resolveModel(requirements);
-          if (!resolution.ok) { send({ type: 'error', code: resolution.error, message: resolution.message }); return; }
-        } catch (error) {
-          send({ type: 'error', code: 'MODEL_ERROR', message: error instanceof Error ? error.message : 'Model unavailable' });
-          return;
-        }
           const projectId =
             data.projectId ?? (await deps.chatRepo.getOrCreateDefaultProject(user.id));
           const sessionMetadata = {
@@ -326,7 +329,34 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             sessionMetadata,
           );
           if (data.conversationId && (data.mode || data.model || data.workspaceId)) {
-            await deps.chatRepo.updateConversation(user.id, conversationId, sessionMetadata);
+            if (typeof deps.chatRepo.updateConversation === 'function') {
+              await deps.chatRepo.updateConversation(user.id, conversationId, sessionMetadata);
+            }
+          }
+
+          const conv =
+            typeof deps.chatRepo.getConversation === 'function'
+              ? await deps.chatRepo.getConversation(user.id, conversationId)
+              : null;
+          const effectiveMode: ChatMode =
+            data.mode ?? (conv?.mode as ChatMode) ?? (user.defaultMode as ChatMode) ?? 'auto';
+
+          const requirements = {
+            requiresVision: hasVisionAttachments,
+            requiresStreaming: true,
+            preferredModel: data.model,
+            conversationModel: conv?.model,
+            userDefaultModel: user.defaultModel,
+            mode: effectiveMode,
+            taskType: taskTypeForMode(effectiveMode),
+          };
+
+          try {
+            const resolution = await deps.router.resolveModel(requirements);
+            if (!resolution.ok) { send({ type: 'error', code: resolution.error, message: resolution.message }); return; }
+          } catch (error) {
+            send({ type: 'error', code: 'MODEL_ERROR', message: error instanceof Error ? error.message : 'Model unavailable' });
+            return;
           }
 
           if (conversationId !== data.conversationId) {
@@ -374,6 +404,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
 
           let lastUsage: Record<string, unknown> | undefined;
           let resolvedModel = 'default';
+          let fallbackUsed = false;
 
           const stream = deps.router.stream(
             { messages, signal: controller.signal },
@@ -386,6 +417,9 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             }
 
             resolvedModel = chunk.resolvedModel;
+            if (chunk.fallbackUsed) {
+              fallbackUsed = true;
+            }
             if (chunk.delta) {
               accumulated += chunk.delta;
               send({
@@ -403,7 +437,8 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             const savedAssistant = await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
               cancelled: true,
               resolvedModel,
-              mode: data.mode ?? 'auto',
+              fallbackUsed,
+              mode: effectiveMode,
               model: data.model ?? null,
               workspaceId: data.workspaceId ?? null,
             }, assistantMessageId);
@@ -424,7 +459,8 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             const savedAssistant = await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
               usage: lastUsage,
               resolvedModel,
-              mode: data.mode ?? 'auto',
+              fallbackUsed,
+              mode: effectiveMode,
               model: data.model ?? null,
               workspaceId: data.workspaceId ?? null,
             }, assistantMessageId);
@@ -442,7 +478,8 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
               },
               usage: lastUsage,
               resolvedModel,
-              mode: data.mode ?? 'auto',
+              fallbackUsed,
+              mode: effectiveMode,
             });
           }
         } catch (err) {

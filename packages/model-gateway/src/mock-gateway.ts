@@ -1,9 +1,11 @@
 import { ModelGatewayError } from './errors.ts';
 import type {
+  CapabilityProbeResult,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatStreamChunk,
   EmbeddingProvider,
+  ModelCapability,
   ModelDescriptor,
   ModelGateway,
 } from './types.ts';
@@ -49,6 +51,52 @@ export class MockModelGateway implements ModelGateway {
         },
       ]
     );
+  }
+
+  async probeModel(
+    model: string,
+    options?: { signal?: AbortSignal | undefined; timeoutMs?: number | undefined } | undefined,
+  ): Promise<CapabilityProbeResult> {
+    if (options?.signal?.aborted) {
+      throw new ModelGatewayError('STREAM_ABORTED', 'Request aborted by client');
+    }
+    const list = await this.listModels();
+    const matched = list.find((m) => m.model === model);
+    const capabilities = matched ? [...matched.capabilities] : (['chat', 'streaming'] as ModelCapability[]);
+    const now = new Date().toISOString();
+    return {
+      model,
+      capabilities,
+      capabilityDetails: {
+        chat: {
+          capability: 'chat',
+          status: capabilities.includes('chat') ? 'probed' : 'declared',
+          verifiedAt: now,
+          latencyMs: 12,
+        },
+        streaming: {
+          capability: 'streaming',
+          status: capabilities.includes('streaming') ? 'probed' : 'unknown',
+          verifiedAt: capabilities.includes('streaming') ? now : undefined,
+          latencyMs: 18,
+        },
+        tool_calling: {
+          capability: 'tool_calling',
+          status: capabilities.includes('tool_calling') ? 'probed' : 'unknown',
+          verifiedAt: capabilities.includes('tool_calling') ? now : undefined,
+          latencyMs: 25,
+        },
+        vision: {
+          capability: 'vision',
+          status: capabilities.includes('vision') ? 'probed' : 'unknown',
+          verifiedAt: capabilities.includes('vision') ? now : undefined,
+          latencyMs: 30,
+        },
+      },
+      latencyMs: 20,
+      availabilityStatus: 'available',
+      probedAt: now,
+    };
   }
 
   async chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {

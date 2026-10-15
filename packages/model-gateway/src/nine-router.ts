@@ -1,9 +1,12 @@
 import { ModelGatewayError, sanitizeMessage } from './errors.ts';
 import type {
+  CapabilityDetail,
+  CapabilityProbeResult,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatStreamChunk,
   EmbeddingProvider,
+  ModelCapability,
   ModelDescriptor,
   ModelGateway,
 } from './types.ts';
@@ -235,9 +238,251 @@ export class NineRouterGateway implements ModelGateway {
     return data.data.map((item) => ({
       provider: '9router',
       model: item.id,
-      capabilities: ['chat', 'streaming'],
+      capabilities: ['chat'],
       contextWindow: item.context_window ?? item.context_length ?? 4096,
     }));
+  }
+
+  async probeModel(
+    model: string,
+    options?: { signal?: AbortSignal | undefined; timeoutMs?: number | undefined } | undefined,
+  ): Promise<CapabilityProbeResult> {
+    const latencies: number[] = [];
+    const now = new Date().toISOString();
+
+    // 1. Streaming probe: minimal 1-token request
+    let streamingDetail: CapabilityDetail = {
+      capability: 'streaming',
+      status: 'unknown',
+    };
+    try {
+      const t0 = Date.now();
+      const res = await this.fetchWithRetry(
+        '/chat/completions',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model,
+            stream: true,
+            messages: [{ role: 'user', content: 'Say OK' }],
+            max_tokens: 2,
+          }),
+        },
+        options?.signal,
+      );
+
+      if (res.ok) {
+        const reader = res.body?.getReader();
+        const first = reader ? await reader.read() : undefined;
+        await reader?.cancel();
+        const firstChunk = first?.value ? new TextDecoder().decode(first.value).slice(0, 300) : '';
+        if (firstChunk.length > 0) {
+          const lat = Date.now() - t0;
+          latencies.push(lat);
+          streamingDetail = {
+            capability: 'streaming',
+            status: 'probed',
+            verifiedAt: now,
+            latencyMs: lat,
+          };
+        } else {
+          streamingDetail = {
+            capability: 'streaming',
+            status: 'unknown',
+            error: 'Empty stream chunk received',
+          };
+        }
+      } else {
+        streamingDetail = {
+          capability: 'streaming',
+          status: 'unknown',
+          error: `HTTP ${res.status}`,
+        };
+      }
+    } catch (err) {
+      streamingDetail = {
+        capability: 'streaming',
+        status: 'unknown',
+        error: err instanceof Error ? sanitizeMessage(err.message, this.apiKey) : 'Stream probe failed',
+      };
+    }
+
+    // 2. Tool calling probe: single calculator tool definition
+    let toolCallingDetail: CapabilityDetail = {
+      capability: 'tool_calling',
+      status: 'unknown',
+    };
+    try {
+      const t0 = Date.now();
+      const res = await this.fetchWithRetry(
+        '/chat/completions',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: 'What is 1+1? Call calculator.' }],
+            tools: [
+              {
+                type: 'function',
+                function: {
+                  name: 'calculator',
+                  description: 'Adds numbers',
+                  parameters: {
+                    type: 'object',
+                    properties: { a: { type: 'number' }, b: { type: 'number' } },
+                    required: ['a', 'b'],
+                  },
+                },
+              },
+            ],
+            tool_choice: 'required',
+            max_tokens: 30,
+          }),
+        },
+        options?.signal,
+      );
+
+      if (res.ok) {
+        const bodyText = await res.text();
+        const parsed = JSON.parse(bodyText) as {
+          choices?: Array<{ message?: { tool_calls?: unknown[] } }>;
+        };
+        const hasToolCalls =
+          Array.isArray(parsed.choices?.[0]?.message?.tool_calls) &&
+          parsed.choices[0].message.tool_calls.length > 0;
+        if (hasToolCalls) {
+          const lat = Date.now() - t0;
+          latencies.push(lat);
+          toolCallingDetail = {
+            capability: 'tool_calling',
+            status: 'probed',
+            verifiedAt: now,
+            latencyMs: lat,
+          };
+        } else {
+          toolCallingDetail = {
+            capability: 'tool_calling',
+            status: 'unknown',
+            error: 'No tool_calls in completion',
+          };
+        }
+      } else {
+        toolCallingDetail = {
+          capability: 'tool_calling',
+          status: 'unknown',
+          error: `HTTP ${res.status}`,
+        };
+      }
+    } catch (err) {
+      toolCallingDetail = {
+        capability: 'tool_calling',
+        status: 'unknown',
+        error: err instanceof Error ? sanitizeMessage(err.message, this.apiKey) : 'Tool calling probe failed',
+      };
+    }
+
+    // 3. Vision probe: minimal 1x1 png image
+    let visionDetail: CapabilityDetail = {
+      capability: 'vision',
+      status: 'unknown',
+    };
+    const tinyPng =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL8WAAAAABJRU5ErkJggg==';
+    try {
+      const t0 = Date.now();
+      const res = await this.fetchWithRetry(
+        '/chat/completions',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: 'Color?' },
+                  { type: 'image_url', image_url: { url: tinyPng } },
+                ],
+              },
+            ],
+            max_tokens: 10,
+          }),
+        },
+        options?.signal,
+      );
+
+      if (res.ok) {
+        const bodyText = await res.text();
+        const parsed = JSON.parse(bodyText) as {
+          choices?: Array<{ message?: { content?: unknown } }>;
+        };
+        if (parsed.choices?.[0]?.message?.content) {
+          const lat = Date.now() - t0;
+          latencies.push(lat);
+          visionDetail = {
+            capability: 'vision',
+            status: 'probed',
+            verifiedAt: now,
+            latencyMs: lat,
+          };
+        } else {
+          visionDetail = {
+            capability: 'vision',
+            status: 'unknown',
+            error: 'No content in vision completion',
+          };
+        }
+      } else {
+        visionDetail = {
+          capability: 'vision',
+          status: 'unknown',
+          error: `HTTP ${res.status}`,
+        };
+      }
+    } catch (err) {
+      visionDetail = {
+        capability: 'vision',
+        status: 'unknown',
+        error: err instanceof Error ? sanitizeMessage(err.message, this.apiKey) : 'Vision probe failed',
+      };
+    }
+
+    const chatProbed =
+      streamingDetail.status === 'probed' ||
+      toolCallingDetail.status === 'probed' ||
+      visionDetail.status === 'probed';
+    const chatDetail: CapabilityDetail = {
+      capability: 'chat',
+      status: chatProbed ? 'probed' : 'declared',
+      verifiedAt: chatProbed ? now : undefined,
+    };
+
+    const capabilities: ModelCapability[] = ['chat'];
+    if (streamingDetail.status === 'probed') capabilities.push('streaming');
+    if (toolCallingDetail.status === 'probed') capabilities.push('tool_calling');
+    if (visionDetail.status === 'probed') capabilities.push('vision');
+
+    const avgLatency =
+      latencies.length > 0
+        ? Math.round(latencies.reduce((sum, v) => sum + v, 0) / latencies.length)
+        : undefined;
+
+    const availabilityStatus: 'available' | 'degraded' | 'unavailable' =
+      latencies.length === 0 ? 'unavailable' : capabilities.length < 2 ? 'degraded' : 'available';
+
+    return {
+      model,
+      capabilities,
+      capabilityDetails: {
+        chat: chatDetail,
+        streaming: streamingDetail,
+        tool_calling: toolCallingDetail,
+        vision: visionDetail,
+      },
+      latencyMs: avgLatency,
+      availabilityStatus,
+      probedAt: now,
+    };
   }
 
   async chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {

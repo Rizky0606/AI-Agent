@@ -134,10 +134,11 @@ export type AppDependencies = {
       }
     | undefined;
   models?: {
-    auth: AuthService;
+    auth?: AuthService | undefined;
     modelConfigs: ModelConfigRepository;
     gateway: ModelGateway;
     providerBaseUrl: string;
+    audit?: AuditRepository | undefined;
   } | undefined;
   /**
    * Google sign-in. Unset leaves `/v1/auth/google/*` mounted but answering 503, so a deployment
@@ -556,7 +557,11 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     }
   }
   if (dependencies.models) {
-    registerModelRoutes(app, { ...dependencies.models, auth: dependencies.auth });
+    registerModelRoutes(app, {
+      ...dependencies.models,
+      auth: dependencies.auth,
+      audit: dependencies.models.audit ?? dependencies.approval?.auditRepo,
+    });
   }
 
   if (dependencies.chat) {
@@ -574,6 +579,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       auth: dependencies.auth,
       projectRepo: dependencies.project.projectRepo,
       chatRepo: dependencies.project.chatRepo,
+      audit: dependencies.approval?.auditRepo,
     });
   }
 

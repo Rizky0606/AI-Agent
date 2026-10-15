@@ -252,6 +252,7 @@ const app = await buildApp({
     modelConfigs: modelConfigRepository,
     gateway,
     providerBaseUrl: process.env.NINEROUTER_BASE_URL ?? 'https://9router.ojixx.my.id/v1',
+    audit: auditRepository,
   },
   project: {
     projectRepo: projectRepository,

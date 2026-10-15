@@ -43,10 +43,12 @@ capabilities:
       Completion evidence is now independent on the coding, tool, and research paths (2026-10-13). `LocalCodingEnvironment` (`packages/agent-core/src/coding/local-environment.ts`) runs `node --run lint|typecheck|test|build` in a real per-task workspace, and `createDefaultEnvironment()` — which returned `{passed: true}` for every check — is deleted. `executeRegisteredTool` runs `GenericEvaluator` over the tool result before writing `completed` (`apps/agent-worker/src/task-executor.ts:637-674`) and attaches no evidence when a tool returns `null`/`undefined`. `ResearchAgent` no longer carries a hardcoded source or claim list: it searches through `web_search` and browses every hit through `web_fetch` via `LocalResearchEnvironment` (`packages/agent-core/src/research/local-environment.ts`), and a run with no reachable source ends `failed` with `No valid sources provided`. Live proof: a workspace whose `lint` exits 1 ends `failed` with `evaluationResult.score=0.71`; a workspace whose scripts pass ends `completed` with `score=1` and a real git diff artifact; a real research query ends `completed` with `score=1` over five fetched pages (task `46098f3e-…`); a query with no hits ends `failed` with `score=0` (task `c38ae271-…`). Remaining gaps: acceptance criteria are still not persisted before execution, so the tool path evaluates against the default `task_output` criterion and does not check whether the output answers the user's request; and research claims are page openings rather than model synthesis, so relevance to the question is not judged.
   model_gateway:
     status: implemented
-    code: packages/model-gateway; apps/api/src/routes/models.ts
+    code: packages/model-gateway; apps/api/src/routes/models.ts; apps/api/src/services/model-router.ts
     permission_boundary: server-side provider credentials
     clients: android model settings; windows model settings
-    proof: apps/api/test/gateway-config.test.ts
+    proof: packages/model-gateway/test/probe.test.ts; apps/api/test/model-routes-and-resolution.test.ts; apps/api/test/chat.test.ts; apps/api/test/gateway-config.test.ts
+    limitation: |
+      Capability probing dynamically verifies streaming, tool calling, and vision via bounded concurrency (2) & rate limits (POST /v1/models/refresh). Unproven capabilities remain 'unknown', never assumed true. Zero hardcoded model names in routing code: Auto policy resolves dynamically via env variables (AUTO_MODEL_*) or database table (model_routing_policies), with algorithmic capability matching. Resolution hierarchy: message choice > conversation preference > user default > auto. Chat responses and WebSocket stream completions include resolvedModel and fallbackUsed.
   tools:
     status: implemented
     code: packages/tools/src/registry/tool-registry.ts; packages/tools/src/registry/create-default-tool-registry.ts; packages/tools/src/types.ts
