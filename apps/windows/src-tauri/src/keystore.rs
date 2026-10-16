@@ -1,6 +1,5 @@
-use p256::ecdsa::signature::Signer;
+use p256::ecdsa::signature::{Signer, Verifier};
 use p256::ecdsa::{SigningKey, VerifyingKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -73,25 +72,25 @@ fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CRYPTPROTECT_PROMPTSTRUCT, CRYPTOAPI_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptProtectData, CRYPTPROTECT_PROMPTSTRUCT, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
     };
 
-    let mut in_blob = CRYPTOAPI_BLOB {
+    let in_blob = CRYPT_INTEGER_BLOB {
         cbData: plaintext.len() as u32,
         pbData: plaintext.as_ptr() as *mut u8,
     };
-    let mut out_blob = CRYPTOAPI_BLOB {
+    let mut out_blob = CRYPT_INTEGER_BLOB {
         cbData: 0,
         pbData: null_mut(),
     };
 
     let success = unsafe {
         CryptProtectData(
-            &mut in_blob,
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            null_mut::<CRYPTPROTECT_PROMPTSTRUCT>(),
+            &in_blob,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null::<CRYPTPROTECT_PROMPTSTRUCT>(),
             CRYPTPROTECT_UI_FORBIDDEN,
             &mut out_blob,
         )
@@ -127,25 +126,25 @@ fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, String> {
     use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPTPROTECT_PROMPTSTRUCT, CRYPTOAPI_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptUnprotectData, CRYPTPROTECT_PROMPTSTRUCT, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
     };
 
-    let mut in_blob = CRYPTOAPI_BLOB {
+    let in_blob = CRYPT_INTEGER_BLOB {
         cbData: ciphertext.len() as u32,
         pbData: ciphertext.as_ptr() as *mut u8,
     };
-    let mut out_blob = CRYPTOAPI_BLOB {
+    let mut out_blob = CRYPT_INTEGER_BLOB {
         cbData: 0,
         pbData: null_mut(),
     };
 
     let success = unsafe {
         CryptUnprotectData(
-            &mut in_blob,
+            &in_blob,
             null_mut(),
-            null_mut(),
-            null_mut(),
-            null_mut::<CRYPTPROTECT_PROMPTSTRUCT>(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null::<CRYPTPROTECT_PROMPTSTRUCT>(),
             CRYPTPROTECT_UI_FORBIDDEN,
             &mut out_blob,
         )
@@ -333,7 +332,7 @@ mod tests {
         encoded.extend_from_slice(&y_bytes);
 
         let verifying_key = VerifyingKey::from_sec1_bytes(&encoded).expect("valid sec1 public key");
-        let signature = p256::ecdsa::Signature::from_bytes(&sig_bytes.into()).expect("valid signature");
+        let signature = p256::ecdsa::Signature::from_slice(&sig_bytes).expect("valid signature");
 
         assert!(
             verifying_key.verify(challenge.as_bytes(), &signature).is_ok(),

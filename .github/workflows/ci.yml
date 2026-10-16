@@ -108,6 +108,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build Windows Frontend
+        run: pnpm --filter @personal-ai-os/windows build
+
       - name: Run Windows Rust Tests (Keystore, Allowlist, PathValidator, Executor)
         run: cargo test --manifest-path apps/windows/src-tauri/Cargo.toml
 
