@@ -24,6 +24,10 @@ test('TelemetryTracer: W3C traceparent formatting and parsing', () => {
 });
 
 test('TelemetryTracer: redacts sensitive keys and values in span attributes', () => {
+  const directRedacted = redactSensitiveAttributes({ password: '123', token: 'abc' });
+  assert.equal(directRedacted.password, '[REDACTED]');
+  assert.equal(directRedacted.token, '[REDACTED]');
+
   const tracer = new TelemetryTracer();
   const span = tracer.startSpan('sensitive_op', 'http_request', {
     attributes: {
