@@ -304,3 +304,53 @@
   text-align: center;
   gap: var(--space-2);
 }
+
+/* Dialog and Notice Helpers */
+.memory-notice-card.notice-info {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--color-primary, #3b82f6);
+}
+
+.memory-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.memory-dialog-desc {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.memory-dialog-textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.memory-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.memory-dialog-grid-row {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.memory-dialog-grid-col {
+  flex: 1;
+}
+
+.memory-dialog-label {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.memory-dialog-select {
+  width: 100%;
+}

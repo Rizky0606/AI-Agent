@@ -40,27 +40,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         <span>ID: <code>{task.id.slice(0, 8)}</code></span>
         {task.progress != null && <span>{task.progress}%</span>}
         {Boolean(task.payload?.runtime || task.payload?.selectedRuntimeId) && (
-          <span style={{ fontSize: 11, color: 'var(--accent-cyan, #06b6d4)', fontWeight: 500 }}>
+          <span className="task-runtime-pill">
             Runtime: {String(task.payload?.runtime || task.payload?.selectedRuntimeId)}
           </span>
         )}
       </div>
 
       {task.payload?.runtimeFallback === true && (
-        <div
-          className="task-fallback-banner"
-          style={{
-            marginTop: '8px',
-            marginBottom: '8px',
-            padding: '6px 10px',
-            backgroundColor: 'rgba(245, 158, 11, 0.12)',
-            border: '1px solid rgba(245, 158, 11, 0.3)',
-            borderRadius: '6px',
-            color: '#f59e0b',
-            fontSize: '12px',
-            lineHeight: 1.4,
-          }}
-        >
+        <div className="task-fallback-banner">
           <strong>Pengalihan Runtime:</strong> {String(task.payload.fallbackReason || `Dialihkan dari ${task.payload.originalRuntimeId}`)}
         </div>
       )}
@@ -75,20 +62,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       )}
 
       {task.status === 'failed' && task.error && (
-        <div
-          className="task-error-banner"
-          style={{
-            marginTop: '8px',
-            marginBottom: '8px',
-            padding: '6px 10px',
-            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
-            borderRadius: '6px',
-            color: '#f87171',
-            fontSize: '12px',
-            lineHeight: 1.4,
-          }}
-        >
+        <div className="task-error-banner">
           <strong>Keterangan Masalah:</strong> {task.error}
         </div>
       )}
@@ -136,53 +110,44 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
       {/* Event Stream (Expanded when selected) */}
       {isSelected && events && events.length > 0 && (
-        <div className="settings-form-group" style={{ marginTop: 12 }}>
+        <div className="settings-form-group task-events-group">
           <span className="settings-label">{idID.activity.tasks.eventStreamLabel}</span>
-          <div className="task-timeline-container" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+          <div className="task-timeline-container">
             {events.map((ev, i) => {
               const payload = (ev.payload ?? {}) as Record<string, unknown>;
               const isDiff = Boolean(payload.diff);
               return (
-                <div
-                  key={ev.id || i}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: 6,
-                    backgroundColor: 'rgba(0,0,0,0.2)',
-                    border: '1px solid var(--border-sub, rgba(255,255,255,0.08))',
-                    fontSize: 12,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontWeight: 600 }}>
+                <div key={ev.id || i} className="task-event-card">
+                  <div className="task-event-header-row">
                     <span>
                       #{i + 1} {ev.eventType}
                       {payload.action ? ` (${String(payload.action)})` : ''}
                     </span>
-                    <span style={{ fontSize: 10, color: 'var(--text-sub)' }}>
+                    <span className="task-event-time">
                       {ev.createdAt ? new Date(ev.createdAt).toLocaleTimeString() : ''}
                     </span>
                   </div>
                   {payload.text ? (
-                    <div style={{ color: 'var(--text-main)', whiteSpace: 'pre-wrap', marginBottom: 4 }}>
+                    <div className="task-event-text">
                       {String(payload.text)}
                     </div>
                   ) : null}
                   {isDiff ? (
-                    <div style={{ marginTop: 4, padding: 6, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11, overflowX: 'auto' }}>
-                      {payload.path ? <div style={{ color: 'var(--accent-cyan)', marginBottom: 2 }}>{String(payload.path)}</div> : null}
-                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                    <div className="task-event-diff-box">
+                      {payload.path ? <div className="task-event-diff-path">{String(payload.path)}</div> : null}
+                      <pre className="tool-step-pre">
                         {String(payload.diff).split('\n').map((line, lIdx) => {
-                          let color = 'inherit';
-                          if (line.startsWith('+')) color = 'var(--accent-emerald, #10b981)';
-                          else if (line.startsWith('-')) color = 'var(--accent-rose, #ef4444)';
-                          else if (line.startsWith('@@')) color = 'var(--accent-cyan, #06b6d4)';
-                          return <div key={lIdx} style={{ color }}>{line}</div>;
+                          let lineClass = '';
+                          if (line.startsWith('+')) lineClass = 'diff-line-add';
+                          else if (line.startsWith('-')) lineClass = 'diff-line-del';
+                          else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
+                          return <div key={lIdx} className={lineClass}>{line}</div>;
                         })}
                       </pre>
                     </div>
                   ) : null}
                   {!payload.text && !isDiff ? (
-                    <pre style={{ margin: 0, fontSize: 11, color: 'var(--text-sub)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                    <pre className="task-event-raw-json">
                       {JSON.stringify(payload)}
                     </pre>
                   ) : null}

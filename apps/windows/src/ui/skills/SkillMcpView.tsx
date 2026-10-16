@@ -256,7 +256,7 @@ export const SkillMcpView: React.FC = () => {
 
       {/* SKILLS TAB CONTENT */}
       {activeTab === 'skills' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+        <div className="skills-tab-content">
           {/* Toolbar */}
           <div className="skills-toolbar">
             <div className="project-select-label">
@@ -286,7 +286,7 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           {skillsError && (
-            <div className="callout callout-error" style={{ padding: 'var(--space-3)' }}>
+            <div className="callout callout-error skills-callout-error">
               {skillsError}
             </div>
           )}
@@ -300,11 +300,11 @@ export const SkillMcpView: React.FC = () => {
                   <div>
                     <div className="skill-card-top">
                       <div className="skill-title-block">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <div className="skill-title-row">
                           <h3>{skill.name}</h3>
                           <span className="skill-version-pill">v{skill.version}</span>
                         </div>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--color-primary, #3b82f6)' }}>
+                        <span className="skill-source-badge">
                           {isReadOnly
                             ? idID.skillsMcp.skillsSection.readOnlyBadge
                             : skill.source === 'builtin'
@@ -313,7 +313,7 @@ export const SkillMcpView: React.FC = () => {
                         </span>
                       </div>
                       {skill.isProjectOverride && (
-                        <span className="risk-pill medium" style={{ fontSize: '0.68rem' }}>
+                        <span className="risk-pill medium skill-override-badge">
                           {idID.skillsMcp.skillsSection.projectOverrideActive}
                         </span>
                       )}
@@ -339,7 +339,7 @@ export const SkillMcpView: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                        <span className="skill-no-perms-text">
                           {idID.skillsMcp.skillsSection.noPermissions}
                         </span>
                       )}
@@ -403,19 +403,19 @@ export const SkillMcpView: React.FC = () => {
 
       {/* MCP TAB CONTENT */}
       {activeTab === 'mcp' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+        <div className="mcp-tab-content">
           {/* MCP Toolbar */}
           <div className="skills-toolbar">
             <div>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, margin: 0 }}>
+              <h2 className="mcp-toolbar-title">
                 {idID.skillsMcp.mcpSection.serversTitle}
               </h2>
-              <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', margin: '2px 0 0 0' }}>
+              <p className="mcp-toolbar-desc">
                 {idID.skillsMcp.mcpSection.adminOnlyNotice}
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <div className="mcp-toolbar-actions">
               <Button
                 variant="secondary"
                 size="sm"
@@ -439,7 +439,7 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           {mcpError && (
-            <div className="callout callout-error" style={{ padding: 'var(--space-3)' }}>
+            <div className="callout callout-error skills-callout-error">
               {mcpError}
             </div>
           )}
@@ -447,7 +447,7 @@ export const SkillMcpView: React.FC = () => {
           {/* MCP Servers Grid */}
           <div className="mcp-servers-grid">
             {mcpServers.length === 0 ? (
-              <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+              <div className="mcp-empty-grid">
                 Belum ada server MCP yang dikonfigurasi.
               </div>
             ) : (
@@ -455,8 +455,8 @@ export const SkillMcpView: React.FC = () => {
                 <div key={server.id} className="mcp-card">
                   <div className="mcp-card-header">
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>{server.name}</h3>
+                      <div className="mcp-server-header-left">
+                        <h3 className="mcp-server-title">{server.name}</h3>
                         <span
                           className={`mcp-status-pill ${
                             server.status === 'connected'
@@ -474,16 +474,7 @@ export const SkillMcpView: React.FC = () => {
                             : idID.skillsMcp.mcpSection.statusDisconnected}
                         </span>
                       </div>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          marginTop: '4px',
-                          fontSize: '0.75rem',
-                          color: 'var(--color-text-muted)',
-                        }}
-                      >
+                      <div className="mcp-server-meta-row">
                         {server.transport === 'stdio' ? <Terminal size={12} /> : <Globe size={12} />}
                         <span>Transport: {server.transport.toUpperCase()}</span>
                         <span>•</span>
@@ -502,7 +493,7 @@ export const SkillMcpView: React.FC = () => {
                     />
                   </div>
 
-                  <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>
+                  <div className="mcp-server-cmd">
                     {server.transport === 'stdio'
                       ? `Perintah: ${server.command} ${(server.args ?? []).join(' ')}`
                       : `URL: ${server.url}`}
@@ -510,7 +501,7 @@ export const SkillMcpView: React.FC = () => {
 
                   {/* Tools List */}
                   <div className="mcp-tools-list">
-                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>
+                    <div className="mcp-tools-header">
                       {server.tools && server.tools.length > 0
                         ? idID.skillsMcp.mcpSection.toolsCount(server.tools.length)
                         : idID.skillsMcp.mcpSection.noTools}
@@ -519,12 +510,12 @@ export const SkillMcpView: React.FC = () => {
                       <div key={idx} className="mcp-tool-row">
                         <div>
                           <strong>{t.name}</strong>
-                          <span style={{ marginLeft: 6, color: 'var(--color-text-muted)', fontSize: '0.72rem' }}>
+                          <span className="mcp-tool-desc">
                             {t.description}
                           </span>
                         </div>
                         {t.riskLevel && (
-                          <span className={`risk-pill ${t.riskLevel.toLowerCase()}`} style={{ fontSize: '0.65rem' }}>
+                          <span className={`risk-pill ${t.riskLevel.toLowerCase()} mcp-tool-risk-badge`}>
                             {t.riskLevel}
                           </span>
                         )}
@@ -537,9 +528,9 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           {/* MCP Call Logs Table (Audit Trail) */}
-          <div style={{ marginTop: 'var(--space-4)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>
+          <div className="mcp-audit-section">
+            <div className="mcp-audit-header">
+              <h3 className="mcp-audit-title">
                 {idID.skillsMcp.mcpSection.callLogsTitle}
               </h3>
               <Button
@@ -554,7 +545,7 @@ export const SkillMcpView: React.FC = () => {
 
             <div className="logs-table-container">
               {mcpLogs.length === 0 ? (
-                <div style={{ padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>
+                <div className="mcp-audit-empty">
                   {idID.skillsMcp.mcpSection.noLogs}
                 </div>
               ) : (
@@ -587,7 +578,7 @@ export const SkillMcpView: React.FC = () => {
                           </span>
                         </td>
                         <td>{log.durationMs ? `${log.durationMs}ms` : '-'}</td>
-                        <td style={{ color: log.error ? '#ef4444' : 'var(--color-text-muted)' }}>
+                        <td className={log.error ? 'mcp-log-status-error' : 'mcp-log-status-text'}>
                           {log.error || 'Sukses'}
                         </td>
                       </tr>
@@ -606,14 +597,14 @@ export const SkillMcpView: React.FC = () => {
         onClose={() => setManifestModal((prev) => ({ ...prev, open: false }))}
         title={`${idID.skillsMcp.skillsSection.manifestDialogTitle}: ${manifestModal.skillName}`}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', margin: 0 }}>
+        <div className="mcp-manifest-body">
+          <p className="mcp-manifest-desc">
             Manifest resmi JSON terverifikasi oleh ManifestValidator dan Permission Engine.
           </p>
           <pre className="manifest-code-box">
             {JSON.stringify(manifestModal.manifest, null, 2)}
           </pre>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+          <div className="mcp-manifest-actions">
             <Button
               variant="secondary"
               onClick={() => setManifestModal((prev) => ({ ...prev, open: false }))}
@@ -630,20 +621,19 @@ export const SkillMcpView: React.FC = () => {
         onClose={() => setIsAddMcpOpen(false)}
         title={idID.skillsMcp.mcpSection.addDialogTitle}
       >
-        <form onSubmit={handleAddMcpSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+        <form onSubmit={handleAddMcpSubmit} className="mcp-form-body">
           {addMcpData.error && (
-            <div className="callout callout-error" style={{ padding: 'var(--space-2)', fontSize: '0.85rem' }}>
+            <div className="callout callout-error mcp-form-error">
               {addMcpData.error}
             </div>
           )}
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>ID Server (unik, tanpa spasi):</label>
+            <label className="mcp-form-label">ID Server (unik, tanpa spasi):</label>
             <input
               type="text"
               required
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.id}
               onChange={(e) => setAddMcpData({ ...addMcpData, id: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })}
               placeholder="contoh: github-tools"
@@ -651,12 +641,11 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>Nama Tampilan Server:</label>
+            <label className="mcp-form-label">Nama Tampilan Server:</label>
             <input
               type="text"
               required
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.name}
               onChange={(e) => setAddMcpData({ ...addMcpData, name: e.target.value })}
               placeholder="contoh: GitHub Tools MCP"
@@ -664,10 +653,9 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.transportLabel}:</label>
+            <label className="mcp-form-label">{idID.skillsMcp.mcpSection.transportLabel}:</label>
             <select
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.transport}
               onChange={(e) => setAddMcpData({ ...addMcpData, transport: e.target.value as 'stdio' | 'sse' })}
             >
@@ -679,10 +667,9 @@ export const SkillMcpView: React.FC = () => {
           {addMcpData.transport === 'stdio' ? (
             <>
               <div>
-                <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.commandLabel}:</label>
+                <label className="mcp-form-label">{idID.skillsMcp.mcpSection.commandLabel}:</label>
                 <select
-                  className="project-select"
-                  style={{ width: '100%', marginTop: 4 }}
+                  className="project-select mcp-form-input"
                   value={addMcpData.command}
                   onChange={(e) => setAddMcpData({ ...addMcpData, command: e.target.value })}
                 >
@@ -693,17 +680,16 @@ export const SkillMcpView: React.FC = () => {
                   <option value="python3">python3 (Python runtime)</option>
                   <option value="python">python (Python runner)</option>
                 </select>
-                <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
+                <span className="mcp-form-hint">
                   {idID.skillsMcp.mcpSection.commandHint}
                 </span>
               </div>
 
               <div>
-                <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.argsLabel}:</label>
+                <label className="mcp-form-label">{idID.skillsMcp.mcpSection.argsLabel}:</label>
                 <input
                   type="text"
-                  className="project-select"
-                  style={{ width: '100%', marginTop: 4 }}
+                  className="project-select mcp-form-input"
                   value={addMcpData.args}
                   onChange={(e) => setAddMcpData({ ...addMcpData, args: e.target.value })}
                   placeholder="-y @modelcontextprotocol/server-github"
@@ -712,28 +698,26 @@ export const SkillMcpView: React.FC = () => {
             </>
           ) : (
             <div>
-              <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.urlLabel}:</label>
+              <label className="mcp-form-label">{idID.skillsMcp.mcpSection.urlLabel}:</label>
               <input
                 type="url"
                 required
-                className="project-select"
-                style={{ width: '100%', marginTop: 4 }}
+                className="project-select mcp-form-input"
                 value={addMcpData.url}
                 onChange={(e) => setAddMcpData({ ...addMcpData, url: e.target.value })}
                 placeholder="https://mcp-server.example.com/sse"
               />
-              <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
+              <span className="mcp-form-hint">
                 {idID.skillsMcp.mcpSection.urlHint}
               </span>
             </div>
           )}
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.capabilitiesLabel}:</label>
+            <label className="mcp-form-label">{idID.skillsMcp.mcpSection.capabilitiesLabel}:</label>
             <input
               type="text"
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.capabilities}
               onChange={(e) => setAddMcpData({ ...addMcpData, capabilities: e.target.value })}
               placeholder="docs:read, code:review"
@@ -741,10 +725,9 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.riskLevelLabel}:</label>
+            <label className="mcp-form-label">{idID.skillsMcp.mcpSection.riskLevelLabel}:</label>
             <select
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.riskLevel}
               onChange={(e) =>
                 setAddMcpData({ ...addMcpData, riskLevel: e.target.value as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' })
@@ -757,7 +740,7 @@ export const SkillMcpView: React.FC = () => {
             </select>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+          <div className="mcp-form-actions">
             <Button variant="secondary" onClick={() => setIsAddMcpOpen(false)}>
               {idID.common.cancel}
             </Button>

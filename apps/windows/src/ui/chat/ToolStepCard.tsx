@@ -64,19 +64,19 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
           }
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="tool-step-header-left">
           <Terminal size={14} color="var(--accent-cyan)" />
-          <span style={{ fontWeight: 600 }}>
+          <span className="tool-step-title">
             {idID.chat.toolStep.title} #{step.stepNumber}: {step.toolName}
           </span>
-          <span style={{ fontSize: 11, color: 'var(--text-sub)', fontWeight: 400 }}>
+          <span className="tool-step-summary">
             — {step.summary}
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div className="tool-step-header-right">
           {getStatusIcon()}
-          <span style={{ fontSize: 11 }}>{getStatusLabel()}</span>
+          <span className="tool-step-status-text">{getStatusLabel()}</span>
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </div>
       </div>
@@ -84,21 +84,21 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
       {expanded && (
         <div className="tool-step-content">
           {step.diff && (
-            <div style={{ marginBottom: 8, padding: 8, backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11, overflowX: 'auto' }}>
-              {step.path && <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--accent-cyan)' }}>File: {step.path}</div>}
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+            <div className="tool-step-diff-box">
+              {step.path && <div className="tool-step-diff-path">File: {step.path}</div>}
+              <pre className="tool-step-pre">
                 {step.diff.split('\n').map((line, idx) => {
-                  let color = 'inherit';
-                  if (line.startsWith('+')) color = 'var(--accent-emerald, #10b981)';
-                  else if (line.startsWith('-')) color = 'var(--accent-rose, #ef4444)';
-                  else if (line.startsWith('@@')) color = 'var(--accent-cyan, #06b6d4)';
-                  return <div key={idx} style={{ color }}>{line}</div>;
+                  let lineClass = '';
+                  if (line.startsWith('+')) lineClass = 'diff-line-add';
+                  else if (line.startsWith('-')) lineClass = 'diff-line-del';
+                  else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
+                  return <div key={idx} className={lineClass}>{line}</div>;
                 })}
               </pre>
             </div>
           )}
           {formattedDetails ? (
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            <pre className="tool-step-pre-wrap">
               {formattedDetails}
             </pre>
           ) : null}

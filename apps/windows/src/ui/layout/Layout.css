@@ -649,6 +649,71 @@
   overflow: auto;
 }
 
+.tool-step-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tool-step-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-step-title {
+  font-weight: 600;
+}
+
+.tool-step-summary {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+
+.tool-step-status-text {
+  font-size: 11px;
+}
+
+.tool-step-diff-box {
+  margin-bottom: var(--space-2);
+  padding: var(--space-2);
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-x: auto;
+}
+
+.tool-step-diff-path {
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+  color: var(--color-accent);
+}
+
+.tool-step-pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.tool-step-pre-wrap {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-line-add {
+  color: var(--color-success);
+}
+
+.diff-line-del {
+  color: var(--color-danger);
+}
+
+.diff-line-hunk {
+  color: var(--color-accent);
+}
+
 /* Responsive Rules for Small Windows */
 @media (max-width: 900px) {
   .app-sidebar:not(.manually-opened) {
@@ -882,6 +947,96 @@
 .status-pill.waiting_approval {
   background-color: rgba(245, 158, 11, 0.15);
   color: #f59e0b;
+}
+
+.task-runtime-pill {
+  font-size: 11px;
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+.task-fallback-banner {
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: 6px 10px;
+  background-color: var(--color-warning-subtle);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--color-warning);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.task-error-banner {
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: 6px 10px;
+  background-color: var(--color-danger-subtle);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.task-events-group {
+  margin-top: var(--space-3);
+}
+
+.task-timeline-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.task-event-card {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--color-border);
+  font-size: 12px;
+}
+
+.task-event-header-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+}
+
+.task-event-time {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+
+.task-event-text {
+  color: var(--color-text);
+  white-space: pre-wrap;
+  margin-bottom: var(--space-1);
+}
+
+.task-event-diff-box {
+  margin-top: var(--space-1);
+  padding: 6px;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-x: auto;
+}
+
+.task-event-diff-path {
+  color: var(--color-accent);
+  margin-bottom: 2px;
+}
+
+.task-event-raw-json {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .approval-meta-grid {
