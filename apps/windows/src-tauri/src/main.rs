@@ -3,6 +3,7 @@
 mod capabilities;
 mod command_allowlist;
 mod executor;
+mod keystore;
 mod security;
 
 use serde::{Deserialize, Serialize};
@@ -159,6 +160,30 @@ struct AppState {
     capabilities: Arc<CapabilityRegistry>,
     allowlist: Arc<PathAllowlistManager>,
     close_to_tray: Arc<AtomicBool>,
+    keystore: Arc<keystore::SecureDeviceKeystore>,
+}
+
+#[tauri::command]
+fn get_device_public_key(state: State<'_, AppState>) -> Result<keystore::DevicePublicKeyJwk, String> {
+    state.keystore.get_public_key()
+}
+
+#[tauri::command]
+fn sign_device_challenge(challenge: String, state: State<'_, AppState>) -> Result<String, String> {
+    state.keystore.sign_challenge(&challenge)
+}
+
+#[tauri::command]
+fn migrate_legacy_key(
+    jwk_json: String,
+    state: State<'_, AppState>,
+) -> Result<keystore::DevicePublicKeyJwk, String> {
+    state.keystore.migrate_legacy_jwk(&jwk_json)
+}
+
+#[tauri::command]
+fn has_secure_device_key(state: State<'_, AppState>) -> bool {
+    state.keystore.has_key()
 }
 
 #[tauri::command]
@@ -428,12 +453,14 @@ fn main() {
     let allowlist = Arc::new(PathAllowlistManager::new());
     let close_to_tray = Arc::new(AtomicBool::new(true));
     let close_to_tray_for_event = Arc::clone(&close_to_tray);
+    let keystore = Arc::new(keystore::SecureDeviceKeystore::new());
 
     tauri::Builder::default()
         .manage(AppState {
             capabilities,
             allowlist,
             close_to_tray,
+            keystore,
         })
         .on_window_event(move |window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -510,7 +537,11 @@ fn main() {
             get_close_to_tray,
             set_close_to_tray,
             get_autostart,
-            set_autostart
+            set_autostart,
+            get_device_public_key,
+            sign_device_challenge,
+            migrate_legacy_key,
+            has_secure_device_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

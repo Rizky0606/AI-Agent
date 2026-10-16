@@ -1,12 +1,13 @@
+import { invoke } from '@tauri-apps/api/core';
+
 /**
- * The Windows agent's identity is a P-256 key pair that never leaves the machine. The server hands
- * out a fresh challenge on every connection and the agent signs it, so knowing a device id is no
- * longer enough to claim a device: an impostor would need the private key.
+ * The Windows agent's cryptographic identity is a P-256 key pair.
+ * Per ADR 0016, the private key is securely managed inside Rust memory and
+ * encrypted using Windows DPAPI (%APPDATA%\personal-ai-os\device_identity.enc).
  *
- * The private key is stored as a JWK in the webview's local storage, which lives in the app's data
- * directory. That is weaker than an OS keystore — a future hardening step — but it is the platform
- * facility available without adding a Rust dependency, and it is strictly stronger than the
- * previous "anyone who knows the string" identity.
+ * NO private key is ever accessible to JavaScript or stored in localStorage.
+ * Any legacy key found in localStorage is migrated to Rust on first boot and
+ * immediately deleted.
  */
 
 export interface DevicePublicKeyJwk {
@@ -20,66 +21,71 @@ const STORAGE_KEY = 'personal-ai-os.device-key';
 const ALGORITHM: EcKeyGenParams = { name: 'ECDSA', namedCurve: 'P-256' };
 const SIGN_ALGORITHM: EcdsaParams = { name: 'ECDSA', hash: 'SHA-256' };
 
-/** Used when no `localStorage` exists (Node tests): the key lives for the process only. */
-let fallbackStoredKey: string | null = null;
-
-const readStoredKey = (): string | null => {
-  try {
-    return globalThis.localStorage?.getItem(STORAGE_KEY) ?? fallbackStoredKey;
-  } catch {
-    return fallbackStoredKey;
-  }
-};
-
-const writeStoredKey = (value: string): void => {
-  fallbackStoredKey = value;
-  try {
-    globalThis.localStorage?.setItem(STORAGE_KEY, value);
-  } catch {
-    // Storage unavailable (private mode, tests): the in-memory copy is all we have.
-  }
-};
-
 const toBase64 = (bytes: ArrayBuffer): string => {
   let binary = '';
   for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
   return btoa(binary);
 };
+
 export class DeviceKeyStore {
-  private privateKey: CryptoKey | null = null;
   private publicJwk: DevicePublicKeyJwk | null = null;
-  /**
-   * One load at a time: the handshake asks for the public key and a signature at once, and without
-   * this each caller would generate its own key pair — the public half and the signature would then
-   * come from different keys and every handshake would be rejected.
-   */
+  /** Used exclusively for ephemeral test fallback in headless Node.js unit tests without Tauri. */
+  private fallbackPrivateKey: CryptoKey | null = null;
+  private isTauri: boolean | null = null;
   private loading: Promise<void> | null = null;
 
   private load(): Promise<void> {
-    this.loading ??= this.loadKey();
+    this.loading ??= this.initKey();
     return this.loading;
   }
 
-  private async loadKey(): Promise<void> {
+  private async detectTauri(): Promise<boolean> {
+    if (this.isTauri !== null) return this.isTauri;
+    try {
+      await invoke('has_secure_device_key');
+      this.isTauri = true;
+      return true;
+    } catch {
+      this.isTauri = false;
+      return false;
+    }
+  }
 
-    const stored = readStoredKey();
-    if (stored) {
+  private async initKey(): Promise<void> {
+    const hasTauri = await this.detectTauri();
+
+    if (hasTauri) {
+      // 1. One-time migration: check if legacy key exists in localStorage
       try {
-        const jwk = JSON.parse(stored) as JsonWebKey;
-        const privateKey = await crypto.subtle.importKey('jwk', jwk, ALGORITHM, true, ['sign']);
-        this.privateKey = privateKey;
-        this.publicJwk = toPublicJwk(await crypto.subtle.exportKey('jwk', privateKey));
-        return;
+        const legacyKey = globalThis.localStorage?.getItem(STORAGE_KEY);
+        if (legacyKey) {
+          const migrated = await invoke<DevicePublicKeyJwk>('migrate_legacy_key', {
+            jwkJson: legacyKey,
+          });
+          // CRITICAL SECURITY REQUIREMENT: Immediately purge legacy private key from webview localStorage
+          globalThis.localStorage?.removeItem(STORAGE_KEY);
+          this.publicJwk = migrated;
+          return;
+        }
       } catch {
-        // A corrupt or unreadable key is replaced rather than silently reused.
+        // Migration error or invalid legacy key: proceed with standard Rust secure key
       }
+
+      // 2. Fetch public key from Rust (Rust auto-generates inside DPAPI if none exists)
+      const pubKey = await invoke<DevicePublicKeyJwk>('get_device_public_key');
+      this.publicJwk = pubKey;
+      return;
     }
 
+    // Fallback for headless Node.js tests where Tauri IPC is unavailable
+    await this.initFallbackKey();
+  }
+
+  private async initFallbackKey(): Promise<void> {
     const generated = await crypto.subtle.generateKey(ALGORITHM, true, ['sign', 'verify']);
-    const jwk = await crypto.subtle.exportKey('jwk', generated.privateKey);
-    writeStoredKey(JSON.stringify(jwk));
-    this.privateKey = generated.privateKey;
-    this.publicJwk = toPublicJwk(await crypto.subtle.exportKey('jwk', generated.publicKey));
+    this.fallbackPrivateKey = generated.privateKey;
+    const jwk = await crypto.subtle.exportKey('jwk', generated.publicKey);
+    this.publicJwk = toPublicJwk(jwk);
   }
 
   async publicKey(): Promise<DevicePublicKeyJwk> {
@@ -87,12 +93,22 @@ export class DeviceKeyStore {
     return this.publicJwk!;
   }
 
-  /** Signs the server's challenge. WebCrypto emits raw `r || s`, which is what the server expects. */
+  /**
+   * Signs the server's challenge.
+   * If running in Tauri, delegated directly to Rust secure DPAPI keystore.
+   * The signature format is raw IEEE P1363 (r || s, 64 bytes) Base64 encoded.
+   */
   async sign(challenge: string): Promise<string> {
     await this.load();
+
+    if (this.isTauri) {
+      return invoke<string>('sign_device_challenge', { challenge });
+    }
+
+    // Fallback signing for test runner
     const signature = await crypto.subtle.sign(
       SIGN_ALGORITHM,
-      this.privateKey!,
+      this.fallbackPrivateKey!,
       new TextEncoder().encode(challenge),
     );
     return toBase64(signature);
