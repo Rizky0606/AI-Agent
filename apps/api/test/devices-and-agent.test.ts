@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildApp } from '../src/app.ts';
 import { InMemoryAuthRepository, createAuthService } from '../src/auth/service.ts';
-import { DeviceConnectionManager } from '../src/services/device-connection-manager.ts';
+import {
+  DeviceConnectionManager,
+  type DevicePresenceRecord,
+} from '../src/services/device-connection-manager.ts';
 import {
   connectDeviceAgent,
   storedPublicKey,
@@ -166,4 +169,66 @@ test('Push token registration is scoped to the caller own device rows', async ()
   assert.equal(invalid.statusCode, 400);
 
   await app.close();
+});
+
+test('DeviceConnectionManager: persists presence across restart within bounded grace window and emits audit events', async () => {
+  const auditLogs: Array<{ action: string; deviceId: string; userId: string }> = [];
+  const presenceStore = new Map<string, DevicePresenceRecord>();
+
+  const customPresenceStore = {
+    savePresence: (record: DevicePresenceRecord) => {
+      presenceStore.set(record.deviceId, record);
+    },
+    getPresence: (deviceId: string) => presenceStore.get(deviceId) ?? null,
+    listRecentPresences: (userId: string, platform?: string) => {
+      const list: DevicePresenceRecord[] = [];
+      for (const rec of presenceStore.values()) {
+        if (rec.userId === userId && (!platform || rec.platform === platform)) {
+          list.push(rec);
+        }
+      }
+      return list;
+    },
+    updateLastSeen: (deviceId: string, lastSeenAt: string) => {
+      const rec = presenceStore.get(deviceId);
+      if (rec) rec.lastSeenAt = lastSeenAt;
+    },
+  };
+
+  const auditSink = {
+    logDeviceEvent: (event: { action: string; deviceId: string; userId: string }) => {
+      auditLogs.push(event);
+    },
+  };
+
+  // 1. First server instance: device registers connection
+  const manager1 = new DeviceConnectionManager({
+    presenceStore: customPresenceStore,
+    auditSink,
+    presenceGraceMs: 5_000,
+  });
+
+  const mockSocket = { send: () => {}, close: () => {} };
+  manager1.registerConnection('dev-persistent-1', 'user-1', 'windows', mockSocket, { name: 'DevPC' });
+
+  assert.equal(manager1.isDeviceOnline('dev-persistent-1'), true);
+  assert.deepEqual(manager1.listOnlineDeviceIds('user-1', 'windows'), ['dev-persistent-1']);
+  assert.equal(auditLogs.length, 1);
+  assert.equal(auditLogs[0]!.action, 'device.connected');
+
+  // 2. Simulate server restart: new manager instance starts with the same persistent presence store
+  const manager2 = new DeviceConnectionManager({
+    presenceStore: customPresenceStore,
+    auditSink,
+    presenceGraceMs: 5_000,
+  });
+
+  // Despite no active socket in memory on manager2 yet, presence is boundedly retained across restart!
+  assert.equal(manager2.isDeviceOnline('dev-persistent-1'), true);
+  assert.deepEqual(manager2.listOnlineDeviceIds('user-1', 'windows'), ['dev-persistent-1']);
+
+  // 3. Unregister / disconnect emits audit log and updates store
+  manager1.unregisterConnection('dev-persistent-1', mockSocket);
+  assert.equal(auditLogs.length, 2);
+  assert.equal(auditLogs[1]!.action, 'device.disconnected');
 });
