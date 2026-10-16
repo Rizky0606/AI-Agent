@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/*.test.ts",
     "dev": "vite",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:unit": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
     "@personal-ai-os/permissions": "workspace:*",

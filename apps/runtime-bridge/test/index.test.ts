@@ -243,8 +243,12 @@ test('cancellation: kills process group and transitions status to cancelled', as
   assert.equal(response.status, 202);
   const { runId } = (await response.json()) as { runId: string };
 
-  // Wait a short moment for process to be running
-  await new Promise((r) => setTimeout(r, 200));
+  // Wait for the run to be active or running
+  for (let i = 0; i < 30; i++) {
+    const check = (await (await fetch(`${url}/v1/runs/${runId}`, { headers })).json()) as Record<string, unknown>;
+    if (check.status === 'running') break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
 
   // Cancel the run
   const cancelRes = await fetch(`${url}/v1/runs/${runId}/cancel`, { method: 'POST', headers });

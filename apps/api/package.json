@@ -11,8 +11,9 @@
     "build": "tsc --build",
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src test --max-warnings=0",
-    "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test:unit": "node --test --experimental-strip-types \"test/!(e2e-scenarios|schema-parity)*.test.ts\"",
+    "test:live": "node --test --experimental-strip-types test/e2e-scenarios.test.ts test/schema-parity.test.ts"
   },
   "dependencies": {
     "@fastify/rate-limit": "^10.2.1",

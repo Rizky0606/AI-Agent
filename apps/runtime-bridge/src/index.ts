@@ -351,6 +351,9 @@ async function execute(record: RunRecord): Promise<void> {
   let current: ActiveRun | undefined;
   try {
     const cwd = await prepareWorkspace(WORKSPACE_ROOT, record.request.workspaceId, record.request.taskId);
+    if (record.status === 'cancelled') {
+      return;
+    }
     const prompt = prompts.get(record.id) ?? '';
     const fullRequest: RunRequest = { ...record.request, prompt };
     const spec = command(fullRequest);
@@ -582,20 +585,19 @@ async function main(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (match?.[2] === '/events' && req.method === 'GET') return sse(res, record);
     if (!match?.[2] && req.method === 'GET') return json(res, 200, record);
     if (match?.[2] === '/cancel' && req.method === 'POST') {
-      if (record.status === 'queued') {
-        const index = queue.findIndex((item) => item.id === record.id);
-        if (index >= 0) queue.splice(index, 1);
-        prompts.delete(record.id);
-        record.status = 'cancelled';
-        finishedAt.set(record.id, Date.now());
-        audit('run_cancelled', record);
-      } else if (active) {
+      if (record.status === 'cancelled' || record.status === 'completed' || record.status === 'failed') {
+        return json(res, 202, record);
+      }
+      record.status = 'cancelled';
+      finishedAt.set(record.id, Date.now());
+      prompts.delete(record.id);
+      const index = queue.findIndex((item) => item.id === record.id);
+      if (index >= 0) queue.splice(index, 1);
+      if (active) {
         active.cancelRequested = true;
-        record.status = 'cancelled';
-        finishedAt.set(record.id, Date.now());
-        audit('run_cancelled', record);
         killProcess(active.child);
       }
+      audit('run_cancelled', record);
       return json(res, 202, record);
     }
     return json(res, 404, { error: 'not found' });
