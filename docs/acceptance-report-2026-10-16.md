@@ -8,27 +8,27 @@ Dokumen ini merupakan laporan audit penerimaan resmi (*acceptance report*) untuk
 
 | Kapabilitas / Modul | Status | Bukti Nyata / Implementasi | Keterbatasan / Catatan Kejujuran |
 | :--- | :---: | :--- | :--- |
-| **Control Plane & Auth** | **Terverifikasi** | Fastify REST API, Google OAuth PKCE, JWT token rotation, isolasi user & project. 94 tes API lulus/skip. | Tidak ada celah yang diketahui. |
+| **Control Plane & Auth** | **Terverifikasi** | Fastify REST API, Google OAuth PKCE, JWT token rotation, isolasi user & project. 94 tes API unit/live. | Tidak ada celah yang diketahui. |
 | **Durable Tasks & Checkpoints** | **Terverifikasi** | Skema PostgreSQL + BullMQ, state machine, atomic lease locks, integritas checksum SHA256. | Bounded retry loop (max 3 percobaan) berjalan aman. |
 | **Worker Process & Generic Loop** | **Terverifikasi** | Autonomous plan-step-observe-evaluate loop dengan hard bounds (maxSteps 10-20, timeoutMs, maxTokens), SecuredCapabilityGuard. | Pelabelan transparan saat simulasi vs eksekusi nyata. |
 | **Model Gateway & Routing** | **Terverifikasi** | 9Router proxy murni backend, dynamic probing (stream, tools, vision), router dinamis tanpa hardcode nama model. | Provider credentials 9Router dikelola sepenuhnya di server. |
 | **Permission Engine & Approvals** | **Terverifikasi** | Boundary izin ketat: LOW/MEDIUM/HIGH/CRITICAL. Penahanan tugas pada `waiting_approval` dan validasi sekunder. | Aksi destruktif ditolak secara deterministik. |
 | **Tools & Otomasi Browser** | **Terverifikasi** | SSRF Guard, DuckDuckGo search nyata, web_fetch, Playwright Chromium headless di worker. | Output dibatasi kuota byte untuk mencegah memory exhaustion. |
 | **Manajer Skill & MCP** | **Terverifikasi** | 3 skill bawaan (`plan-before-act`, `verify-with-evidence`, `security-review`), SSE MCP remote adapter, binary allowlist. | Output MCP dibungkus untrusted content sanitizer. |
-| **Integrasi Hermes & Runtime Bridge** | **Terverifikasi** | Policy routing (`omp`, `hermes`, `native`), fallback eksplisit saat offline, skill Hermes read-only. | Interaksi fisik Telegram tidak membuat bot kedua. |
-| **Klien Desktop Windows** | **Sebagian** | Tauri 2 + Rust DPAPI keystore, P-256 ECDSA, Vite bundle berhasil (dist/index.html), 74 tes lulus, allowlist path hardening. | **Sebagian**: Tampilan visual langsung pada monitor Windows fisik dan sertifikat EV Code Signing nyata masih memerlukan tindakan manual pengguna. |
-| **Klien Mobile Android** | **Sebagian** | React Native 0.76 + Expo 52, 3 tabs (Chat, Aktivitas, Lainnya), MarkdownView mandiri, 56 tes lulus, bundle Expo diekspor (3.7 MB). | **Sebagian**: Sideload APK debug, rendering visual pada layar fisik Android belum diverifikasi langsung di perangkat. |
+| **Integrasi Hermes & Runtime Bridge** | **Sebagian** | Policy routing (`omp`, `hermes`, `native`), fallback eksplisit saat offline, skill Hermes read-only. | **Sebagian**: Integrasi runtime di UI Windows/Android memerlukan perapian token styling; interaksi bot Telegram host menggunakan bot Hermes yang sudah ada tanpa bot kedua. |
+| **Klien Desktop Windows** | **Sebagian** | Tauri 2 + Rust DPAPI keystore, P-256 ECDSA, Vite bundle berhasil (`dist/index.html`), 74 tes total (70-74 lulus, 0-4 dilewati tergantung ketersediaan backend/webview). | **Sebagian**: Tampilan visual langsung pada monitor Windows fisik dan sertifikat EV Code Signing nyata masih memerlukan tindakan manual pengguna. |
+| **Klien Mobile Android** | **Sebagian** | React Native 0.76 + Expo 52, 3 tabs (Chat, Aktivitas, Lainnya), MarkdownView mandiri, 41 tes lulus aktual (`pnpm --filter @personal-ai-os/android test`, 16 Okt 2026), bundle Expo diekspor (3.7 MB). | **Sebagian**: Sideload APK debug, rendering visual pada layar fisik Android belum diverifikasi langsung di perangkat. Perbedaan angka: klaim 56 sebelumnya keliru menggabungkan draf sub-komponen UI yang belum terdaftar di test runner. |
 | **Memori & Artefak** | **Sebagian** | Ekstraksi kandidat usulan (*proposed*), hybrid text search (`tsvector` & `ILIKE`), retention sweeper (TTL), kuota artefak. | **Sebagian**: Pencarian vektor cosine similarity murni masih berstatus fallback teks karena menunggu kredensial model embedding 9Router. |
-| **Observabilitas & Ops VPS** | **Terverifikasi** | OpenTelemetry W3C traceparent, Telegram alert, enkripsi AES-256 backup offsite dengan uji restore, Caddy edge security. | Notifikasi Telegram live memerlukan pengisian bot token di production env. |
+| **Observabilitas & Ops VPS** | **Sebagian** | OpenTelemetry W3C traceparent, Telegram alert, enkripsi terautentikasi AES-256-GCM backup offsite (ADR 0021) dengan uji restore lokal lulus. | **Sebagian**: Restore drill offsite nyata ke Oracle Object Storage berstatus Belum diverifikasi (menunggu kredensial OCI S3 dari pemilik). |
 
 ---
 
 ## 2. Bukti Verifikasi Gerbang Kualitas (Quality Gates)
 
-Pada 16 Oktober 2026, perintah gerbang kualitas penuh `pnpm test:ci` dijalankan di lingkungan pengujian monorepo. Seluruh 14 package dan aplikasi berhasil lulus tanpa error:
+Pada 16 Oktober 2026 (Sesi 19), perintah gerbang kualitas penuh dan pengujian unit mandiri dijalankan di lingkungan pengujian monorepo:
 
 ```bash
-pnpm test:ci
+pnpm test:unit
 ```
 
 ### Hasil Aktual per Tahapan:
@@ -38,15 +38,18 @@ pnpm test:ci
 2. **Typecheck (`pnpm -r typecheck`)**:
    - Pemeriksaan tipe data statis TypeScript strict (`tsc --noEmit`) pada 14 workspace.
    - **Hasil**: Lulus 100%, **0 tipe data salah atau tidak kompatibel**.
-3. **Pengujian Unit & Integrasi (`pnpm -r test`)**:
-   - Total pengujian: **566 tes**.
-   - **Lulus (Pass)**: **564 tes**.
-   - **Gagal (Fail)**: **0 tes**.
-   - **Dilewati (Skipped)**: **2 tes** (Pengujian probe live schema parity dan live scheduler ketika PostgreSQL lokal offline).
+3. **Pengujian Unit Mandiri (`pnpm test:unit`)**:
+   - Seluruh 14 workspace lulus tanpa menggantung (*no ECONNREFUSED hang*) dan tanpa ketergantungan koneksi internet:
+     - `@personal-ai-os/android`: **41 lulus, 0 gagal** (perintah: `pnpm --filter @personal-ai-os/android test`, durasi ~11.5s).
+     - `@personal-ai-os/windows`: **74 total (70-74 lulus, 0-4 dilewati)** (perintah: `pnpm --filter @personal-ai-os/windows test`, durasi ~3.8s).
+     - `@personal-ai-os/api`: **89 lulus, 1 dilewati** (durasi ~24s).
+     - `@personal-ai-os/agent-core`: **40 lulus, 0 gagal** (mock DNS resolver & offline guard).
+     - `@personal-ai-os/runtime-bridge`: **9 lulus, 0 gagal**.
+     - Paket lainnya (`shared`, `permissions`, `model-gateway`, `evaluator`, `memory`, `tools`, `mcp`, `scheduler`, `agent-worker`): 100% lulus.
 4. **Build Produksi (`pnpm -r build`)**:
    - Build seluruh package TypeScript (`tsc --build`).
-   - Build Windows Desktop: `vite build` selesai dalam 5.56s (`dist/index.html`, font Inter woff2 lokal, CSS 62.54 kB, JS 334.28 kB).
-   - Build Android Mobile: `expo export --platform android` selesai dalam 1938ms (`_expo/static/js/android/index-...js` berukuran 3.7 MB, 17 aset gambar).
+   - Build Windows Desktop: `vite build` selesai (`dist/index.html`, font Inter woff2 lokal, CSS, JS).
+   - Build Android Mobile: `expo export --platform android` selesai (`_expo/static/js/android/index-...js` berukuran 3.7 MB, 17 aset gambar).
 5. **Audit Integritas Referensi Dokumen (`pnpm verify:audit`)**:
    - Skrip `scripts/verify-audit-refs.ts` memeriksa 220 referensi path dari berkas audit.
    - **Hasil**: 129 path unik 100% valid dan ada di filesystem.
