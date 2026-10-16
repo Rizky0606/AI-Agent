@@ -5,6 +5,25 @@
 
 :80 {
   encode gzip
+
+  # Header Keamanan Standar
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    -Server
+  }
+
+  # Rotasi Log Akses Caddy
+  log {
+    output file /var/log/caddy/access.log {
+      roll_size 10mb
+      roll_keep 3
+    }
+  }
+
   # Service-to-service routes: reachable only from the internal Docker network.
   @internal path /v1/internal/*
   respond @internal 404
