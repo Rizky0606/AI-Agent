@@ -82,3 +82,43 @@ jobs:
 
       - name: Verify Audit Doc References
         run: pnpm verify:audit
+
+  windows-ci:
+    name: Windows Hardening & Allowlist CI
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+          run_install: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Windows Rust Tests (Keystore, Allowlist, PathValidator, Executor)
+        run: cargo test --manifest-path apps/windows/src-tauri/Cargo.toml
+
+      - name: Run Windows TypeScript Hardening Tests
+        run: pnpm --filter @personal-ai-os/windows test
+
+      - name: Build Windows NSIS Bundle for Smoke Test
+        run: pnpm --filter @personal-ai-os/windows tauri build --bundles nsis
+        env:
+          VITE_SERVER_URL: https://ai.ojixx.my.id
+
+      - name: Run Windows Installer Smoke Test (Install, Run, Verify, Uninstall)
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts/windows-installer-smoke.ps1
