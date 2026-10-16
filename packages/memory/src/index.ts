@@ -5,3 +5,4 @@ export * from './store/memory-store.ts';
 export * from './store/in-memory-store.ts';
 export * from './store/inactive-embedding-provider.ts';
 export * from './context/context-manager.ts';
+export * from './extraction/candidate-extractor.ts';

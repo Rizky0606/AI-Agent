@@ -10,6 +10,14 @@ export type TaskStatus =
 
 export type CheckpointActionType = 'internal' | 'external_tool' | 'approval' | 'system';
 
+export interface CheckpointAcceptanceCriterion {
+  id: string;
+  description: string;
+  category?: string | undefined;
+  required?: boolean | undefined;
+  expectedEvidenceType?: string | undefined;
+}
+
 export interface TaskCheckpoint {
   version: number;
   stepIndex: number;
@@ -21,6 +29,7 @@ export interface TaskCheckpoint {
   checksum?: string | undefined;
   verified?: boolean | undefined;
   verificationNotes?: string | undefined;
+  acceptanceCriteria?: CheckpointAcceptanceCriterion[] | undefined;
 }
 
 export interface TaskModel {
@@ -30,6 +39,8 @@ export interface TaskModel {
   status: TaskStatus;
   kind: string;
   payload: Record<string, unknown>;
+  /** Chat conversation that spawned this task, when it was launched from one. */
+  conversationId?: string | null | undefined;
   progress: number;
   attempt: number;
   maxAttempts: number;

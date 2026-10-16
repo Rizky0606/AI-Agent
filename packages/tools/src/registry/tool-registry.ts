@@ -1,7 +1,9 @@
 import type { SecuredCapabilityGuard } from '@personal-ai-os/permissions';
+import { ExecutionLimiter, type ExecutionLimiterOptions } from '../execution-limiter.ts';
 import {
   type ToolDefinition,
   type ToolExecutionContext,
+  type ToolExecutionOptions,
   type ToolExecutionResult,
   type ToolHealthCheckResult,
   ToolCancelledError,
@@ -11,16 +13,28 @@ import {
   ToolTimeoutError,
 } from '../types.ts';
 
+/** Used when a registered tool arrives without a usable timeout. */
+const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
+
+/** Stops runaway floods, not ordinary traffic. Override with `TOOL_MAX_IN_FLIGHT` / `TOOL_MAX_STARTS_PER_MINUTE`. */
+const DEFAULT_TOOL_LIMITS: ExecutionLimiterOptions = { maxInFlight: 4, maxStartsPerInterval: 600 };
+
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
   private readonly guard: SecuredCapabilityGuard;
+  private readonly limiter: ExecutionLimiter;
 
-  constructor(guard: SecuredCapabilityGuard) {
+  constructor(guard: SecuredCapabilityGuard, limiter?: ExecutionLimiter | undefined) {
     this.guard = guard;
+    this.limiter = limiter ?? ExecutionLimiter.fromEnv('TOOL', DEFAULT_TOOL_LIMITS);
   }
 
   registerTool<TInput, TOutput>(tool: ToolDefinition<TInput, TOutput>): void {
-    this.tools.set(tool.name, tool as unknown as ToolDefinition);
+    // Every registered tool must carry a finite timeout; `undefined`/`NaN`/`0` would abort the
+    // call instantly (or never), so the value is normalised once, at registration.
+    const timeoutMs =
+      Number.isFinite(tool.timeoutMs) && tool.timeoutMs > 0 ? tool.timeoutMs : DEFAULT_TOOL_TIMEOUT_MS;
+    this.tools.set(tool.name, { ...tool, timeoutMs } as unknown as ToolDefinition);
   }
 
   getTool(name: string): ToolDefinition | undefined {
@@ -39,19 +53,30 @@ export class ToolRegistry {
    * 4. Output limit enforcement and clear truncation marker
    * 5. Audit trail
    */
-  async executeTool<TInput = unknown, TOutput = unknown>(options: {
-    toolName: string;
-    input: TInput;
-    context: ToolExecutionContext;
-    approvalId?: string | undefined;
-    resource?: string | undefined;
-  }): Promise<ToolExecutionResult<TOutput>> {
-    const startTime = Date.now();
+  async executeTool<TInput = unknown, TOutput = unknown>(
+    options: ToolExecutionOptions<TInput>,
+  ): Promise<ToolExecutionResult<TOutput>> {
     const tool = this.tools.get(options.toolName) as ToolDefinition<TInput, TOutput> | undefined;
 
     if (!tool) {
       throw new ToolNotFoundError(options.toolName);
     }
+
+    // Rate/concurrency cap first, so a flood is refused before validation, the permission check
+    // and the tool body each do work. Released on every exit path below.
+    this.limiter.acquire(tool.name);
+    try {
+      return await this.runTool(tool, options);
+    } finally {
+      this.limiter.release(tool.name);
+    }
+  }
+
+  private async runTool<TInput, TOutput>(
+    tool: ToolDefinition<TInput, TOutput>,
+    options: ToolExecutionOptions<TInput>,
+  ): Promise<ToolExecutionResult<TOutput>> {
+    const startTime = Date.now();
 
     // 1. Validate Input
     if (tool.inputValidator) {

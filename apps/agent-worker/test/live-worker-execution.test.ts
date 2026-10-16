@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Redis } from 'ioredis';
 import {
   type TaskCheckpoint,
@@ -16,10 +19,28 @@ import {
   SecuredCapabilityGuard,
 } from '@personal-ai-os/permissions';
 import { PLACEHOLDER_WORKER_LABEL, TaskExecutor, createAgentWorker } from '../src/index.ts';
+import { prepareCodingWorkspace } from '@personal-ai-os/agent-core';
 import {
   InMemoryTaskEventBroadcaster,
   RedisTaskEventBroadcaster,
 } from '@personal-ai-os/api/services';
+import {
+  SsrfGuard,
+  ToolRegistry,
+  createWebFetchTool,
+  createWebSearchTool,
+  type ToolDefinition,
+} from '@personal-ai-os/tools';
+import { MockModelGateway } from '@personal-ai-os/model-gateway';
+
+/** Reads one field of `payload.evaluationResult` after a real runtime shape check. */
+function evaluationField(payload: Record<string, unknown>, field: string): unknown {
+  const evaluation = payload['evaluationResult'];
+  if (typeof evaluation !== 'object' || evaluation === null || !(field in evaluation)) {
+    return undefined;
+  }
+  return evaluation[field];
+}
 
 // In-memory test repository with event replay support
 class TestTaskRepo implements TaskRepository {
@@ -316,10 +337,15 @@ test('Worker restart mid-task resumes from checkpoint and does not duplicate sid
     registry: mockRegistry as never,
   });
 
-  // Recovery identifies dangling running tasks
-  const recovery = await newExecutor.recoverInterruptedTasks();
+  // Recovery identifies dangling running tasks and must re-enqueue them
+  const reEnqueued: string[] = [];
+  const recovery = await newExecutor.recoverInterruptedTasks({
+    enqueue: async (t) => {
+      reEnqueued.push(t.id);
+    },
+  });
   assert.equal(recovery.recoveredCount, 1);
-  assert.equal(recovery.recoveredTasks[0]?.id, task.id);
+  assert.deepEqual(reEnqueued, [task.id], 'Recovered task must be handed to the queue');
 
   // Resume execution on the new worker
   await newExecutor.execute({
@@ -336,6 +362,194 @@ test('Worker restart mid-task resumes from checkpoint and does not duplicate sid
 
   // Verify step 1 was NOT re-executed!
   assert.equal(step1SideEffectCount, 1, 'Step 1 side effect must NOT be duplicated upon restart');
+});
+
+// ============================================================================
+// 3b. Startup recovery must hand the dangling task to the worker's own queue
+// ============================================================================
+test('Startup recovery re-enqueues a dangling task through the worker queue and completes it', async () => {
+  const isRedisUp = await checkRedisAvailable(REDIS_URL);
+  if (!isRedisUp) {
+    // Graceful skip if Redis daemon is offline
+    return;
+  }
+
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const registry = new ToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
+  const probe: ToolDefinition<{ value: string }, { echoed: string }> = {
+    name: 'recovery_probe',
+    description: 'probe',
+    capability: 'tool:test',
+    resourceScope: 'workspace',
+    riskLevel: 'LOW',
+    action: 'tool:read',
+    timeoutMs: 1000,
+    supportsCancellation: true,
+    outputLimitBytes: 4096,
+    inputValidator: (input) => {
+      if (typeof input !== 'object' || input === null || !('value' in input) || typeof input.value !== 'string') {
+        return { valid: false, error: 'value required' };
+      }
+      return { valid: true, data: { value: input.value } };
+    },
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async (input) => ({ echoed: input.value }),
+  };
+  registry.registerTool(probe);
+
+  // A worker that is handed its queue by createAgentWorker. Without that wiring the recovered
+  // task is never enqueued, no task.completed event ever arrives, and this test hangs.
+  const handle = createAgentWorker({
+    redisUrl: REDIS_URL,
+    queueName: `test-recovery-${Date.now()}`,
+    concurrency: 1,
+    taskRepo: repo,
+    broadcaster,
+    executorOptions: { registry },
+  });
+  const queue = handle.queue;
+  assert.ok(queue, 'createAgentWorker must expose the queue used for startup recovery');
+
+  try {
+    const { task } = await repo.createTask({
+      userId: 'user-recovery',
+      projectId: 'proj-recovery',
+      kind: 'generic_task',
+      payload: { toolName: 'recovery_probe', toolInput: { value: 'recovered' } },
+    });
+    // Worker 1 died mid-execution: the task is still 'running' in the store.
+    await repo.updateTaskStatus(task.userId, task.id, 'running');
+
+    const completed = Promise.withResolvers<void>();
+    const unsubscribe = broadcaster.subscribe((event) => {
+      if (event.taskId === task.id && event.eventType === 'task.completed') completed.resolve();
+    });
+
+    const recovered = await handle.executor.recoverInterruptedTasks(queue);
+    assert.equal(recovered.recoveredCount, 1);
+
+    await completed.promise;
+    unsubscribe();
+
+    const finished = await repo.getTask(task.userId, task.id);
+    assert.equal(finished?.status, 'completed', 'Recovered task must be executed by the worker');
+    assert.equal(finished?.progress, 100);
+  } finally {
+    await handle.close();
+  }
+});
+
+test('Worker executes explicit toolName through ToolRegistry and persists result', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const registry = new ToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
+  const tool: ToolDefinition<{ value: string }, { echoed: string }> = {
+    name: 'test_echo', description: 'test', capability: 'tool:test', resourceScope: 'workspace',
+    riskLevel: 'LOW', action: 'tool:read', timeoutMs: 1000, supportsCancellation: true, outputLimitBytes: 4096,
+    inputValidator: (input) => {
+      if (typeof input !== 'object' || input === null || !('value' in input) || typeof input.value !== 'string') {
+        return { valid: false, error: 'value required' };
+      }
+      return { valid: true, data: { value: input.value } };
+    },
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async (input) => ({ echoed: input.value }),
+  };
+  registry.registerTool(tool);
+  const { task } = await repo.createTask({ userId: 'user-tool', projectId: 'proj-tool', kind: 'generic_task', payload: { toolName: 'test_echo', toolInput: { value: 'ok' } } });
+  const executor = new TaskExecutor(repo, broadcaster, { registry });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+  const completed = await repo.getTask(task.userId, task.id);
+  assert.equal(completed?.status, 'completed');
+  assert.deepEqual(repo.events.find((event) => event.eventType === 'task.tool_call')?.payload.output, { echoed: 'ok' });
+});
+
+test('Registered tool that returns no output cannot complete the task', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const registry = new ToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
+  const silent: ToolDefinition<{ value: string }, undefined> = {
+    name: 'test_silent',
+    description: 'returns nothing',
+    capability: 'tool:test',
+    resourceScope: 'workspace',
+    riskLevel: 'LOW',
+    action: 'tool:read',
+    timeoutMs: 1000,
+    supportsCancellation: true,
+    outputLimitBytes: 4096,
+    inputValidator: () => ({ valid: true, data: { value: 'x' } }),
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async () => undefined,
+  };
+  registry.registerTool(silent);
+  const { task } = await repo.createTask({ userId: 'user-silent', projectId: 'proj-silent', kind: 'generic_task', payload: { toolName: 'test_silent' } });
+  const executor = new TaskExecutor(repo, broadcaster, { registry });
+
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 1 });
+
+  assert.equal((await repo.getTask(task.userId, task.id))?.status, 'failed');
+  const failEvent = repo.events.find((e) => e.eventType === 'task.failed');
+  assert.equal(
+    (failEvent?.payload?.evaluationResult as { passed?: boolean } | undefined)?.passed,
+    false,
+  );
+  assert.equal(
+    repo.events.some((e) => e.eventType === 'task.completed'),
+    false,
+    'A tool that produced no output must not emit task.completed',
+  );
+});
+
+test('Registered tool waits for approval then resumes through validator exactly once', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  let approvalValid = false;
+  let executionCount = 0;
+  const guard = new SecuredCapabilityGuard(new PermissionEngine(), {
+    approvalValidator: {
+      async validateAndConsume(id) {
+        if (id === 'approved-tool-call' && approvalValid) {
+          approvalValid = false;
+          return { valid: true };
+        }
+        return { valid: false, reason: 'approval invalid or consumed' };
+      },
+    },
+  });
+  const registry = new ToolRegistry(guard);
+  const tool: ToolDefinition<{ value: string }, string> = {
+    name: 'approval_test_tool', description: 'approval test', capability: 'test:push', resourceScope: 'global',
+    riskLevel: 'HIGH', action: 'git:push', timeoutMs: 1000, supportsCancellation: true, outputLimitBytes: 1024,
+    inputValidator: (input) => typeof input === 'object' && input !== null && 'value' in input && typeof input.value === 'string'
+      ? { valid: true, data: { value: input.value } } : { valid: false, error: 'value required' },
+    healthCheck: async () => ({ status: 'healthy', latencyMs: 0, timestamp: new Date().toISOString() }),
+    execute: async (input) => { executionCount++; return input.value; },
+  };
+  registry.registerTool(tool);
+  const { task } = await repo.createTask({ userId: 'user-tool-approval', projectId: 'proj-tool-approval', kind: 'generic_task', payload: { toolName: tool.name, toolInput: { value: 'approved' } } });
+  const executor = new TaskExecutor(repo, broadcaster, {
+    registry,
+    approvalCreator: async () => ({ id: 'approved-tool-call' }),
+  });
+  const job = { taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 };
+  await executor.execute(job);
+  const waiting = await repo.getTask(task.userId, task.id);
+  assert.equal(waiting?.status, 'waiting_approval');
+  assert.equal(waiting?.checkpoint?.actionState?.approvalId, 'approved-tool-call');
+  assert.equal(executionCount, 0);
+
+  approvalValid = true;
+  const checkpoint = createVersionedCheckpoint({
+    version: (waiting?.checkpoint?.version ?? 0) + 1, stepIndex: 2, totalSteps: 4,
+    lastExecutedAction: 'waiting_approval', actionType: 'approval',
+    actionState: { approvalId: 'approved-tool-call', approved: true }, verified: true,
+  });
+  await repo.updateTaskStatus(task.userId, task.id, 'running', { checkpoint });
+  await executor.execute({ ...job, attempt: 1 });
+  assert.equal((await repo.getTask(task.userId, task.id))?.status, 'completed');
+  assert.equal(executionCount, 1);
 });
 
 // ============================================================================
@@ -438,10 +652,26 @@ test('Approval stops HIGH/CRITICAL action at waiting_approval and resumes exact 
 // ============================================================================
 // 5. Real Agents (Coding & Research) execute without PLACEHOLDER_WORKER_LABEL
 // ============================================================================
+/**
+ * A throwaway git workspace whose check scripts are real commands. `exitCode` decides whether
+ * they pass, which is what lets a test drive the evaluator down either branch.
+ */
+async function createCodingWorkspaceFixture(exitCode: number): Promise<{ root: string; workspaceDir: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'aios-coding-'));
+  const workspaceDir = await prepareCodingWorkspace(root, 'fixture');
+  const script = `node -e "process.exit(${exitCode})"`;
+  await writeFile(
+    join(workspaceDir, 'package.json'),
+    JSON.stringify({ name: 'fixture', private: true, scripts: { lint: script, typecheck: script, test: script, build: script } }),
+  );
+  return { root, workspaceDir };
+}
+
 test('Real coding task executes with CodingAgent & CodingEvaluator without placeholder label', async () => {
   const repo = new TestTaskRepo();
   const broadcaster = new InMemoryTaskEventBroadcaster();
-  const executor = new TaskExecutor(repo, broadcaster);
+  const fixture = await createCodingWorkspaceFixture(0);
+  const executor = new TaskExecutor(repo, broadcaster, { codingWorkspaceRoot: fixture.root });
 
   const { task } = await repo.createTask({
     userId: 'user-coder',
@@ -449,7 +679,7 @@ test('Real coding task executes with CodingAgent & CodingEvaluator without place
     kind: 'coding_task',
     payload: {
       instructions: 'Fix memory leak in buffer pooling',
-      repoPath: 'packages/memory',
+      workspaceDir: fixture.workspaceDir,
       filesToModify: [{ path: 'src/pool.ts', content: 'export const pool = new Map();' }],
     },
   });
@@ -478,7 +708,71 @@ test('Real coding task executes with CodingAgent & CodingEvaluator without place
   }
 });
 
-test('Real research task executes with ResearchAgent & ResearchEvaluator without placeholder label', async () => {
+test('Coding task is failed when the real checks fail', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const fixture = await createCodingWorkspaceFixture(1);
+  const executor = new TaskExecutor(repo, broadcaster, { codingWorkspaceRoot: fixture.root });
+
+  const { task } = await repo.createTask({
+    userId: 'user-coder-fail',
+    projectId: 'proj-coder-fail',
+    kind: 'coding_task',
+    payload: {
+      instructions: 'Refactor pooling without breaking the build',
+      workspaceDir: fixture.workspaceDir,
+      filesToModify: [{ path: 'src/pool.ts', content: 'export const pool = new Map();' }],
+    },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 1,
+  });
+
+  const failedTask = await repo.getTask(task.userId, task.id);
+  assert.equal(failedTask?.status, 'failed', 'A failing check must not be reported as completion');
+  const failEvent = repo.events.find((e) => e.taskId === task.id && e.eventType === 'task.failed');
+  assert.ok(failEvent, 'Must emit task.failed when the real checks fail');
+  const evaluation = failEvent.payload?.evaluationResult as { passed?: boolean } | undefined;
+  assert.equal(evaluation?.passed, false);
+});
+
+test('Coding task gets its own git workspace when the payload names none', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const root = await mkdtemp(join(tmpdir(), 'aios-coding-root-'));
+  const executor = new TaskExecutor(repo, broadcaster, { codingWorkspaceRoot: root });
+
+  const { task } = await repo.createTask({
+    userId: 'user-coder-ws',
+    projectId: 'proj-coder-ws',
+    kind: 'coding_task',
+    payload: { instructions: 'Tulis satu file', filesToModify: [{ path: 'src/a.ts', content: 'export const a = 1;' }] },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 1,
+  });
+
+  const workspaceDir = join(root, task.id);
+  assert.equal(await readFile(join(workspaceDir, 'src/a.ts'), 'utf8'), 'export const a = 1;');
+  await stat(join(workspaceDir, '.git'));
+  // The scratch workspace has no lint/typecheck/test/build scripts, so the honest verdict is a
+  // failure rather than a fabricated success.
+  assert.equal((await repo.getTask(task.userId, task.id))?.status, 'failed');
+});
+
+test('Research task without a tool registry fails closed instead of inventing sources', async () => {
   const repo = new TestTaskRepo();
   const broadcaster = new InMemoryTaskEventBroadcaster();
   const executor = new TaskExecutor(repo, broadcaster);
@@ -487,9 +781,145 @@ test('Real research task executes with ResearchAgent & ResearchEvaluator without
     userId: 'user-researcher',
     projectId: 'proj-researcher',
     kind: 'research_task',
+    payload: { query: 'Arsitektur micro-agent durable execution' },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 3,
+  });
+
+  const failedTask = await repo.getTask(task.userId, task.id);
+  assert.equal(failedTask?.status, 'failed');
+
+  const events = repo.events.filter((e) => e.taskId === task.id);
+  const failedEvent = events.find((e) => e.eventType === 'task.failed');
+  assert.ok(failedEvent, 'a research task with no search backend must fail, not complete');
+  assert.equal(events.some((e) => e.eventType === 'task.completed'), false);
+  assert.match(
+    String(evaluationField(failedEvent.payload, 'completionBlockedReason')),
+    /No valid sources provided/,
+  );
+
+  // The removed hardcoded fallback used to inject these two sources with no network call at all.
+  const serialized = JSON.stringify(events);
+  assert.doesNotMatch(serialized, /developer\.mozilla\.org/);
+  assert.doesNotMatch(serialized, /nodejs\.org/);
+  assert.doesNotMatch(serialized, /PLACEHOLDER_WORKER_LABEL/);
+});
+
+test('Research task searches, browses, and cites through the guarded tool registry', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const guard = new SecuredCapabilityGuard(new PermissionEngine());
+  const registry = new ToolRegistry(guard);
+  const searched: string[] = [];
+  const fetched: string[] = [];
+
+  registry.registerTool(
+    createWebSearchTool(async (query) => {
+      searched.push(query);
+      return [
+        {
+          url: 'https://example.org/durable',
+          title: 'Durable execution explained',
+          snippet: 'search-engine snippet that must not survive browse',
+        },
+        {
+          url: 'https://example.com/checkpoints',
+          title: 'Checkpointing workflows',
+          snippet: 'second search-engine snippet',
+        },
+      ];
+    }),
+  );
+  registry.registerTool(
+    createWebFetchTool(
+      // The test network has no DNS resolver, so skip the resolve step; SSRF blocking itself is
+      // covered by packages/tools/test/tools.test.ts.
+      new SsrfGuard({ resolveDns: false }),
+      async (input: RequestInfo | URL) => {
+        fetched.push(String(input));
+        return new Response(
+          `<html><head><title>Page for ${String(input)}</title></head><body><p>Durable execution persists each workflow step so a crash resumes from the last checkpoint instead of restarting the whole run. Engines that implement it keep the workflow history in a store the application can query, and they replay completed steps from that history after a failure.</p></body></html>`,
+          { status: 200, headers: { 'content-type': 'text/html' } },
+        );
+      },
+    ),
+  );
+
+  const executor = new TaskExecutor(repo, broadcaster, { registry });
+
+  const { task } = await repo.createTask({
+    userId: 'user-researcher',
+    projectId: 'proj-researcher',
+    kind: 'research_task',
+    payload: { query: 'durable execution', topics: ['durable execution'] },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 3,
+  });
+
+  assert.deepEqual(searched, ['durable execution']);
+  // ResearchAgent fetched each URL during browsing and ResearchEvaluator re-fetched each URL for verification
+  assert.deepEqual(Array.from(new Set(fetched)), ['https://example.org/durable', 'https://example.com/checkpoints']);
+  assert.equal(fetched.length, 4, 'ResearchEvaluator must re-fetch source URLs for verification');
+
+  const completedTask = await repo.getTask(task.userId, task.id);
+  assert.equal(completedTask?.status, 'completed');
+  assert.ok(completedTask?.artifacts && completedTask.artifacts.length > 0);
+
+  const report = String(completedTask.artifacts[0]?.content ?? '');
+  assert.match(report, /https:\/\/example\.org\/durable/);
+  assert.match(report, /Durable execution persists each workflow step/);
+  assert.doesNotMatch(report, /search-engine snippet/);
+
+  const events = repo.events.filter((e) => e.taskId === task.id);
+  const completedEvent = events.find((e) => e.eventType === 'task.completed');
+  assert.ok(completedEvent);
+  assert.equal(evaluationField(completedEvent.payload, 'passed'), true);
+  for (const evt of events) {
+    assert.equal(evt.payload?.placeholder, undefined);
+    assert.notEqual(evt.payload?.note, PLACEHOLDER_WORKER_LABEL);
+  }
+});
+
+// ============================================================================
+// 6. Generic natural-language orchestration through the real ModelGateway
+// ============================================================================
+test('Generic natural-language task executes through ModelGateway; evaluator sees real output', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const gateway = new MockModelGateway({ chatResponse: 'Analisis data penjualan: margin naik 12%.' });
+  const executor = new TaskExecutor(repo, broadcaster, {
+    modelGateway: gateway,
+    defaultModel: 'test/verified-model',
+  });
+
+  const { task } = await repo.createTask({
+    userId: 'user-generic',
+    projectId: 'proj-generic',
+    kind: 'generic_task',
     payload: {
-      query: 'Arsitektur micro-agent durable execution',
-      topics: ['durable execution', 'state machines'],
+      prompt: 'Analisis data penjualan kuartal ini',
+      acceptanceCriteria: [
+        {
+          id: 'analisis',
+          description: 'analisis data penjualan',
+          category: 'generic',
+          required: true,
+        },
+      ],
     },
   });
 
@@ -502,17 +932,88 @@ test('Real research task executes with ResearchAgent & ResearchEvaluator without
     maxAttempts: 3,
   });
 
-  const completedTask = await repo.getTask(task.userId, task.id);
-  assert.equal(completedTask?.status, 'completed');
-  assert.ok(completedTask?.artifacts && completedTask.artifacts.length > 0);
+  const completed = await repo.getTask(task.userId, task.id);
+  assert.equal(completed?.status, 'completed');
+  assert.equal(gateway.callCount, 1);
 
-  // Must NOT carry PLACEHOLDER_WORKER_LABEL
-  const artifactNote = (completedTask.artifacts[0] as { note?: string })?.note;
-  assert.notEqual(artifactNote, PLACEHOLDER_WORKER_LABEL);
+  const toolCall = repo.events.find((e) => e.eventType === 'task.tool_call');
+  const output = toolCall?.payload.output as { content?: string } | undefined;
+  assert.equal(output?.content, 'Analisis data penjualan: margin naik 12%.');
 
-  const completedEvents = repo.events.filter((e) => e.taskId === task.id);
-  for (const evt of completedEvents) {
-    assert.equal(evt.payload?.placeholder, undefined);
-    assert.notEqual(evt.payload?.note, PLACEHOLDER_WORKER_LABEL);
-  }
+  const artifact = completed?.artifacts?.[0] as { content?: string; note?: string } | undefined;
+  assert.match(String(artifact?.content), /margin naik 12%/);
+  assert.notEqual(artifact?.note, PLACEHOLDER_WORKER_LABEL);
+});
+
+test('Generic task fails evaluation when model output does not support acceptance criteria', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const gateway = new MockModelGateway({ chatResponse: 'Cuaca hari ini cerah.' });
+  const executor = new TaskExecutor(repo, broadcaster, {
+    modelGateway: gateway,
+    defaultModel: 'test/verified-model',
+  });
+
+  const { task } = await repo.createTask({
+    userId: 'user-generic-reject',
+    projectId: 'proj-generic-reject',
+    kind: 'generic_task',
+    payload: {
+      prompt: 'Analisis data penjualan kuartal ini',
+      acceptanceCriteria: [
+        {
+          id: 'analisis',
+          description: 'analisis data penjualan',
+          category: 'generic',
+          required: true,
+        },
+      ],
+    },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 1,
+  });
+
+  const rejected = await repo.getTask(task.userId, task.id);
+  assert.equal(rejected?.status, 'failed');
+  assert.match(String(rejected?.error), /Evaluasi generik belum lulus/);
+  const failEvent = repo.events.find((e) => e.eventType === 'task.failed');
+  const remainingIssues = (failEvent?.payload.evaluationResult as { remainingIssues?: string[] })
+    ?.remainingIssues;
+  assert.ok(remainingIssues?.some((issue) => issue.includes('analisis data penjualan')));
+});
+
+test('Generic task fails closed when no ModelGateway is configured', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const executor = new TaskExecutor(repo, broadcaster);
+
+  const { task } = await repo.createTask({
+    userId: 'user-generic-nogw',
+    projectId: 'proj-generic-nogw',
+    kind: 'generic_task',
+    payload: { prompt: 'Ringkas catatan rapat mingguan' },
+  });
+
+  await assert.rejects(
+    executor.execute({
+      taskId: task.id,
+      userId: task.userId,
+      projectId: task.projectId,
+      kind: task.kind,
+      attempt: 0,
+      maxAttempts: 1,
+    }),
+    /requires a ModelGateway/,
+  );
+
+  const failed = await repo.getTask(task.userId, task.id);
+  assert.equal(failed?.status, 'failed');
+  assert.match(String(failed?.error), /requires a ModelGateway/);
 });

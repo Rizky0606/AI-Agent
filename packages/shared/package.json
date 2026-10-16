@@ -2,6 +2,7 @@
   "name": "@personal-ai-os/shared",
   "private": true,
   "type": "module",
+  "react-native": "src/index.rn.ts",
   "exports": {
     ".": "./src/index.ts"
   },

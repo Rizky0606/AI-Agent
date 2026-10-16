@@ -177,4 +177,6 @@ export interface NotificationStorage {
   updateNotification(notification: NotificationRecord): Promise<void>;
   getNotification(id: string): Promise<NotificationRecord | null>;
   listNotifications(userId: string): Promise<NotificationRecord[]>;
+  getUserPreferences(userId: string): Promise<NotificationPreferences | null>;
+  saveUserPreferences(userId: string, preferences: NotificationPreferences): Promise<void>;
 }

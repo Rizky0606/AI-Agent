@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import { dirname, normalize, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
@@ -121,5 +121,16 @@ export class DiskArtifactStorage implements StorageAdapter {
     } catch {
       return false;
     }
+  }
+
+  async listKeys(prefix: string): Promise<string[]> {
+    const dir = this.resolveSafePath(prefix);
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      return [];
+    }
+    return entries.filter((name) => name.endsWith('.json')).map((name) => `${prefix}${name}`);
   }
 }

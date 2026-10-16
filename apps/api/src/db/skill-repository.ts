@@ -12,11 +12,15 @@ export interface SkillRepository {
   disableSkill(name: string): Promise<SkillRecord>;
   rollbackSkill(name: string, targetVersion?: string): Promise<SkillRecord>;
   getSkillRevisions(name: string): Promise<SkillRevisionRecord[]>;
+  getProjectSkills(projectId: string): Promise<Record<string, boolean>>;
+  setProjectSkill(projectId: string, skillName: string, isEnabled: boolean): Promise<void>;
+  recordSkillUsage(name: string, outcome: 'success' | 'failure', error?: string): Promise<void>;
 }
 
 export class InMemorySkillRepository implements SkillRepository {
   private readonly skills = new Map<string, SkillRecord>();
   private readonly revisions = new Map<string, SkillRevisionRecord[]>();
+  private readonly projectSkills = new Map<string, boolean>();
 
   async listSkills(options?: { isEnabled?: boolean }): Promise<SkillRecord[]> {
     const list = Array.from(this.skills.values());
@@ -132,6 +136,31 @@ export class InMemorySkillRepository implements SkillRepository {
 
     this.skills.set(name, rolledBack);
     return rolledBack;
+  }
+
+  async getProjectSkills(projectId: string): Promise<Record<string, boolean>> {
+    const result: Record<string, boolean> = {};
+    for (const [key, value] of this.projectSkills.entries()) {
+      if (key.startsWith(`${projectId}:`)) {
+        const skillName = key.slice(projectId.length + 1);
+        result[skillName] = value;
+      }
+    }
+    return result;
+  }
+
+  async setProjectSkill(projectId: string, skillName: string, isEnabled: boolean): Promise<void> {
+    this.projectSkills.set(`${projectId}:${skillName}`, isEnabled);
+  }
+
+  async recordSkillUsage(name: string, outcome: 'success' | 'failure', error?: string): Promise<void> {
+    const existing = this.skills.get(name);
+    if (existing) {
+      existing.lastUsedAt = new Date();
+      existing.lastOutcome = outcome;
+      existing.lastError = error ?? null;
+      this.skills.set(name, existing);
+    }
   }
 }
 
@@ -292,6 +321,45 @@ export class SqlSkillRepository implements SkillRepository {
     return this.mapRowToRecord(updated!);
   }
 
+  async getProjectSkills(projectId: string): Promise<Record<string, boolean>> {
+    const rows = await this.db
+      .select()
+      .from(schema.projectSkills)
+      .where(eq(schema.projectSkills.projectId, projectId));
+    const result: Record<string, boolean> = {};
+    for (const r of rows) {
+      result[r.skillName] = r.isEnabled;
+    }
+    return result;
+  }
+
+  async setProjectSkill(projectId: string, skillName: string, isEnabled: boolean): Promise<void> {
+    await this.db
+      .insert(schema.projectSkills)
+      .values({
+        projectId,
+        skillName,
+        isEnabled,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [schema.projectSkills.projectId, schema.projectSkills.skillName],
+        set: { isEnabled, updatedAt: new Date() },
+      });
+  }
+
+  async recordSkillUsage(name: string, outcome: 'success' | 'failure', error?: string): Promise<void> {
+    await this.db
+      .update(schema.skills)
+      .set({
+        lastUsedAt: new Date(),
+        lastOutcome: outcome,
+        lastError: error ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.skills.name, name));
+  }
+
   private mapRowToRecord(r: schema.SkillRow): SkillRecord {
     return {
       id: r.id,
@@ -302,6 +370,9 @@ export class SqlSkillRepository implements SkillRepository {
       isEnabled: r.isEnabled,
       isDefault: r.isDefault,
       scope: r.scope,
+      lastUsedAt: r.lastUsedAt,
+      lastOutcome: (r.lastOutcome as 'success' | 'failure') ?? undefined,
+      lastError: r.lastError,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
     };

@@ -25,9 +25,10 @@ export async function prepareWorkspace(rootInput: string, workspaceId: string, t
   await mkdir(taskDir, { recursive: true, mode: 0o700 });
   const actual = await realpath(taskDir);
   if (!contained(projectReal, actual)) throw new Error('workspace escapes project');
-  await execFileAsync('git', ['-C', actual, 'init', '--quiet'], { env: { PATH: '/usr/bin:/bin', HOME: '/home/ubuntu', LANG: 'C.UTF-8' } });
+  const gitEnv = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/home/ubuntu', LANG: 'C.UTF-8' };
+  await execFileAsync('git', ['-C', actual, 'init', '--quiet'], { env: gitEnv });
   const branch = `task/${taskId.replace(/[^A-Za-z0-9._-]/g, '-')}`;
-  const { stdout: currentBranch } = await execFileAsync('git', ['-C', actual, 'branch', '--show-current'], { env: { PATH: '/usr/bin:/bin', HOME: '/home/ubuntu', LANG: 'C.UTF-8' } });
-  if (currentBranch.trim() !== branch) await execFileAsync('git', ['-C', actual, 'checkout', '-b', branch], { env: { PATH: '/usr/bin:/bin', HOME: '/home/ubuntu', LANG: 'C.UTF-8' } });
+  const { stdout: currentBranch } = await execFileAsync('git', ['-C', actual, 'branch', '--show-current'], { env: gitEnv });
+  if (currentBranch.trim() !== branch) await execFileAsync('git', ['-C', actual, 'checkout', '-B', branch], { env: gitEnv });
   return actual;
 }

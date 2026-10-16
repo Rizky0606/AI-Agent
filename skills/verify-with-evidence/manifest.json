@@ -1,0 +1,54 @@
+{
+  "name": "verify-with-evidence",
+  "version": "1.0.0",
+  "description": "Memverifikasi klaim penyelesaian tugas secara independen dengan memeriksa bukti nyata (hasil pengujian, kode keluar, artefak, luaran tool) dan menolak klaim tanpa bukti.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskGoal": { "type": "string" },
+      "claimedStatus": { "type": "string" },
+      "summary": { "type": "string" },
+      "evidence": {
+        "type": "object",
+        "properties": {
+          "testResults": { "type": "string" },
+          "exitCode": { "type": "number" },
+          "artifactPaths": { "type": "array", "items": { "type": "string" } },
+          "toolOutputs": { "type": "array", "items": { "type": "string" } },
+          "stdout": { "type": "string" }
+        }
+      }
+    },
+    "required": ["taskGoal", "claimedStatus", "summary"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "verified": { "type": "boolean" },
+      "confidenceScore": { "type": "number" },
+      "reason": { "type": "string" },
+      "missingEvidence": { "type": "array", "items": { "type": "string" } },
+      "concreteEvidenceSummary": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["verified", "confidenceScore", "reason", "missingEvidence", "concreteEvidenceSummary"]
+  },
+  "toolRequirements": [],
+  "permissions": [
+    {
+      "action": "query:evidence_verification",
+      "resource": "task://evidence",
+      "scope": "workspace",
+      "riskLevel": "LOW",
+      "reason": "Audit verifikasi bukti nyata sebelum menyetujui status selesai."
+    }
+  ],
+  "compatibility": {
+    "agentCoreVersion": ">=0.2.0",
+    "platforms": ["node", "linux", "windows"]
+  },
+  "metadata": {
+    "category": "governance",
+    "author": "personal-ai-os",
+    "risk": "LOW"
+  }
+}

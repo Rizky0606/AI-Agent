@@ -2,7 +2,9 @@ import type {
   AcceptanceCriterion,
   EvaluatedCriterion,
   EvaluationResult,
+  ResearchClaim,
   ResearchEvidence,
+  UrlFetcher,
 } from './types.ts';
 
 export const DEFAULT_RESEARCH_CRITERIA: readonly AcceptanceCriterion[] = [
@@ -16,6 +18,19 @@ export const DEFAULT_RESEARCH_CRITERIA: readonly AcceptanceCriterion[] = [
   {
     id: 'citation_mapping',
     description: 'Setiap klaim fakta tertaut ke sumber nyata, tidak ada sitasi fiktif / halusinasi',
+    category: 'research',
+    required: true,
+  },
+  {
+    id: 'claim_support',
+    description:
+      'Setiap klaim fakta didukung oleh konten aktual dari URL sumber yang diambil ulang',
+    category: 'research',
+    required: true,
+  },
+  {
+    id: 'query_relevance',
+    description: 'Temuan dan klaim riset relevan secara substansial terhadap pertanyaan pengguna',
     category: 'research',
     required: true,
   },
@@ -41,10 +56,127 @@ export const DEFAULT_RESEARCH_CRITERIA: readonly AcceptanceCriterion[] = [
   },
 ];
 
+function extractKeywords(text: string): string[] {
+  const stopWords = new Set([
+    'adalah', 'yang', 'untuk', 'dengan', 'pada', 'dalam', 'dari', 'atau', 'dan', 'ini', 'itu',
+    'juga', 'akan', 'bisa', 'dapat', 'tidak', 'saya', 'kami', 'anda', 'mereka', 'apa', 'mengapa',
+    'bagaimana', 'seperti', 'secara', 'antara', 'lain', 'lebih', 'karena', 'oleh', 'harus', 'telah',
+    'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'were', 'have',
+    'has', 'had', 'what', 'how', 'why', 'when', 'where', 'which', 'who', 'about', 'into',
+  ]);
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !stopWords.has(w));
+}
+
+function checkClaimSupported(
+  statement: string,
+  content: string,
+): { supported: boolean; matchRatio: number; skipped?: boolean } {
+  // If no content / snippet is available at all, verification cannot disprove claim
+  if (!content || content.trim().length === 0) {
+    return { supported: true, matchRatio: 1.0, skipped: true };
+  }
+  const claimWords = extractKeywords(statement);
+  if (claimWords.length === 0) return { supported: true, matchRatio: 1.0 };
+  const contentLower = content.toLowerCase();
+  let matches = 0;
+  for (const word of claimWords) {
+    if (contentLower.includes(word)) {
+      matches++;
+    }
+  }
+  const matchRatio = matches / claimWords.length;
+  // If at least 20% of significant claim keywords match the source content, or at least 2 keywords match
+  const supported = matchRatio >= 0.2 || matches >= 2;
+  return { supported, matchRatio };
+}
+
+function checkQueryRelevance(
+  query: string | undefined,
+  claims: readonly ResearchClaim[],
+): { relevant: boolean; score: number; reason: string } {
+  if (!query || query.trim().length === 0) {
+    return {
+      relevant: true,
+      score: 1.0,
+      reason: 'Pertanyaan tidak disertakan secara spesifik; relevansi diterima.',
+    };
+  }
+  const queryWords = extractKeywords(query);
+  if (queryWords.length === 0) {
+    return {
+      relevant: true,
+      score: 1.0,
+      reason: 'Pertanyaan tidak memiliki kata kunci diskriminatif; relevansi diterima.',
+    };
+  }
+  const allClaimText = claims.map((c) => c.statement).join(' ').toLowerCase();
+  let matches = 0;
+  for (const word of queryWords) {
+    if (allClaimText.includes(word)) {
+      matches++;
+    }
+  }
+  const score = Number((matches / queryWords.length).toFixed(2));
+  const relevant = score >= 0.25; // At least 25% query keyword coverage
+  return {
+    relevant,
+    score,
+    reason: relevant
+      ? `Klaim temuan riset relevan dengan pertanyaan (mencakup ${matches}/${queryWords.length} kata kunci pertanyaan).`
+      : `Klaim temuan riset tidak memiliki relevansi memadai terhadap pertanyaan "${query}" (hanya mencakup ${matches}/${queryWords.length} kata kunci).`,
+  };
+}
+
 export class ResearchEvaluator {
   evaluate(
     evidence: ResearchEvidence,
     customCriteria?: readonly AcceptanceCriterion[],
+  ): EvaluationResult {
+    return this.evaluateInternal(evidence, customCriteria, { query: evidence.query });
+  }
+
+  async evaluateAsync(
+    evidence: ResearchEvidence,
+    options?: {
+      urlFetcher?: UrlFetcher | undefined;
+      query?: string | undefined;
+      customCriteria?: readonly AcceptanceCriterion[] | undefined;
+    },
+  ): Promise<EvaluationResult> {
+    const fetchedContents = new Map<string, string>();
+    if (options?.urlFetcher && evidence.sources.length > 0) {
+      await Promise.all(
+        evidence.sources.map(async (source) => {
+          try {
+            const res = await options.urlFetcher!(source.url);
+            const text = typeof res === 'string' ? res : res.content;
+            if (text && text.trim().length > 0) {
+              fetchedContents.set(source.id, text);
+            }
+          } catch {
+            // Re-fetch failed, fallback to source.snippet
+          }
+        }),
+      );
+    }
+
+    return this.evaluateInternal(evidence, options?.customCriteria, {
+      fetchedContents,
+      query: options?.query ?? evidence.query,
+    });
+  }
+
+  private evaluateInternal(
+    evidence: ResearchEvidence,
+    customCriteria?: readonly AcceptanceCriterion[],
+    options?: {
+      fetchedContents?: Map<string, string> | undefined;
+      query?: string | undefined;
+    },
   ): EvaluationResult {
     const criteria = customCriteria ?? DEFAULT_RESEARCH_CRITERIA;
     const evaluatedCriteria: EvaluatedCriterion[] = [];
@@ -145,6 +277,70 @@ export class ResearchEvaluator {
           } else {
             reason = `Terdapat ${missingCitations} fakta tanpa sitasi dan ${invalidSourceRefs} rujukan sumber tidak dikenal.`;
             if (criterion.required) remainingIssues.push(`Citation mapping: ${reason}`);
+          }
+          break;
+        }
+
+        case 'claim_support': {
+          const sourcedFacts = evidence.claims.filter((c) => c.type === 'sourced_fact');
+          let unsupportedCount = 0;
+          const unsupportedDetails: string[] = [];
+
+          for (const claim of sourcedFacts) {
+            let hasAnySupport = false;
+            const sIds = claim.sourceIds ?? [];
+            if (sIds.length === 0) {
+              unsupportedCount++;
+              unsupportedDetails.push(`Klaim "${claim.statement.slice(0, 40)}" tidak memiliki rujukan sumber.`);
+              continue;
+            }
+
+            for (const sid of sIds) {
+              const src = sourceMap.get(sid);
+              const fetchedText = options?.fetchedContents?.get(sid);
+              const rawContent = fetchedText ?? src?.snippet;
+              if (!rawContent || rawContent.trim().length === 0) {
+                // If neither re-fetched content nor snippet is present, cannot disprove support
+                hasAnySupport = true;
+                break;
+              }
+              const sourceContent = [src?.title, rawContent].filter(Boolean).join(' ');
+              const supportCheck = checkClaimSupported(claim.statement, sourceContent);
+              if (supportCheck.supported) {
+                hasAnySupport = true;
+                break;
+              }
+            }
+
+            if (!hasAnySupport) {
+              unsupportedCount++;
+              unsupportedDetails.push(
+                `Klaim "${claim.statement.slice(0, 40)}" tidak didukung oleh isi sumber (${sIds.join(', ')})`,
+              );
+            }
+          }
+
+          if (unsupportedCount === 0) {
+            passed = true;
+            evidenceSummary = `${sourcedFacts.length} factual claims verified against source contents / re-fetched URLs.`;
+            reason = 'Seluruh klaim fakta terverifikasi dan didukung oleh konten aktual sumber rujukan.';
+          } else {
+            reason = `Terdapat ${unsupportedCount} klaim fakta yang tidak didukung oleh konten sumber: ${unsupportedDetails.slice(0, 2).join('; ')}.`;
+            if (criterion.required) remainingIssues.push(`Claim support: ${reason}`);
+          }
+          break;
+        }
+
+        case 'query_relevance': {
+          const q = options?.query ?? evidence.query;
+          const rel = checkQueryRelevance(q, evidence.claims);
+          if (rel.relevant) {
+            passed = true;
+            evidenceSummary = `Query relevance score: ${(rel.score * 100).toFixed(0)}%. ${rel.reason}`;
+            reason = rel.reason;
+          } else {
+            reason = rel.reason;
+            if (criterion.required) remainingIssues.push(`Query relevance: ${reason}`);
           }
           break;
         }

@@ -2,23 +2,35 @@ import { BaseAgentRuntime } from './base-adapter.ts';
 import type { RuntimeCapability, RuntimeExecuteInput, RuntimeExecuteResult, RuntimeHealth, RuntimeProposedAction } from './types.ts';
 
 type BridgeRun = { runId: string };
-type BridgeRecord = { status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; output?: string | undefined; exitCode?: number | undefined; durationMs?: number | undefined; error?: string | undefined };
+type BridgeRecord = {
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  output?: string | undefined;
+  exitCode?: number | undefined;
+  durationMs?: number | undefined;
+  error?: string | undefined;
+  events?: Array<Record<string, unknown>> | undefined;
+};
 
 
 export class RemoteRuntimeAdapter extends BaseAgentRuntime {
   readonly id: string;
   readonly name: string;
   readonly version: string;
-  readonly capabilities: readonly RuntimeCapability[] = [
-    { name: 'coding', description: 'Host runtime coding', level: 'write' },
-    { name: 'terminal', description: 'Host runtime execution', level: 'execute' },
-  ];
+  readonly capabilities: readonly RuntimeCapability[];
   private readonly baseUrl: string;
   private readonly token: string;
   private readonly fetcher: typeof fetch;
   private readonly taskRuns = new Map<string, string>();
 
-  constructor(options: { id: string; name: string; version: string; baseUrl: string; token: string; fetcher?: typeof fetch }) {
+  constructor(options: {
+    id: string;
+    name: string;
+    version: string;
+    baseUrl: string;
+    token: string;
+    capabilities?: readonly RuntimeCapability[] | undefined;
+    fetcher?: typeof fetch;
+  }) {
     super();
     this.id = options.id;
     this.name = options.name;
@@ -26,6 +38,10 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.token = options.token;
     this.fetcher = options.fetcher ?? fetch;
+    this.capabilities = options.capabilities ?? [
+      { name: 'coding', description: 'Host runtime coding', level: 'write' },
+      { name: 'terminal', description: 'Host runtime execution', level: 'execute' },
+    ];
   }
 
   private async request<T>(path: string, init?: RequestInit, retries = 1): Promise<T> {
@@ -46,7 +62,7 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
     throw lastError instanceof Error ? lastError : new Error('runtime bridge request failed');
   }
 
-  private parseActions(output: string): RuntimeProposedAction[] {
+  private parseActions(output: string, events?: Array<Record<string, unknown>>): RuntimeProposedAction[] {
     const actions: RuntimeProposedAction[] = [];
     for (const line of output.split('\n')) {
       try {
@@ -67,6 +83,23 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
         }
       } catch { /* runtime logs are untrusted and may not be JSON */ }
     }
+    if (Array.isArray(events)) {
+      for (const evt of events) {
+        if (evt.type === 'file_edit' && evt.data && typeof evt.data === 'object') {
+          const d = evt.data as Record<string, unknown>;
+          if (typeof d.path === 'string') {
+            actions.push({
+              id: String(evt.id ?? `action-${actions.length + 1}`),
+              type: 'file_write',
+              action: 'file_edit',
+              resource: d.path,
+              payload: { path: d.path, diff: d.diff },
+              riskLevel: 'MEDIUM',
+            });
+          }
+        }
+      }
+    }
     return actions;
   }
 
@@ -80,17 +113,50 @@ export class RemoteRuntimeAdapter extends BaseAgentRuntime {
     this.status = 'running';
     try {
       const workspaceId = typeof input.metadata?.['workspaceId'] === 'string' ? input.metadata['workspaceId'] : input.taskId;
-      const created = await this.request<BridgeRun>('/v1/runs', { method: 'POST', body: JSON.stringify({ runtimeId: this.id, taskId: input.taskId, prompt: input.prompt, workspaceId, timeoutMs: input.timeoutMs }) });
+      const requestBody: Record<string, unknown> = {
+        runtimeId: this.id,
+        taskId: input.taskId,
+        prompt: input.prompt,
+        workspaceId,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.resume ? { resume: true } : {}),
+        ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.env ? { environment: input.env } : {}),
+      };
+      const created = await this.request<BridgeRun>('/v1/runs', { method: 'POST', body: JSON.stringify(requestBody) });
       this.taskRuns.set(input.taskId, created.runId);
+      let lastEventCount = 0;
+
       for (;;) {
         if (this.cancelledTasks.has(input.taskId)) await this.cancel(input.taskId);
         const record = await this.request<BridgeRecord>(`/v1/runs/${created.runId}`);
-        if (record.status === 'queued' || record.status === 'running') { await new Promise<void>((resolve) => setTimeout(resolve, 100)); continue; }
+        if (Array.isArray(record.events) && input.onEvent) {
+          while (lastEventCount < record.events.length) {
+            const evt = record.events[lastEventCount++];
+            if (evt) input.onEvent(evt);
+          }
+        }
+        if (record.status === 'queued' || record.status === 'running') {
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+          continue;
+        }
         const output = record.output ?? '';
-        const proposedActions = this.parseActions(output);
+        const proposedActions = this.parseActions(output, record.events);
         const appliedActions = await this.filterUntrustedActions(proposedActions);
         this.status = 'idle';
-        return { taskId: input.taskId, status: record.status, output, rawOutput: output, proposedActions, appliedActions, durationMs: record.durationMs ?? Date.now() - started, exitCode: record.exitCode, error: record.error, untrustedOutputWarning: true };
+        return {
+          taskId: input.taskId,
+          status: record.status,
+          output,
+          rawOutput: output,
+          events: record.events,
+          proposedActions,
+          appliedActions,
+          durationMs: record.durationMs ?? Date.now() - started,
+          exitCode: record.exitCode,
+          error: record.error,
+          untrustedOutputWarning: true,
+        };
       }
     } catch (error) {
       this.status = 'error';

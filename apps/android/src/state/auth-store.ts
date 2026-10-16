@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ApiClient, defaultApiClient } from '../api/client.ts';
+import { createPkceParams, parseAuthRedirect } from '../api/pkce.ts';
 import type { Device, User } from '../api/types.ts';
 
 export interface AuthState {
@@ -12,6 +13,7 @@ export interface AuthState {
 
   // Actions
   initialize: () => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   login: (email: string, pass: string) => Promise<void>;
   register: (email: string, pass: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -20,8 +22,42 @@ export interface AuthState {
   clearError: () => void;
 }
 
-export const createAuthStore = (client: ApiClient = defaultApiClient) =>
-  create<AuthState>((set, get) => ({
+export const createAuthStore = (client: ApiClient = defaultApiClient) => {
+  let pendingLogin: {
+    state: string;
+    resolve: (code: string) => void;
+    reject: (err: Error) => void;
+  } | null = null;
+  let linkSubscription: { remove(): void } | null = null;
+
+  const handleAuthUrl = (url: string): void => {
+    const pending = pendingLogin;
+    if (!pending) return;
+    let code: string | null;
+    try {
+      code = parseAuthRedirect(url, pending.state)?.code ?? null;
+    } catch (err) {
+      pendingLogin = null;
+      pending.reject(err instanceof Error ? err : new Error('Google sign-in failed'));
+      return;
+    }
+    if (!code) return; // unrelated deep link, keep waiting
+    pendingLogin = null;
+    pending.resolve(code);
+  };
+
+  // Dynamic import: react-native cannot be loaded by the Node test runtime.
+  const ensureLinkListener = async (): Promise<void> => {
+    if (linkSubscription) return;
+    try {
+      const { Linking } = await import('react-native');
+      linkSubscription = Linking.addEventListener('url', ({ url }) => handleAuthUrl(url));
+    } catch {
+      // not in a React Native runtime
+    }
+  };
+
+  return create<AuthState>((set, get) => ({
     user: null,
     isAuthenticated: false,
     isLoading: true,
@@ -32,6 +68,7 @@ export const createAuthStore = (client: ApiClient = defaultApiClient) =>
     initialize: async () => {
       set({ isLoading: true, error: null });
       try {
+        await ensureLinkListener();
         const storage = client.getStorage();
         const storedUrl = await storage.getServerUrl();
         if (storedUrl) {
@@ -60,6 +97,38 @@ export const createAuthStore = (client: ApiClient = defaultApiClient) =>
           user: null,
           error: err instanceof Error ? err.message : 'Initialization failed',
         });
+      }
+    },
+
+    loginWithGoogle: async () => {
+      set({ isLoading: true, error: null });
+      try {
+        const { verifier, challenge, state } = await createPkceParams();
+        // Bounded: if the user abandons the browser, the button must not stay disabled forever.
+        const codePromise = new Promise<string>((resolve, reject) => {
+          pendingLogin = { state, resolve, reject };
+          setTimeout(() => {
+            if (pendingLogin?.state !== state) return;
+            pendingLogin = null;
+            reject(new Error('Google sign-in timed out. Coba lagi.'));
+          }, 300_000);
+        });
+
+        await ensureLinkListener();
+        const { Linking } = await import('react-native');
+        await Linking.openURL(client.googleStartUrl(challenge, state));
+
+        const code = await codePromise;
+        const res = await client.exchangeLoginCode(code, verifier);
+        set({ user: res.user, isAuthenticated: true, isLoading: false, error: null });
+        await get().registerDevice();
+      } catch (err) {
+        pendingLogin = null;
+        set({
+          isLoading: false,
+          error: err instanceof Error ? err.message : 'Google sign-in failed',
+        });
+        throw err;
       }
     },
 
@@ -119,5 +188,6 @@ export const createAuthStore = (client: ApiClient = defaultApiClient) =>
 
     clearError: () => set({ error: null }),
   }));
+};
 
 export const useAuthStore = createAuthStore();

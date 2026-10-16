@@ -77,6 +77,7 @@ test('Chat streaming via WebSocket accumulates deltas into chatStore', async () 
     await new Promise((r) => setTimeout(r, 10));
     const mockWs = MockWebSocket.instances[0];
     assert.ok(mockWs);
+    mockWs.simulateServerMessage({ type: 'auth.ok' });
     assert.match(mockWs.url, /token=valid-chat-token/);
     assert.match(mockWs.url, /conversationId=conv-123/);
 
@@ -120,8 +121,10 @@ test('Chat streaming via WebSocket accumulates deltas into chatStore', async () 
         role: 'assistant',
         content: 'Tentu, ini rencana sprint Anda.',
         createdAt: new Date().toISOString(),
+        metadata: { resolvedModel: 'claude-3-5-sonnet' },
       },
-      modelUsed: 'claude-3-5-sonnet',
+      resolvedModel: 'claude-3-5-sonnet',
+      mode: 'auto',
     });
 
     const storeState3 = useChatStore.getState();
@@ -130,6 +133,7 @@ test('Chat streaming via WebSocket accumulates deltas into chatStore', async () 
     const finalMsg = storeState3.messages.find((m) => m.id === 'msg-stream-1');
     assert.ok(finalMsg);
     assert.equal(finalMsg.content, 'Tentu, ini rencana sprint Anda.');
+    assert.equal(finalMsg.metadata?.['resolvedModel'], 'claude-3-5-sonnet');
 
     wsClient.disconnect();
   } finally {
@@ -156,6 +160,7 @@ test('Chat streaming cancellation stops active stream', async () => {
     await new Promise((r) => setTimeout(r, 10));
     const mockWs = MockWebSocket.instances[0];
     assert.ok(mockWs);
+    mockWs.simulateServerMessage({ type: 'auth.ok' });
 
     // Start streaming message
     mockWs.simulateServerMessage({
@@ -178,6 +183,7 @@ test('Chat streaming cancellation stops active stream', async () => {
     const lastSent = JSON.parse(mockWs.sentPayloads[mockWs.sentPayloads.length - 1] ?? '{}');
     assert.equal(lastSent.type, 'chat.cancel');
     assert.equal(useChatStore.getState().isStreaming, false);
+    assert.equal(useChatStore.getState().messages.find((message) => message.id === 'msg-cancel-1')?.content, 'Bagian awal...');
 
     wsClient.disconnect();
   } finally {

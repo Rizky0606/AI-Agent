@@ -143,3 +143,53 @@ test('Logout clears tokens from secure storage and resets auth state', async () 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Google exchange: login code + verifier are posted and both tokens persisted', async () => {
+  const storage = new InMemoryTokenStorage();
+  let exchangeBody: string | undefined;
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = input.toString();
+
+    if (url.endsWith('/v1/auth/exchange')) {
+      exchangeBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          user: { id: 'usr-google-1', email: 'alice@gmail.test' },
+          accessToken: 'g-access',
+          refreshToken: 'g-refresh',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    return new Response(JSON.stringify({ error: { message: 'Not found' } }), { status: 404 });
+  };
+
+  try {
+    const client = new ApiClient({ storage, baseUrl: 'http://test-server.local' });
+    const res = await client.exchangeLoginCode('login-code-1', 'verifier-1');
+
+    assert.deepEqual(JSON.parse(exchangeBody ?? '{}'), {
+      code: 'login-code-1',
+      codeVerifier: 'verifier-1',
+    });
+    assert.equal(res.user.email, 'alice@gmail.test');
+    assert.equal(await storage.getAccessToken(), 'g-access');
+    assert.equal(await storage.getRefreshToken(), 'g-refresh');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Google sign-in failure surfaces in the auth store error field', async () => {
+  const authStore = createAuthStore(new ApiClient({ storage: new InMemoryTokenStorage() }));
+
+  await assert.rejects(authStore.getState().loginWithGoogle());
+
+  const state = authStore.getState();
+  assert.equal(state.isLoading, false);
+  assert.equal(state.isAuthenticated, false);
+  assert.match(state.error ?? '', /crypto/i);
+});

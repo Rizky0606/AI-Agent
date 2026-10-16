@@ -11,7 +11,9 @@ import {
 } from '@personal-ai-os/permissions';
 import {
   createWebFetchTool,
+  createWebSearchTool,
   createWorkspaceReadFileTool,
+  duckDuckGoSearch,
   SsrfGuard,
   ToolCancelledError,
   type ToolDefinition,
@@ -328,4 +330,84 @@ test('web_fetch enforces SSRF protection and blocks internal targets', async () 
       fetchTool.execute({ url: 'http://127.0.0.1:8080/internal' }, { actor: { id: 'user-1' } }),
     /SSRF Protection.*diblokir/i,
   );
+});
+
+const DDG_FIXTURE = `
+<div class="links_main links_deep result__body">
+  <h2 class="result__title">
+    <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fmicrosoft%2Fpg_durable&amp;rut=04d45c2d">GitHub - microsoft/pg_durable: PostgreSQL in-database durable execution</a>
+  </h2>
+  <div class="result__extras">
+    <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fmicrosoft%2Fpg_durable">A pg_durable function is a graph of SQL steps that PostgreSQL executes and checkpoints as it goes. If the database crashes, a step resumes from the last <b>durable</b> checkpoint.</a>
+  </div>
+</div>
+<div class="links_main links_deep result__body">
+  <h2 class="result__title">
+    <a rel="nofollow" class="result__a" href="https://example.com/direct">Direct link result</a>
+  </h2>
+  <a class="result__snippet" href="https://example.com/direct">Postgres-backed durable execution compared to external workflow orchestration systems.</a>
+</div>`;
+
+test('web_search unwraps DuckDuckGo redirects and strips markup from snippets', async () => {
+  const requests: string[] = [];
+  const results = await duckDuckGoSearch('durable execution postgres', 5, {
+    fetchImpl: async (input) => {
+      requests.push(String(input));
+      return new Response(DDG_FIXTURE, {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0], 'https://html.duckduckgo.com/html/?q=durable%20execution%20postgres');
+  assert.deepEqual(
+    results.map((r) => r.url),
+    ['https://github.com/microsoft/pg_durable', 'https://example.com/direct'],
+  );
+  assert.equal(results[0]?.title, 'GitHub - microsoft/pg_durable: PostgreSQL in-database durable execution');
+  assert.match(results[0]?.snippet ?? '', /graph of SQL steps/);
+  assert.doesNotMatch(results[0]?.snippet ?? '', /<b>/);
+});
+
+test('web_search fails loudly when the provider returns unparseable markup', async () => {
+  await assert.rejects(
+    async () =>
+      duckDuckGoSearch('anything', 5, {
+        fetchImpl: async () => new Response('<html><body>consent wall</body></html>', { status: 200 }),
+      }),
+    /tidak dapat diparsing/,
+  );
+
+  await assert.rejects(
+    async () =>
+      duckDuckGoSearch('anything', 5, {
+        fetchImpl: async () => new Response('rate limited', { status: 429 }),
+      }),
+    /HTTP 429/,
+  );
+});
+
+test('web_search honours the requested limit and reports the default provider through the registry', async () => {
+  const guard = new SecuredCapabilityGuard(new PermissionEngine());
+  const registry = new ToolRegistry(guard);
+  registry.registerTool(
+    createWebSearchTool(async (_query, limit) =>
+      Array.from({ length: 10 }, (_value, index) => ({
+        title: `hit ${index}`,
+        url: `https://example.com/${index}`,
+        snippet: `snippet ${index}`,
+      })).slice(0, limit),
+    ),
+  );
+
+  const result = await registry.executeTool({
+    toolName: 'web_search',
+    input: { query: 'anything', limit: 2 },
+    context: { actor: { id: 'user-1', role: 'user' } },
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.data?.totalHits, 2);
 });

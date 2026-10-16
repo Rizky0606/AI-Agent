@@ -45,19 +45,24 @@ export interface SchedulerProcessHandle {
 
 export const resolveDatabaseUrl = (): string => {
   const url = process.env.DATABASE_URL;
-  if (!url) {
-    const user = process.env.POSTGRES_USER ?? 'personal_ai_os';
-    const password = process.env.POSTGRES_PASSWORD ?? 'personal_ai_secret';
-    const db = process.env.POSTGRES_DB ?? 'personal_ai_os';
-    const host = process.env.POSTGRES_HOST ?? '127.0.0.1';
-    const port = process.env.POSTGRES_PORT ?? '5432';
-    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
+  if (url) return url;
+  const password = process.env.POSTGRES_PASSWORD;
+  if (!password && process.env.NODE_ENV === 'production') {
+    throw new Error('DATABASE_URL or POSTGRES_PASSWORD is required to start scheduler process.');
   }
-  return url;
+  const user = process.env.POSTGRES_USER ?? 'personal_ai_os';
+  const db = process.env.POSTGRES_DB ?? 'personal_ai_os';
+  const host = process.env.POSTGRES_HOST ?? '127.0.0.1';
+  const port = process.env.POSTGRES_PORT ?? '5432';
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password ?? 'personal_ai_secret')}@${host}:${port}/${db}`;
 };
 
 export const resolveRedisUrl = (): string => {
-  return process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+  const url = process.env.REDIS_URL;
+  if (!url && process.env.NODE_ENV === 'production') {
+    throw new Error('REDIS_URL is required to start scheduler process.');
+  }
+  return url ?? 'redis://127.0.0.1:6379';
 };
 
 export const startSchedulerProcess = async (

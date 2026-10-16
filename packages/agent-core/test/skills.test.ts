@@ -12,8 +12,12 @@ import {
   ManifestValidator,
   ON_TOPIC_GUARD_MANIFEST,
   onTopicGuardHandler,
+  PLAN_BEFORE_ACT_MANIFEST,
+  planBeforeActHandler,
   RESEARCH_QUALITY_CHECKLIST_MANIFEST,
   researchQualityChecklistHandler,
+  SECURITY_REVIEW_MANIFEST,
+  securityReviewHandler,
   SkillDisabledError,
   SkillExecutor,
   SkillIncompatibleError,
@@ -22,6 +26,8 @@ import {
   SkillPermissionViolationError,
   SkillRegistry,
   SkillValidationError,
+  VERIFY_WITH_EVIDENCE_MANIFEST,
+  verifyWithEvidenceHandler,
 } from '../src/index.ts';
 
 test('ManifestValidator: accepts valid manifest and rejects damaged manifests', () => {
@@ -38,6 +44,18 @@ test('ManifestValidator: accepts valid manifest and rejects damaged manifests', 
   assert.equal(
     validator.validate(RESEARCH_QUALITY_CHECKLIST_MANIFEST).name,
     'research-quality-checklist',
+  );
+  assert.equal(
+    validator.validate(PLAN_BEFORE_ACT_MANIFEST).name,
+    'plan-before-act',
+  );
+  assert.equal(
+    validator.validate(VERIFY_WITH_EVIDENCE_MANIFEST).name,
+    'verify-with-evidence',
+  );
+  assert.equal(
+    validator.validate(SECURITY_REVIEW_MANIFEST).name,
+    'security-review',
   );
 
   // 2. Missing name or invalid kebab-case
@@ -345,9 +363,169 @@ test('SkillLoader: successfully loads skills from disk skills/ folder', async ()
     process.env['SKILLS_DIR'] ?? fileURLToPath(new URL('../../../skills', import.meta.url));
   const loaded = await loader.loadFromDirectory(skillsDir);
 
-  assert.ok(loaded.length >= 3);
+  assert.ok(loaded.length >= 6);
   const names = loaded.map((s) => s.name);
   assert.ok(names.includes('on-topic-guard'));
   assert.ok(names.includes('coding-quality-checklist'));
   assert.ok(names.includes('research-quality-checklist'));
+  assert.ok(names.includes('plan-before-act'));
+  assert.ok(names.includes('verify-with-evidence'));
+  assert.ok(names.includes('security-review'));
+});
+
+test('planBeforeActHandler: enforces plan and acceptance criteria before action', async () => {
+  const context = { userId: 'u1' };
+
+  // 1. Missing plan and criteria rejected
+  const res1 = await planBeforeActHandler(
+    {
+      goal: 'Refactor database module',
+      proposedAction: 'run_command: rm -rf old_db',
+    },
+    context,
+  );
+  assert.equal(res1.allowed, false);
+  assert.ok(res1.missingElements.includes('steps'));
+  assert.ok(res1.missingElements.includes('acceptanceCriteria'));
+
+  // 2. Placeholder steps rejected
+  const res2 = await planBeforeActHandler(
+    {
+      goal: 'Refactor database module',
+      proposedAction: 'edit_file: db.ts',
+      plan: {
+        steps: ['todo', 'selesaikan tugas'],
+        acceptanceCriteria: ['tbd'],
+      },
+    },
+    context,
+  );
+  assert.equal(res2.allowed, false);
+  assert.ok(res2.missingElements.includes('steps'));
+
+  // 3. Valid concrete plan allowed
+  const res3 = await planBeforeActHandler(
+    {
+      goal: 'Refactor database module',
+      proposedAction: 'edit_file: db.ts',
+      plan: {
+        steps: ['Buat interface baru', 'Migrasi pemanggil lama', 'Jalankan unit test'],
+        acceptanceCriteria: ['Typecheck lulus tanpa error', 'Semua tes repositori lulus'],
+      },
+    },
+    context,
+  );
+  assert.equal(res3.allowed, true);
+  assert.equal(res3.missingElements.length, 0);
+  assert.equal(res3.validatedPlan?.steps.length, 3);
+});
+
+test('verifyWithEvidenceHandler: rejects completion claims without concrete evidence', async () => {
+  const context = { userId: 'u1' };
+
+  // 1. Claiming completed with empty/undefined evidence rejected
+  const res1 = await verifyWithEvidenceHandler(
+    {
+      taskGoal: 'Implement feature X',
+      claimedStatus: 'completed',
+      summary: 'Sudah selesai semua.',
+    },
+    context,
+  );
+  assert.equal(res1.verified, false);
+  assert.equal(res1.confidenceScore, 0);
+  assert.ok(res1.missingEvidence.length > 0);
+
+  // 2. Claiming completed with failing exit code or failed tests rejected
+  const res2 = await verifyWithEvidenceHandler(
+    {
+      taskGoal: 'Implement feature X',
+      claimedStatus: 'done',
+      summary: 'Selesai tapi ada exit code error.',
+      evidence: {
+        exitCode: 1,
+        testResults: 'Tests failed: 2 broken',
+      },
+    },
+    context,
+  );
+  assert.equal(res2.verified, false);
+
+  // 3. Valid concrete evidence verified
+  const res3 = await verifyWithEvidenceHandler(
+    {
+      taskGoal: 'Implement feature X',
+      claimedStatus: 'completed',
+      summary: 'Semua tes lulus dan artefak dibuat.',
+      evidence: {
+        exitCode: 0,
+        testResults: 'Pass 14 suites, 0 fail',
+        artifactPaths: ['data/artifacts/summary.pdf'],
+        stdout: 'Build completed successfully in 3.2s with zero warnings.',
+      },
+    },
+    context,
+  );
+  assert.equal(res3.verified, true);
+  assert.ok(res3.confidenceScore >= 50);
+  assert.ok(res3.concreteEvidenceSummary.length >= 3);
+
+  // 4. In-progress status does not require completion evidence
+  const res4 = await verifyWithEvidenceHandler(
+    {
+      taskGoal: 'Implement feature X',
+      claimedStatus: 'in_progress',
+      summary: 'Sedang berjalan.',
+    },
+    context,
+  );
+  assert.equal(res4.verified, true);
+});
+
+test('securityReviewHandler: detects leaked secrets, injection patterns, and excessive permissions', async () => {
+  const context = { userId: 'u1' };
+
+  // 1. Leaked secret (OpenAI key, private key, db URL) rejected
+  const res1 = await securityReviewHandler(
+    {
+      contentOrDiff: `const apiKey = "sk-abcdef12345678901234567890";
+      const db = "postgres://admin:supersecret@db.internal/prod";`,
+    },
+    context,
+  );
+  assert.equal(res1.approved, false);
+  assert.ok(res1.criticalIssuesCount >= 2);
+  assert.ok(res1.findings.some((f) => f.category === 'secret_leak'));
+
+  // 2. Dangerous command injection / path traversal rejected
+  const res2 = await securityReviewHandler(
+    {
+      contentOrDiff: `run_shell("tar -czf out.tar ; rm -rf /"); const p = "../../etc/passwd";`,
+    },
+    context,
+  );
+  assert.equal(res2.approved, false);
+  assert.ok(res2.findings.some((f) => f.category === 'injection'));
+
+  // 3. Excessive wildcard permissions flagged
+  const res3 = await securityReviewHandler(
+    {
+      contentOrDiff: `export const config = { timeout: 1000 };`,
+      requestedPermissions: ['*', 'system:admin:*'],
+    },
+    context,
+  );
+  assert.ok(res3.findings.some((f) => f.category === 'excessive_permission'));
+
+  // 4. Clean and safe code approved
+  const res4 = await securityReviewHandler(
+    {
+      contentOrDiff: `export function add(a: number, b: number): number { return a + b; }`,
+      requestedPermissions: ['workspace:read'],
+    },
+    context,
+  );
+  assert.equal(res4.approved, true);
+  assert.equal(res4.criticalIssuesCount, 0);
+  assert.equal(res4.findings.length, 0);
 });

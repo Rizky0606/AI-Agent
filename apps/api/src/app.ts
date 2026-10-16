@@ -1,15 +1,19 @@
-import { randomUUID } from 'node:crypto';
+import type { ToolRegistry } from '@personal-ai-os/tools';
+import { randomBytes, randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
-import { AuthError, type AuthService, type AuthUser } from './auth/service.ts';
+import { AuthError, pkceChallenge, type AuthService, type AuthUser } from './auth/service.ts';
+import type { GoogleOAuthClient } from './auth/google.ts';
 import type { ChatRepository } from './db/chat-repository.ts';
+import type { ModelConfigRepository } from './db/model-config-repository.ts';
 import type { ProjectRepository } from './db/project-repository.ts';
 import type { TaskRepository } from './db/task-repository.ts';
+import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import type { TaskEventBroadcaster } from './services/event-broadcaster.ts';
-import type { ModelRouter } from './services/model-router.ts';
 import type { TaskQueue } from './services/task-queue.ts';
-import { defaultTracer, IllegalTaskStateTransitionError } from '@personal-ai-os/shared';
+import type { ModelRouter } from './services/model-router.ts';
+import { defaultTracer, IllegalTaskStateTransitionError, type TelemetrySpan } from '@personal-ai-os/shared';
 import { registerChatRoutes } from './routes/chat.ts';
 import { registerProjectRoutes } from './routes/projects.ts';
 import type { ApprovalRepository } from './db/approval-repository.ts';
@@ -19,19 +23,31 @@ import { registerEventsWsRoute } from './routes/events-ws.ts';
 import { registerApprovalRoutes } from './routes/approvals.ts';
 import type { DeviceConnectionManager } from './services/device-connection-manager.ts';
 import { registerAgentWsRoute } from './routes/agent-ws.ts';
+import { registerDeviceCommandRoutes } from './routes/device-commands.ts';
 import type { MemoryRepository } from './db/memory-repository.ts';
 import { registerMemoryRoutes } from './routes/memory.ts';
 import type { ArtifactManager } from '@personal-ai-os/tools';
 import { registerArtifactRoutes } from './routes/artifacts.ts';
 import type { SkillRepository } from './db/skill-repository.ts';
 import { registerSkillRoutes } from './routes/skills.ts';
+import type { McpRepository } from './db/mcp-repository.ts';
+import { registerMcpRoutes } from './routes/mcp.ts';
 import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
 import { registerSchedulesRoutes } from './routes/schedules.ts';
-
+import { registerModelRoutes } from './routes/models.ts';
+import { registerRuntimeRoutes } from './routes/runtimes.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
   deviceManager?: DeviceConnectionManager | undefined;
+  /**
+   * Shared service token for `/v1/internal/*`. The worker dispatches device commands through
+   * those routes because the device sockets only exist in this process. Unset means the routes
+   * are not mounted at all, so dispatch fails closed instead of running unauthenticated.
+   */
+  internalBridgeToken?: string | undefined;
+  /** Overrides how long a device dispatch waits for the agent to (re)connect. */
+  deviceReconnectGraceMs?: number | undefined;
   listDevices?:
     | ((userId: string) => Promise<
         Array<{
@@ -43,15 +59,35 @@ export type AppDependencies = {
         }>
       >)
     | undefined;
-  updateDeviceLastSeen?: ((deviceId: string) => Promise<void>) | undefined;
+  /**
+   * Resolves the row a verified device key belongs to, creating it on first contact. The agent
+   * never picks its own id: the handshake verifies a signature and the server answers with
+   * `devices.id`.
+   */
+  registerAgent?:
+    | ((
+        userId: string,
+        input: { name: string; platform: string; publicKey: string },
+      ) => Promise<{ id: string; name: string; platform: string }>)
+    | undefined;
   registerDevice?: (
     userId: string,
     input: { name: string; platform: string },
   ) => Promise<{ id: string; name: string; platform: string }> | undefined;
+
+  /**
+   * Stores the FCM registration token for one of the caller's devices. Scoped by `userId`, so a
+   * token cannot be attached to a device the caller does not own.
+   */
+  setDevicePushToken?:
+    | ((userId: string, deviceId: string, pushToken: string) => Promise<boolean>)
+    | undefined;
   chat?:
     | {
         chatRepo: ChatRepository;
         router: ModelRouter;
+        modelConfigs: ModelConfigRepository;
+        gateway: ModelGateway;
       }
     | undefined;
   project?:
@@ -63,6 +99,7 @@ export type AppDependencies = {
   task?:
     | {
         projectRepo: ProjectRepository;
+        chatRepo: ChatRepository;
         taskRepo: TaskRepository;
         taskQueue: TaskQueue;
         broadcaster: TaskEventBroadcaster;
@@ -87,12 +124,14 @@ export type AppDependencies = {
         artifactManager: ArtifactManager;
       }
     | undefined;
-  skills?:
-    | {
-        skillRepo: SkillRepository;
-        skillsDir?: string | undefined;
-      }
-    | undefined;
+  skills?: {
+    skillRepo: SkillRepository;
+    skillsDir?: string | undefined;
+    toolRegistry?: ToolRegistry | undefined;
+  } | undefined;
+  mcp?: {
+    mcpRepo: McpRepository;
+  } | undefined;
   schedules?:
     | {
         schedulerEngine?: SchedulerEngine | undefined;
@@ -100,6 +139,25 @@ export type AppDependencies = {
         notificationEngine?: NotificationEngine | undefined;
       }
     | undefined;
+  models?: {
+    auth?: AuthService | undefined;
+    modelConfigs: ModelConfigRepository;
+    gateway: ModelGateway;
+    providerBaseUrl: string;
+    audit?: AuditRepository | undefined;
+  } | undefined;
+  /**
+   * Google sign-in. Unset leaves `/v1/auth/google/*` mounted but answering 503, so a deployment
+   * without credentials fails closed instead of half-working.
+   */
+  google?:
+    | {
+        client: GoogleOAuthClient;
+        /** Exact `redirect_uri` values the callback may hand a login code back to. */
+        allowedRedirectUris: string[];
+      }
+    | undefined;
+  runtimeBridgeUrl?: string | undefined;
 };
 
 const requestId = (request: { headers: Record<string, string | string[] | undefined> }): string => {
@@ -114,6 +172,19 @@ const bearer = (request: FastifyRequest): string => {
     throw new AuthError('UNAUTHENTICATED', 'authentication required');
   return value.slice(7);
 };
+
+/**
+ * Origins allowed to call the API from a browser context: the Tauri webview
+ * origins of the Windows agent plus the local dev server. Native clients
+ * (Android, tests) send no Origin header and are unaffected.
+ */
+const CORS_ALLOWED_ORIGINS = (
+  process.env.CORS_ALLOWED_ORIGINS ??
+  'tauri://localhost,http://tauri.localhost,https://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420'
+)
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 const userFromRequest = async (request: FastifyRequest, auth: AuthService): Promise<AuthUser> =>
   auth.authenticate(bearer(request));
@@ -144,8 +215,72 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
   await app.register(rateLimit, { max: 100, timeWindow: '1 minute', allowList: ['127.0.0.1'] });
   await app.register(websocket);
   app.addHook('onRequest', async (request, reply) => {
+    // Security headers (HSTS, nosniff, DENY, referrer-policy, permissions-policy)
+    reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+
+    // W3C Traceparent extraction and propagation
+    const traceparentHeader =
+      typeof request.headers['traceparent'] === 'string' ? request.headers['traceparent'] : undefined;
+    const parsedTrace = defaultTracer.parseTraceparent(traceparentHeader);
+    const traceId =
+      parsedTrace?.traceId ??
+      (typeof request.headers['x-trace-id'] === 'string'
+        ? request.headers['x-trace-id']
+        : defaultTracer.generateTraceId());
+    const parentSpanId = parsedTrace?.parentSpanId;
+    const isSampled = defaultTracer.shouldSample(traceId);
+
+    const routePattern = (request as unknown as { routeOptions?: { url?: string } }).routeOptions?.url ?? request.url;
+    const span = defaultTracer.startSpan(
+      `${request.method} ${routePattern}`,
+      'http_request',
+      {
+        traceId,
+        parentSpanId,
+        attributes: {
+          'http.method': request.method,
+          'http.url': request.url,
+          'http.route': routePattern,
+        },
+      },
+    );
+    (request as unknown as { telemetrySpan: TelemetrySpan }).telemetrySpan = span;
+
+    const outgoingTraceparent = defaultTracer.createTraceparent(traceId, span.spanId, isSampled);
     reply.header('x-request-id', request.id);
-    reply.header('x-trace-id', request.id);
+    reply.header('x-trace-id', traceId);
+    reply.header('traceparent', outgoingTraceparent);
+
+    const origin = request.headers.origin;
+    if (!origin || !CORS_ALLOWED_ORIGINS.includes(origin)) return;
+
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Vary', 'Origin');
+    if (request.method === 'OPTIONS') {
+      reply
+        .header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
+        .header('Access-Control-Allow-Headers', 'authorization,content-type')
+        .header('Access-Control-Max-Age', '600')
+        .code(204)
+        .send();
+    }
+  });
+
+  app.addHook('onResponse', async (request, reply) => {
+    const span = (request as unknown as { telemetrySpan?: TelemetrySpan }).telemetrySpan;
+    if (span) {
+      const isError = reply.statusCode >= 400;
+      defaultTracer.endSpan(span, {
+        status: isError ? 'error' : 'ok',
+        attributes: {
+          'http.status_code': reply.statusCode,
+        },
+      });
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {
@@ -266,6 +401,105 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       return reply.code(204).send();
     },
   );
+  /**
+   * Google sign-in, Authorization Code + PKCE. The browser only ever sees one-time, verifier-bound
+   * codes: the `state` is signed by us, the Google leg is PKCE-protected with a verifier this
+   * process never discloses, and the value handed back to the client expires in a minute and is
+   * useless without the client's own verifier.
+   */
+  const google = dependencies.google;
+  const googleRedirectAllowed = (candidate: string): boolean =>
+    google !== undefined &&
+    (google.allowedRedirectUris.includes(candidate) ||
+      /^http:\/\/127\.0\.0\.1:\d{1,5}\/auth$/.test(candidate));
+  app.get(
+    '/v1/auth/google/start',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['redirect_uri', 'code_challenge', 'state'],
+          properties: {
+            redirect_uri: { type: 'string', minLength: 1, maxLength: 512 },
+            code_challenge: { type: 'string', minLength: 43, maxLength: 128 },
+            state: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        },
+      },
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    },
+    async (request, reply) => {
+      if (!google) return reply.code(503).send({ error: { code: 'NOT_CONFIGURED', message: 'Google sign-in is not configured', requestId: request.id } });
+      const query = request.query as { redirect_uri: string; code_challenge: string; state: string };
+      if (!googleRedirectAllowed(query.redirect_uri))
+        return reply.code(400).send({ error: { code: 'INVALID_REDIRECT_URI', message: 'redirect_uri is not allowed', requestId: request.id } });
+      const providerVerifier = randomBytes(32).toString('base64url');
+      const state = await dependencies.auth.createOAuthState({
+        redirectUri: query.redirect_uri,
+        clientState: query.state,
+        codeChallenge: query.code_challenge,
+        providerVerifier,
+      });
+      return reply.redirect(google.client.authorizationUrl(state, pkceChallenge(providerVerifier)));
+    },
+  );
+  app.get(
+    '/v1/auth/google/callback',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'state'],
+          properties: {
+            code: { type: 'string', minLength: 1, maxLength: 2048 },
+            state: { type: 'string', minLength: 1, maxLength: 4096 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!google) return reply.code(503).send({ error: { code: 'NOT_CONFIGURED', message: 'Google sign-in is not configured', requestId: request.id } });
+      const query = request.query as { code: string; state: string };
+      const pending = await dependencies.auth.readOAuthState(query.state);
+      // Re-checked here as well: the state is signed, but a stale allowlist change must not be
+      // bypassed by a state minted before it.
+      if (!googleRedirectAllowed(pending.redirectUri))
+        return reply.code(400).send({ error: { code: 'INVALID_REDIRECT_URI', message: 'redirect_uri is not allowed', requestId: request.id } });
+      const identity = await google.client.exchangeCode(query.code, pending.providerVerifier);
+      const { user } = await dependencies.auth.loginWithProvider(
+        'google',
+        identity.subject,
+        identity.email,
+      );
+      const target = new URL(pending.redirectUri);
+      target.searchParams.set('code', await dependencies.auth.createLoginCode(user.id, pending.codeChallenge));
+      target.searchParams.set('state', pending.clientState);
+      return reply.redirect(target.toString());
+    },
+  );
+  app.post(
+    '/v1/auth/exchange',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'codeVerifier'],
+          properties: {
+            code: { type: 'string', minLength: 1, maxLength: 4096 },
+            codeVerifier: { type: 'string', minLength: 43, maxLength: 128 },
+          },
+        },
+      },
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    },
+    async (request, reply) => {
+      const body = request.body as { code: string; codeVerifier: string };
+      return reply.send(await dependencies.auth.exchangeLoginCode(body.code, body.codeVerifier));
+    },
+  );
   app.get('/v1/me', async (request, reply) => {
     const user = await userFromRequest(request, dependencies.auth);
     return reply.send({ user: { id: user.id, email: user.email } });
@@ -323,23 +557,67 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
 
   app.get('/v1/devices', async (request, reply) => {
     const user = await userFromRequest(request, dependencies.auth);
-    if (!dependencies.listDevices) {
-      const onlineDevices = dependencies.deviceManager?.getOnlineDevices(user.id) ?? [];
-      return reply.send({ devices: onlineDevices });
-    }
-    const dbDevices = await dependencies.listDevices(user.id);
-    const enriched = dbDevices.map((d) => ({
-      ...d,
-      isOnline: dependencies.deviceManager?.isDeviceOnline(d.id) ?? false,
-    }));
-    return reply.send({ devices: enriched });
+    // Presence comes from the live sockets; the shape comes from the registered rows, so every
+    // entry carries the same fields whether the device is connected or not.
+    const online = new Set(dependencies.deviceManager?.listOnlineDeviceIds(user.id) ?? []);
+    const registered = (await dependencies.listDevices?.(user.id)) ?? [];
+    return reply.send({
+      devices: registered.map((device) => ({ ...device, isOnline: online.has(device.id) })),
+    });
   });
+
+  // Push token registration for FCM delivery. Scoped to the caller's own device row.
+  app.post(
+    '/v1/devices/:deviceId/push-token',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['pushToken'],
+          properties: { pushToken: { type: 'string', minLength: 1, maxLength: 4096 } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: { deviceId: string } }>, reply) => {
+      const user = await userFromRequest(request, dependencies.auth);
+      if (!dependencies.setDevicePushToken)
+        return reply.code(503).send({
+          error: {
+            code: 'NOT_CONFIGURED',
+            message: 'push token registration unavailable',
+            requestId: request.id,
+          },
+        });
+      const { pushToken } = request.body as { pushToken: string };
+      const stored = await dependencies.setDevicePushToken(user.id, request.params.deviceId, pushToken);
+      if (!stored) {
+        return reply
+          .code(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Perangkat tidak ditemukan' } });
+      }
+      return reply.code(204).send();
+    },
+  );
 
   if (dependencies.deviceManager) {
     registerAgentWsRoute(app, {
       auth: dependencies.auth,
       deviceManager: dependencies.deviceManager,
-      updateDeviceLastSeen: dependencies.updateDeviceLastSeen,
+      registerAgent: dependencies.registerAgent,
+    });
+    if (dependencies.internalBridgeToken) {
+      registerDeviceCommandRoutes(app, {
+        deviceManager: dependencies.deviceManager,
+        token: dependencies.internalBridgeToken,
+        reconnectGraceMs: dependencies.deviceReconnectGraceMs,
+      });
+    }
+  }
+  if (dependencies.models) {
+    registerModelRoutes(app, {
+      ...dependencies.models,
+      auth: dependencies.auth,
+      audit: dependencies.models.audit ?? dependencies.approval?.auditRepo,
     });
   }
 
@@ -348,6 +626,9 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       auth: dependencies.auth,
       chatRepo: dependencies.chat.chatRepo,
       router: dependencies.chat.router,
+      modelConfigs: dependencies.chat.modelConfigs,
+      gateway: dependencies.chat.gateway,
+      memoryRepo: dependencies.memory?.memoryRepo,
     });
   }
 
@@ -356,6 +637,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       auth: dependencies.auth,
       projectRepo: dependencies.project.projectRepo,
       chatRepo: dependencies.project.chatRepo,
+      audit: dependencies.approval?.auditRepo,
     });
   }
 
@@ -363,6 +645,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     registerTaskRoutes(app, {
       auth: dependencies.auth,
       projectRepo: dependencies.task.projectRepo,
+      chatRepo: dependencies.task.chatRepo,
       taskRepo: dependencies.task.taskRepo,
       taskQueue: dependencies.task.taskQueue,
       broadcaster: dependencies.task.broadcaster,
@@ -403,7 +686,18 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     registerSkillRoutes(app, {
       skillRepo: dependencies.skills.skillRepo,
       auth: dependencies.auth,
+      auditRepo: dependencies.approval?.auditRepo,
       skillsDir: dependencies.skills.skillsDir,
+      toolRegistry: dependencies.skills.toolRegistry,
+    });
+  }
+
+  if (dependencies.mcp) {
+    registerMcpRoutes(app, {
+      mcpRepo: dependencies.mcp.mcpRepo,
+      auth: dependencies.auth,
+      auditRepo: dependencies.approval?.auditRepo,
+      approvalRepo: dependencies.approval?.approvalRepo,
     });
   }
 
@@ -415,6 +709,12 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       notificationEngine: dependencies.schedules.notificationEngine ?? new NotificationEngine(),
     });
   }
+
+  registerRuntimeRoutes(app, {
+    auth: dependencies.auth,
+    runtimeBridgeUrl: dependencies.runtimeBridgeUrl ?? process.env.RUNTIME_BRIDGE_URL,
+    runtimeBridgeToken: dependencies.internalBridgeToken ?? process.env.RUNTIME_BRIDGE_TOKEN,
+  });
 
   return app;
 };

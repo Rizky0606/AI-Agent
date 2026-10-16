@@ -72,3 +72,38 @@ No public bind. Compose egress inspection verified `172.20.0.0/16`, gateway `172
 7. Verify worker routing/fallback events and evaluator result.
 
 Workspace manager initializes a project Git repository and checks out `task/<taskId>`. It never pushes, merges, or deploys. Runtime output remains untrusted; proposed actions pass Permission Engine. HIGH/CRITICAL actions remain approval-gated.
+
+## Sesi 13 — Kebijakan Routing, Runtime Picker, dan Integrasi Hermes
+
+### 1. Kebijakan Routing Runtime
+- **Otomatis Berbasis Niat (Auto)**:
+  - `coding` / manipulasi repo → diarahkan ke runtime `omp`.
+  - `automation` / skill Hermes / alur kerja cron / bot → diarahkan ke runtime `hermes`.
+  - Percakapan cepat, riset umum, dan tugas standar tanpa dependensi eksternal → diarahkan ke runtime `native` (Bawaan worker).
+- **Pengabaian Pengguna (User Override)**:
+  - Pengguna dapat memilih secara manual lewat chip Runtime di antarmuka composer (Windows & Android):
+    - `Auto (Direkomendasikan)`
+    - `omp (Coding / Repo)`
+    - `Hermes (Otomasi & Skill)`
+    - `Bawaan (Native)`
+  - Pilihan runtime diteruskan ke payload pembuatan task (`payload.runtime`).
+
+### 2. Mekanisme Pengalihan Eksplisit (Explicit Fallback)
+- Sebelum eksekusi, runtime utama diverifikasi kesehatannya (`routeWithHealth` / `healthCheckAll`).
+- Jika runtime utama tidak sehat (misal OMP down/offline), sistem **tidak diam-diam** gagal, melainkan mengalihkan eksekusi ke runtime alternatif yang sehat (`hermes` atau `native`).
+- Catatan pengalihan dicatat di metadata task (`runtimeFallback: true`, `originalRuntimeId`, `fallbackReason`) dan memancarkan event `task.progress` dengan payload `action: 'runtime_fallback'`.
+- Di antarmuka pengguna (Windows TaskCard dan Android TaskDetailScreen), banner peringatan pengalihan runtime ditampilkan secara visual dengan bahasa awam.
+
+### 3. Integrasi Skill Hermes & Sanitasi Output
+- Skill Hermes dipaparkan secara **read-only** di endpoint `/v1/skills` dan `/v1/runtimes/hermes/skills`.
+- Endpoint `enable`/`disable` menolak modifikasi skill Hermes dengan HTTP 403 Forbidden.
+- Semua output yang dihasilkan Hermes diperlakukan sebagai data tidak tepercaya dan disanitasi:
+  dibungkus dalam format `<untrusted_content is_instruction="false">...</untrusted_content>`.
+
+### 4. Batas Keamanan Telegram & Persetujuan
+- Sistem tidak membuat bot Telegram kedua (memanfaatkan instance Hermes yang sudah terhubung).
+- Notifikasi sistem menyertakan tautan dalam (deep link) ke aplikasi:
+  - `personal-ai://tasks/:taskId`
+  - `personal-ai://approvals/:approvalId`
+- Tindakan berisiko `HIGH` dan `CRITICAL` **wajib** melalui otentikasi sesi aplikasi dengan JWT token dan dialog konfirmasi sekunder. Tindakan tidak dapat disetujui hanya melalui pesan teks Telegram tanpa otentikasi.
+

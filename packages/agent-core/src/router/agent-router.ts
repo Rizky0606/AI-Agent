@@ -27,6 +27,9 @@ export class AgentRouter {
   route(prompt: string, context: RouterContext): RouteResolution {
     const analysis = this.analyzer.analyze(prompt);
     const plan = this.planner.createPlan(analysis, prompt);
+    const mode = context.mode ?? 'auto';
+    const intent =
+      mode === 'fast' ? 'simple_chat' : mode === 'coding' ? 'coding' : mode === 'research' ? 'research' : analysis.intent;
 
     let modelId = 'glm-4-flash';
     let requiresWindowsAgent = false;
@@ -35,7 +38,7 @@ export class AgentRouter {
     let reason = analysis.reasoning;
     let selectedRuntimeId: string | undefined = undefined;
 
-    switch (analysis.intent) {
+    switch (intent) {
       case 'simple_chat':
         modelId = context.modelPreferences?.fastModel ?? 'glm-4-flash';
         maxAttempts = 1;
@@ -44,7 +47,11 @@ export class AgentRouter {
       case 'coding':
         modelId = context.modelPreferences?.codingModel ?? 'claude-3-7-sonnet';
         maxAttempts = 3;
-        selectedRuntimeId = context.preferredRuntimeId ?? 'omp';
+        break;
+
+      case 'automation':
+        modelId = context.modelPreferences?.fastModel ?? 'glm-4-flash';
+        maxAttempts = 3;
         break;
 
       case 'research':
@@ -69,8 +76,24 @@ export class AgentRouter {
         break;
     }
 
+    // Policy-based runtime selection with manual override support
+    const preferred = context.preferredRuntimeId;
+    if (preferred === 'omp' || preferred === 'hermes' || preferred === 'native') {
+      selectedRuntimeId = preferred;
+    } else {
+      // Auto: coding -> omp; automation/skill -> hermes; chat/research -> native
+      if (intent === 'coding') {
+        selectedRuntimeId = 'omp';
+      } else if (intent === 'automation') {
+        selectedRuntimeId = 'hermes';
+      } else {
+        selectedRuntimeId = 'native';
+      }
+    }
+
     const route: AgentRoute = {
-      intent: analysis.intent,
+      intent,
+      mode,
       runtime: analysis.recommendedRuntime,
       modelId,
       requiresWindowsAgent,
@@ -89,51 +112,49 @@ export class AgentRouter {
 
   /**
    * Evaluates runtime health via RuntimeManager and automatically applies
-   * fallback if the primary runtime is unhealthy.
+   * explicit fallback if the primary runtime is unhealthy.
    */
   async routeWithHealth(prompt: string, context: RouterContext): Promise<RouteResolution> {
     const resolution = this.route(prompt, context);
-    const { route, analysis } = resolution;
+    const { route } = resolution;
 
-    if (!this.runtimeManager || analysis.intent !== 'coding') {
+    if (!this.runtimeManager || !route.selectedRuntimeId || route.selectedRuntimeId === 'native') {
       return resolution;
     }
 
-    const primaryRuntimeId = context.preferredRuntimeId ?? 'omp';
+    const primaryRuntimeId = route.selectedRuntimeId;
     const primaryHealth = await this.runtimeManager.healthCheck(primaryRuntimeId);
 
     if (primaryHealth.healthy) {
-      route.selectedRuntimeId = primaryRuntimeId;
       return resolution;
     }
 
-    // Primary runtime is unhealthy! Look for a fallback with capability 'coding'
-    const availableCodingRuntimes = this.runtimeManager
-      .findRuntimesForCapability('coding')
-      .filter((r) => r.id !== primaryRuntimeId);
+    // Primary runtime is unhealthy! Look for an explicit fallback runtime
+    const preferredCandidateId = primaryRuntimeId === 'omp' ? 'hermes' : 'omp';
+    const allRuntimes = this.runtimeManager.getAllRuntimes();
+    const candidateIds = [
+      preferredCandidateId,
+      ...allRuntimes.map((r) => r.id).filter((id) => id !== primaryRuntimeId && id !== preferredCandidateId),
+    ];
 
-    let chosenFallbackId: string | undefined = undefined;
+    let chosenFallbackId = 'native';
 
-    for (const candidate of availableCodingRuntimes) {
-      const candidateHealth = await this.runtimeManager.healthCheck(candidate.id);
-      if (candidateHealth.healthy) {
-        chosenFallbackId = candidate.id;
-        break;
+    for (const candId of candidateIds) {
+      const candidateRuntime = this.runtimeManager.getRuntime(candId);
+      if (candidateRuntime) {
+        const candidateHealth = await this.runtimeManager.healthCheck(candId);
+        if (candidateHealth.healthy) {
+          chosenFallbackId = candId;
+          break;
+        }
       }
     }
 
     route.originalRuntimeId = primaryRuntimeId;
     route.fallbackUsed = true;
-
-    if (chosenFallbackId) {
-      route.selectedRuntimeId = chosenFallbackId;
-      route.fallbackReason = `Primary runtime "${primaryRuntimeId}" is unhealthy (${primaryHealth.error ?? 'check failed'}). Fallback to "${chosenFallbackId}".`;
-      route.reason = `${route.reason} [FALLBACK: ${route.fallbackReason}]`;
-    } else {
-      route.selectedRuntimeId = undefined;
-      route.fallbackReason = `Primary runtime "${primaryRuntimeId}" and all fallback runtimes are unhealthy.`;
-      route.reason = `${route.reason} [WARNING: Tidak ada runtime sehat yang tersedia untuk capability coding.]`;
-    }
+    route.selectedRuntimeId = chosenFallbackId;
+    route.fallbackReason = `Runtime utama "${primaryRuntimeId}" tidak sehat (${primaryHealth.error ?? 'pemeriksaan gagal'}). Dialihkan secara eksplisit ke "${chosenFallbackId}". (Fallback to "${chosenFallbackId}")`;
+    route.reason = `${route.reason} [FALLBACK: ${route.fallbackReason}]`;
 
     return resolution;
   }

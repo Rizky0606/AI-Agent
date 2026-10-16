@@ -167,3 +167,18 @@ test('BrowserController enforces concurrency limit (ARM64 friendly)', async () =
   await controller.closeSession('session-c2');
   await controller.closeSession('session-c3');
 });
+
+test('BrowserController close releases every session and the runner', async () => {
+  const runner = new MockPlaywrightRunner();
+  const controller = new BrowserController({ runner, maxConcurrency: 2, dnsResolver: fakeDnsResolver });
+
+  await controller.createSession({ sessionId: 'session-shutdown-1', actorId: 'alice' });
+  await controller.createSession({ sessionId: 'session-shutdown-2', actorId: 'bob' });
+  assert.equal(controller.getActiveSessionsCount(), 2);
+
+  await controller.close();
+  assert.equal(controller.getActiveSessionsCount(), 0);
+
+  // Shutdown is terminal: the runner is gone, so no new context can be created.
+  await assert.rejects(async () => controller.createSession({ sessionId: 'session-after', actorId: 'alice' }));
+});

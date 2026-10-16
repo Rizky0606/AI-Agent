@@ -1,9 +1,11 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -21,10 +23,30 @@ export const users = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     email: varchar('email', { length: 320 }).notNull(),
-    passwordHash: text('password_hash').notNull(),
+    // Null for accounts that only ever signed in through a provider.
+    passwordHash: text('password_hash'),
+    defaultModel: varchar('default_model', { length: 200 }),
+    defaultMode: varchar('default_mode', { length: 16 }).default('auto'),
     ...created,
   },
   (table) => [uniqueIndex('users_email_uq').on(table.email)],
+);
+
+export const userIdentities = pgTable(
+  'user_identities',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    provider: varchar('provider', { length: 32 }).notNull(),
+    subject: varchar('subject', { length: 255 }).notNull(),
+    email: varchar('email', { length: 320 }).notNull(),
+    ...created,
+  },
+  (table) => [
+    primaryKey({ columns: [table.provider, table.subject] }),
+    index('user_identities_user_id_idx').on(table.userId),
+  ],
 );
 
 export const devices = pgTable(
@@ -37,12 +59,20 @@ export const devices = pgTable(
     name: varchar('name', { length: 120 }).notNull(),
     platform: varchar('platform', { length: 32 }).notNull(),
     publicKey: text('public_key'),
+    pushToken: text('push_token'),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     ...created,
   },
   (table) => [
     index('devices_user_idx').on(table.userId),
-    uniqueIndex('devices_user_name_uq').on(table.userId, table.name),
+    // Identity is the key, not the name: two machines may share a hostname, and one key must not
+    // claim devices under two accounts.
+    uniqueIndex('devices_public_key_uq')
+      .on(table.publicKey)
+      .where(sql`public_key IS NOT NULL`),
+    uniqueIndex('devices_push_token_uq')
+      .on(table.pushToken)
+      .where(sql`push_token IS NOT NULL`),
   ],
 );
 
@@ -93,9 +123,19 @@ export const conversations = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
     title: varchar('title', { length: 200 }),
+    mode: varchar('mode', { length: 16 }).default('auto').notNull(),
+    model: varchar('model', { length: 200 }),
+    workspaceId: text('workspace_id'),
+    parentConversationId: uuid('parent_conversation_id'),
+    compactedSummary: text('compacted_summary'),
+    lastEventId: text('last_event_id'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...created,
   },
-  (table) => [index('conversations_scope_idx').on(table.userId, table.projectId)],
+  (table) => [
+    index('conversations_scope_idx').on(table.userId, table.projectId),
+    index('conversations_parent_idx').on(table.parentConversationId),
+  ],
 );
 
 export const messages = pgTable(
@@ -133,6 +173,7 @@ export const tasks = pgTable(
     kind: varchar('kind', { length: 80 }).notNull(),
     payload: jsonb('payload').notNull(),
     idempotencyKey: varchar('idempotency_key', { length: 128 }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
     leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
     progress: integer('progress').default(0).notNull(),
     attempt: integer('attempt').default(0).notNull(),
@@ -148,6 +189,7 @@ export const tasks = pgTable(
   },
   (table) => [
     index('tasks_scope_status_idx').on(table.userId, table.projectId, table.status),
+    index('tasks_conversation_idx').on(table.userId, table.conversationId),
     uniqueIndex('tasks_user_idempotency_uq').on(table.userId, table.idempotencyKey),
     uniqueIndex('tasks_scope_uq').on(table.id, table.userId),
   ],
@@ -191,14 +233,35 @@ export const modelConfigs = pgTable(
       .references(() => modelProviders.id, { onDelete: 'cascade' }),
     model: varchar('model', { length: 200 }).notNull(),
     capabilities: jsonb('capabilities').notNull(),
+    capabilityDetails: jsonb('capability_details'),
     contextWindow: integer('context_window'),
     costMetadata: jsonb('cost_metadata'),
     enabled: boolean('enabled').default(true).notNull(),
+    isRecommended: boolean('is_recommended').default(false).notNull(),
+    isDefault: boolean('is_default').default(false).notNull(),
+    availabilityStatus: varchar('availability_status', { length: 32 }).default('available').notNull(),
+    lastLatencyMs: integer('last_latency_ms'),
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
     ...created,
   },
   (table) => [
     uniqueIndex('model_configs_provider_model_uq').on(table.providerId, table.model),
     index('model_configs_enabled_idx').on(table.enabled),
+  ],
+);
+
+export const modelRoutingPolicies = pgTable(
+  'model_routing_policies',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    mode: varchar('mode', { length: 32 }).notNull(),
+    modelName: varchar('model_name', { length: 200 }),
+    ...created,
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('model_routing_policies_mode_uq').on(table.mode),
+    index('model_routing_policies_mode_idx').on(table.mode),
   ],
 );
 
@@ -210,7 +273,7 @@ export const auditLogs = pgTable(
     projectId: uuid('project_id').references(() => projects.id, { onDelete: 'set null' }),
     action: varchar('action', { length: 120 }).notNull(),
     resourceType: varchar('resource_type', { length: 80 }).notNull(),
-    resourceId: uuid('resource_id'),
+    resourceId: varchar('resource_id', { length: 512 }),
     decision: varchar('decision', { length: 32 }),
     traceId: varchar('trace_id', { length: 128 }),
     metadata: jsonb('metadata'),
@@ -280,38 +343,6 @@ export const memories = pgTable(
   ],
 );
 
-export const artifacts = pgTable(
-  'artifacts',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    ownerId: uuid('owner_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
-    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
-    conversationId: uuid('conversation_id').references(() => conversations.id, {
-      onDelete: 'set null',
-    }),
-    filename: varchar('filename', { length: 255 }).notNull(),
-    mimeType: varchar('mime_type', { length: 128 }).notNull(),
-    size: integer('size').notNull(),
-    checksum: varchar('checksum', { length: 64 }).notNull(),
-    version: integer('version').default(1).notNull(),
-    storageKey: text('storage_key').notNull(),
-    retention: varchar('retention', { length: 32 }).default('project_lifetime').notNull(),
-    accessPolicy: varchar('access_policy', { length: 32 }).default('owner_only').notNull(),
-    metadata: jsonb('metadata'),
-    deletedAt: timestamp('deleted_at', { withTimezone: true }),
-    ...created,
-  },
-  (table) => [
-    index('artifacts_owner_idx').on(table.ownerId),
-    index('artifacts_project_idx').on(table.projectId),
-    index('artifacts_task_idx').on(table.taskId),
-    index('artifacts_created_idx').on(table.createdAt),
-  ],
-);
-
 export const skills = pgTable(
   'skills',
   {
@@ -323,12 +354,77 @@ export const skills = pgTable(
     isEnabled: boolean('is_enabled').default(true).notNull(),
     isDefault: boolean('is_default').default(false).notNull(),
     scope: varchar('scope', { length: 80 }).default('system').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    lastOutcome: varchar('last_outcome', { length: 32 }),
+    lastError: text('last_error'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     ...created,
   },
   (table) => [
     uniqueIndex('skills_name_uq').on(table.name),
     index('skills_is_enabled_idx').on(table.isEnabled),
+  ],
+);
+
+export const projectSkills = pgTable(
+  'project_skills',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    skillName: varchar('skill_name', { length: 120 }).notNull(),
+    isEnabled: boolean('is_enabled').default(true).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.skillName] }),
+    index('project_skills_project_idx').on(table.projectId),
+    index('project_skills_skill_name_idx').on(table.skillName),
+  ],
+);
+
+export const mcpServers = pgTable(
+  'mcp_servers',
+  {
+    id: varchar('id', { length: 120 }).primaryKey(),
+    name: varchar('name', { length: 200 }).notNull(),
+    transport: varchar('transport', { length: 32 }).notNull(),
+    command: varchar('command', { length: 255 }),
+    args: jsonb('args'),
+    url: varchar('url', { length: 500 }),
+    allowedCapabilities: jsonb('allowed_capabilities').notNull(),
+    riskLevel: varchar('risk_level', { length: 32 }).default('MEDIUM').notNull(),
+    status: varchar('status', { length: 32 }).default('connected').notNull(),
+    approvalId: uuid('approval_id').references(() => approvals.id, { onDelete: 'set null' }),
+    isApproved: boolean('is_approved').default(false).notNull(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('mcp_servers_status_idx').on(table.status),
+    index('mcp_servers_transport_idx').on(table.transport),
+  ],
+);
+
+export const mcpCallLogs = pgTable(
+  'mcp_call_logs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    serverId: varchar('server_id', { length: 120 }).notNull(),
+    toolName: varchar('tool_name', { length: 120 }).notNull(),
+    arguments: jsonb('arguments'),
+    durationMs: integer('duration_ms').notNull(),
+    status: varchar('status', { length: 32 }).notNull(),
+    error: text('error'),
+    ...created,
+  },
+  (table) => [
+    index('mcp_call_logs_server_tool_idx').on(table.serverId, table.toolName),
+    index('mcp_call_logs_created_idx').on(table.createdAt),
   ],
 );
 
@@ -425,9 +521,13 @@ export type TaskEventRow = typeof taskEvents.$inferSelect;
 export type ApprovalRow = typeof approvals.$inferSelect;
 export type AuditLogRow = typeof auditLogs.$inferSelect;
 export type MemoryRow = typeof memories.$inferSelect;
-export type ArtifactRow = typeof artifacts.$inferSelect;
 export type SkillRow = typeof skills.$inferSelect;
+export type ProjectSkillRow = typeof projectSkills.$inferSelect;
+export type McpServerRow = typeof mcpServers.$inferSelect;
+export type McpCallLogRow = typeof mcpCallLogs.$inferSelect;
 export type SkillRevisionRow = typeof skillRevisions.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;
 export type NotificationPreferencesRow = typeof notificationPreferences.$inferSelect;
+export type ModelConfigRow = typeof modelConfigs.$inferSelect;
+export type ModelRoutingPolicyRow = typeof modelRoutingPolicies.$inferSelect;

@@ -263,3 +263,135 @@ test('ResearchEvaluator: passes with comprehensive sources, citation mapping, an
   assert.equal(passedResult.remainingIssues.length, 0);
   assert.equal(passedResult.evaluatedCriteria.length, DEFAULT_RESEARCH_CRITERIA.length);
 });
+
+test('ResearchEvaluator: evaluateAsync re-fetches URL sources and verifies claim support and query relevance', async () => {
+  const evaluator = new ResearchEvaluator();
+
+  const fetchedUrls: string[] = [];
+  const fakeUrlFetcher = async (url: string) => {
+    fetchedUrls.push(url);
+    if (url.includes('postgres')) {
+      return 'PostgreSQL provides advisory locks for application-level concurrency control and worker coordination.';
+    }
+    return 'Redis provides distributed locking and atomic primitives.';
+  };
+
+  const result = await evaluator.evaluateAsync(
+    {
+      query: 'PostgreSQL advisory locks for workers',
+      sources: [
+        {
+          id: 'src-pg',
+          url: 'https://postgresql.org/docs/advisory-locks',
+          title: 'PostgreSQL Advisory Locks',
+          domain: 'postgresql.org',
+          snippet: 'Initial snippet',
+          credibilityScore: 0.95,
+        },
+        {
+          id: 'src-redis',
+          url: 'https://redis.io/docs/manual/patterns/distributed-locks',
+          title: 'Redis Distributed Locks',
+          domain: 'redis.io',
+          snippet: 'Initial snippet',
+          credibilityScore: 0.9,
+        },
+      ],
+      claims: [
+        {
+          id: 'c-1',
+          statement: 'PostgreSQL provides advisory locks for concurrency control',
+          type: 'sourced_fact',
+          sourceIds: ['src-pg', 'src-redis'],
+        },
+      ],
+      contradictions: [],
+      totalTopicsCount: 1,
+      topicsCoveredCount: 1,
+    },
+    { urlFetcher: fakeUrlFetcher },
+  );
+
+  assert.equal(result.passed, true);
+  assert.equal(result.score, 1.0);
+  assert.deepEqual(fetchedUrls.sort(), [
+    'https://postgresql.org/docs/advisory-locks',
+    'https://redis.io/docs/manual/patterns/distributed-locks',
+  ].sort());
+  const supportCriterion = result.evaluatedCriteria.find((c) => c.criterionId === 'claim_support');
+  assert.ok(supportCriterion?.passed);
+  const relevanceCriterion = result.evaluatedCriteria.find((c) => c.criterionId === 'query_relevance');
+  assert.ok(relevanceCriterion?.passed);
+});
+
+test('ResearchEvaluator: rejects when claims lack support in re-fetched content or fail query relevance', async () => {
+  const evaluator = new ResearchEvaluator();
+
+  // 1. Unsupported claim: cited page talks about something totally unrelated
+  const unsupportedResult = await evaluator.evaluateAsync(
+    {
+      query: 'PostgreSQL performance',
+      sources: [
+        {
+          id: 'src-1',
+          url: 'https://gardening.org/flowers',
+          title: 'Gardening Guide',
+          domain: 'gardening.org',
+          snippet: 'Roses and sunflowers require water and sunlight daily.',
+          credibilityScore: 0.8,
+        },
+      ],
+      claims: [
+        {
+          id: 'c-1',
+          statement: 'PostgreSQL indexes speed up database queries dramatically',
+          type: 'sourced_fact',
+          sourceIds: ['src-1'],
+        },
+      ],
+      contradictions: [],
+      totalTopicsCount: 1,
+      topicsCoveredCount: 1,
+    },
+    {
+      urlFetcher: async () => 'Roses and sunflowers require water and sunlight daily. Plant in rich soil.',
+    },
+  );
+
+  assert.equal(unsupportedResult.passed, false);
+  const claimSupportCrit = unsupportedResult.evaluatedCriteria.find((c) => c.criterionId === 'claim_support');
+  assert.equal(claimSupportCrit?.passed, false);
+  assert.match(claimSupportCrit?.reason ?? '', /tidak didukung oleh isi sumber/);
+
+  // 2. Irrelevant claims to the query
+  const irrelevantResult = evaluator.evaluate({
+    query: 'Quantum computing hardware architecture',
+    sources: [
+      {
+        id: 'src-1',
+        url: 'https://recipe.com/pasta',
+        title: 'Pasta Recipe',
+        domain: 'recipe.com',
+        snippet: 'Boil water, add salt and pasta for 10 minutes.',
+        credibilityScore: 0.8,
+      },
+    ],
+    claims: [
+      {
+        id: 'c-1',
+        statement: 'Boil water and add salt for making pasta',
+        type: 'sourced_fact',
+        sourceIds: ['src-1'],
+      },
+    ],
+    contradictions: [],
+    totalTopicsCount: 1,
+    topicsCoveredCount: 1,
+  });
+
+  assert.equal(irrelevantResult.passed, false);
+  const relevanceCrit = irrelevantResult.evaluatedCriteria.find((c) => c.criterionId === 'query_relevance');
+  assert.equal(relevanceCrit?.passed, false);
+  assert.match(relevanceCrit?.reason ?? '', /tidak memiliki relevansi memadai/);
+});
+

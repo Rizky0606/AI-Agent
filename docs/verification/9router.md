@@ -31,3 +31,12 @@ Model gratis lain:
 - Vision: TIDAK tersedia pada model gratis yang hidup. Perlu top-up (mis. `zrouter/gemini-3.8-flash` atau `or/...`) bila fitur vision dibutuhkan.
 - Rate limit: error 402/429 menyertakan "(reset after Xm)" — backoff per request, tanpa header rate-limit standar.
 - Jalankan ulang probe: `sh scripts/.probe-zrouter.sh <model-id>` (helper lokal, tidak di-commit; hasil tetap terdokumentasi di sini).
+
+## Adendum 2026-10-13
+
+Status per-model di atas adalah snapshot 2026-10-10 dan sebagian sudah bergeser. Kondisi terkini:
+
+- `agentic/space-bunny-free` tetap LULUS dan tetap menjadi `DEFAULT_CHAT_MODEL`. `FreeTierError` HTTP 403 sempat muncul kembali selama ~15 menit pada 2026-10-13 (fail-closed, task berhenti dengan error provider — bukan penyelesaian palsu), lalu hilang tanpa perubahan konfigurasi. Lihat `docs/capability-acceptance-report.md` bagian Task 7.
+- `agentic/deepseek-v4.1-flash-free`, yang pada 2026-10-10 kena 429 `free_shared_pool_exhausted`, kini menyelesaikan generic task penuh (`completed` / 100 dengan `task.tool_call` dan `evaluationResult.passed = true`).
+
+Probe ulang sebelum mengubah model: `sh scripts/.probe-zrouter.sh <model-id>`.

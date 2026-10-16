@@ -1,15 +1,31 @@
 import type {
+  AcceptanceCriterion,
+  CriterionCategory,
   EvaluationResult,
   ResearchClaim,
   ResearchContradiction,
   ResearchSource,
 } from '@personal-ai-os/evaluator';
+
+export type {
+  AcceptanceCriterion,
+  CriterionCategory,
+  EvaluationResult,
+  ResearchClaim,
+  ResearchContradiction,
+  ResearchSource,
+};
 import type { RiskLevel } from '@personal-ai-os/permissions';
 
+export type AgentMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+export type ExecutionRuntime = 'sandbox' | 'windows_agent' | 'repo_runtime' | 'fast_model';
 export type AgentTaskIntent =
-  'simple_chat' | 'coding' | 'research' | 'windows_local' | 'heavy_untrusted';
-
-export type ExecutionRuntime = 'fast_model' | 'repo_runtime' | 'windows_agent' | 'sandbox';
+  | 'simple_chat'
+  | 'coding'
+  | 'research'
+  | 'windows_local'
+  | 'heavy_untrusted'
+  | 'automation';
 
 export interface IntentAnalysisResult {
   intent: AgentTaskIntent;
@@ -59,6 +75,7 @@ export interface TaskPlan {
 
 export interface AgentRoute {
   intent: AgentTaskIntent;
+  mode: AgentMode;
   runtime: ExecutionRuntime;
   modelId: string;
   requiresWindowsAgent: boolean;
@@ -74,6 +91,7 @@ export interface AgentRoute {
 export interface RouterContext {
   userId: string;
   projectId?: string | undefined;
+  mode?: AgentMode | undefined;
   isWindowsOnline?: boolean | undefined;
   isSandboxAvailable?: boolean | undefined;
   preferredRuntimeId?: string | undefined;
@@ -178,9 +196,13 @@ export type ResearchWorkflowStage =
   | 'cite'
   | 'report';
 
+import type { ModelGateway } from '@personal-ai-os/model-gateway';
+
 export interface ResearchAgentConfig {
   maxSources?: number | undefined;
   minCredibilityScore?: number | undefined;
+  modelGateway?: ModelGateway | undefined;
+  defaultModel?: string | undefined;
 }
 
 export interface CategorizedResearchClaims {

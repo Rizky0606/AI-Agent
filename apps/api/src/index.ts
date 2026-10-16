@@ -7,11 +7,18 @@ import {
 } from '@personal-ai-os/model-gateway';
 import { ManifestValidator, SkillLoader } from '@personal-ai-os/agent-core';
 import { InactiveEmbeddingProvider } from '@personal-ai-os/memory';
-import { ArtifactManager, DiskArtifactStorage } from '@personal-ai-os/tools';
-import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-os/scheduler';
+import { ArtifactManager, DiskArtifactStorage, createDefaultToolRegistry } from '@personal-ai-os/tools';
+import {
+  EventEngine,
+  NotificationEngine,
+  SchedulerEngine,
+  createFcmProviderFromEnv,
+} from '@personal-ai-os/scheduler';
+import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
 
 import { buildApp } from './app.ts';
 import { createAuthService } from './auth/service.ts';
+import { createGoogleOAuthClient, googleOAuthConfigFromEnv } from './auth/google.ts';
 import { createDatabase } from './db/client.ts';
 import { SqlAuthRepository } from './db/sql-auth-repository.ts';
 import { SqlDeviceRepository } from './db/device-repository.ts';
@@ -20,14 +27,21 @@ import { SqlModelConfigRepository } from './db/model-config-repository.ts';
 import { SqlProjectRepository } from './db/project-repository.ts';
 import { SqlTaskRepository } from './db/task-repository.ts';
 import { SqlApprovalRepository } from './db/approval-repository.ts';
-import { SqlAuditRepository } from './db/audit-repository.ts';
+import { artifactWriteAuditEntry, SqlAuditRepository } from './db/audit-repository.ts';
 import { DrizzleMemoryRepository } from './db/memory-repository.ts';
 import { SqlSkillRepository } from './db/skill-repository.ts';
+import { SqlMcpRepository } from './db/mcp-repository.ts';
 import { SqlScheduleRepository } from './db/schedule-repository.ts';
+import { SqlNotificationRepository } from './db/notification-repository.ts';
 import { DeviceConnectionManager } from './services/device-connection-manager.ts';
 import { ModelRouter } from './services/model-router.ts';
 import { BullMqTaskQueue } from './services/task-queue.ts';
 import { RedisTaskEventBroadcaster } from './services/event-broadcaster.ts';
+import { createTaskNotificationListener } from './services/task-notifications.ts';
+import {
+  DEFAULT_EPHEMERAL_TTL_MS,
+  sweepExpiredArtifacts,
+} from './services/artifact-retention-sweeper.ts';
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -86,6 +100,10 @@ const broadcaster = new RedisTaskEventBroadcaster({
 });
 const approvalRepository = new SqlApprovalRepository(db);
 const auditRepository = new SqlAuditRepository(db);
+const mcpRepository = new SqlMcpRepository(db);
+const toolRegistry = createDefaultToolRegistry({
+  guard: new SecuredCapabilityGuard(new PermissionEngine(), { auditLogger: auditRepository }),
+});
 
 // Model Gateway Setup with explicit security checks
 const isProduction = process.env.NODE_ENV === 'production';
@@ -147,7 +165,9 @@ await modelConfigRepository.upsertModelConfig(
 
 const modelRouter = new ModelRouter(modelConfigRepository, gateway);
 
-// Memory Subsystem with InactiveEmbeddingProvider per docs/assessment.md
+// Durable memory store. Semantic search stays inactive because 9Router exposes no embedding
+// provider (`POST /v1/embeddings` returns "No credentials for provider: openai"), so vectors
+// cannot be generated and `isSemanticSearchActive()` reports false honestly.
 const memoryRepository = new DrizzleMemoryRepository(db, new InactiveEmbeddingProvider());
 
 // Artifacts Subsystem with DiskArtifactStorage and quota
@@ -156,6 +176,7 @@ const artifactsDir =
 const artifactManager = new ArtifactManager({
   storage: new DiskArtifactStorage(artifactsDir),
   userQuotaBytes: Number(process.env.ARTIFACT_USER_QUOTA_BYTES ?? 100 * 1024 * 1024), // 100 MB default
+  auditSink: (record) => auditRepository.log(artifactWriteAuditEntry(record)),
 });
 
 // Skills Subsystem with SqlSkillRepository and startup sync from SKILLS_DIR
@@ -175,40 +196,39 @@ try {
   );
 }
 
-// Schedules & Events Subsystem with database-backed persistence (Migration 0005)
+// Schedules & Events Subsystem with database-backed persistence (Migration 0005).
+// Proses API hanya mendaftarkan jadwal ke tabel `schedules`; slot dijalankan oleh container
+// `scheduler`, yang punya dispatcher durable sendiri (INSERT tasks + BullMQ).
 const scheduleRepository = new SqlScheduleRepository(db);
-const schedulerEngine = new SchedulerEngine({
-  storage: scheduleRepository,
-  dispatcher: async (execution) => {
-    const userId =
-      (execution.taskPayload.input['userId'] as string) ?? '00000000-0000-0000-0000-000000000000';
-    const projectId =
-      (execution.taskPayload.input['projectId'] as string) ??
-      '00000000-0000-0000-0000-000000000000';
-    await taskQueue.enqueue({
-      id: execution.idempotencyKey,
-      userId,
-      projectId,
-      kind: execution.taskPayload.kind,
-      status: 'queued',
-      progress: 0,
-      priority: execution.taskPayload.priority ?? 0,
-      attempt: 0,
-      maxAttempts: 3,
-      payload: execution.taskPayload.input,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-  },
-});
+const schedulerEngine = new SchedulerEngine({ storage: scheduleRepository });
 await schedulerEngine.init();
 
 const eventEngine = new EventEngine();
-const notificationEngine = new NotificationEngine();
+const notificationEngine = new NotificationEngine({
+  storage: new SqlNotificationRepository(db),
+  fcmProvider: createFcmProviderFromEnv(),
+  resolveDeviceTokens: (userId) => deviceRepository.listPushTokens(userId),
+});
+
+// Google sign-in is optional: with no credentials the routes answer 503 and password login is
+// unaffected, so a half-configured deployment never issues tokens it cannot verify.
+const googleConfig = googleOAuthConfigFromEnv();
+if (isProduction && !googleConfig)
+  console.warn('[WARN] GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI unset: Google sign-in is disabled.');
 
 // Assemble and build Fastify application with all modules wired
+const auth = createAuthService(new SqlAuthRepository(db), jwtSecret);
 const app = await buildApp({
-  auth: createAuthService(new SqlAuthRepository(db), jwtSecret),
+  auth,
+  google: googleConfig
+    ? {
+        client: createGoogleOAuthClient(googleConfig),
+        allowedRedirectUris: (process.env.GOOGLE_ALLOWED_REDIRECT_URIS ?? 'personal-ai://auth')
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      }
+    : undefined,
   health: {
     database: async () => {
       await sql`select 1`;
@@ -217,12 +237,24 @@ const app = await buildApp({
     redis: async () => (await redis.ping()) === 'PONG',
   },
   deviceManager,
+  internalBridgeToken: process.env.RUNTIME_BRIDGE_TOKEN,
   listDevices: (userId) => deviceRepository.listByUser(userId),
-  updateDeviceLastSeen: (deviceId) => deviceRepository.updateLastSeen(deviceId),
   registerDevice: (userId, input) => deviceRepository.create(userId, input),
+  registerAgent: (userId, input) => deviceRepository.registerAgent(userId, input),
+  setDevicePushToken: (userId, deviceId, pushToken) =>
+    deviceRepository.setPushToken(userId, deviceId, pushToken),
   chat: {
     chatRepo: chatRepository,
     router: modelRouter,
+    modelConfigs: modelConfigRepository,
+    gateway,
+  },
+  models: {
+    auth,
+    modelConfigs: modelConfigRepository,
+    gateway,
+    providerBaseUrl: process.env.NINEROUTER_BASE_URL ?? 'https://9router.ojixx.my.id/v1',
+    audit: auditRepository,
   },
   project: {
     projectRepo: projectRepository,
@@ -230,6 +262,7 @@ const app = await buildApp({
   },
   task: {
     projectRepo: projectRepository,
+    chatRepo: chatRepository,
     taskRepo: taskRepository,
     taskQueue,
     broadcaster,
@@ -250,6 +283,10 @@ const app = await buildApp({
   skills: {
     skillRepo: skillRepository,
     skillsDir,
+    toolRegistry,
+  },
+  mcp: {
+    mcpRepo: mcpRepository,
   },
   schedules: {
     schedulerEngine,
@@ -258,8 +295,46 @@ const app = await buildApp({
   },
 });
 
+// Retention sweep: the API process owns both the artifact storage and the database, so it is
+// where expired artifacts get deleted. Disabled unless the interval is set to a positive value.
+const artifactSweepIntervalMs = Number(process.env.ARTIFACT_RETENTION_SWEEP_INTERVAL_MS ?? 0);
+const artifactSweepTimer =
+  artifactSweepIntervalMs > 0
+    ? setInterval(() => {
+        void sweepExpiredArtifacts({
+          artifactManager,
+          getTaskStatus: async (ownerId, taskId) =>
+            (await taskRepository.getTask(ownerId, taskId))?.status ?? null,
+          projectExists: async (ownerId, projectId) =>
+            (await projectRepository.getProject(ownerId, projectId)) !== null,
+          ephemeralTtlMs: Number(process.env.ARTIFACT_EPHEMERAL_TTL_MS ?? DEFAULT_EPHEMERAL_TTL_MS),
+        })
+          .then((result) => {
+            app.log.debug(result, 'artifact retention sweep');
+            if (result.deleted > 0 || result.failed.length > 0) {
+              app.log.info(result, 'artifact retention sweep');
+            }
+          })
+          .catch((err: unknown) => {
+            app.log.error({ err }, 'artifact retention sweep failed');
+          });
+      }, artifactSweepIntervalMs)
+    : undefined;
+artifactSweepTimer?.unref();
+
+// Event task dari worker (Redis) menjadi baris notifications durable di proses API.
+broadcaster.subscribe(
+  createTaskNotificationListener({
+    notificationEngine,
+    onError: (err, event) => {
+      app.log.error({ err, taskId: event.taskId, eventType: event.eventType }, 'notifikasi task gagal');
+    },
+  }),
+);
+
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, 'shutting down');
+  clearInterval(artifactSweepTimer);
   await app.close();
   await broadcaster.close(true);
   await redis.quit();

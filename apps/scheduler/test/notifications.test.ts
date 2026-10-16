@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MockFcmProvider } from '../src/fcm-provider.ts';
 import { NotificationEngine } from '../src/notification-engine.ts';
+import type { NotificationPreferences, NotificationRecord } from '../src/types.ts';
 
 test('NotificationEngine: generates correct deep links for approvals, tasks, and blockers', () => {
   // 1. Approval deep link
@@ -51,7 +52,7 @@ test('NotificationEngine: respects user category preferences and quiet hours', a
   const fcm = new MockFcmProvider();
   const engine = new NotificationEngine({ fcmProvider: fcm });
 
-  engine.setUserPreferences('user-quiet', {
+  await engine.setUserPreferences('user-quiet', {
     enabled: true,
     channels: { push: true, websocket: true },
     quietHours: {
@@ -118,7 +119,7 @@ test('NotificationEngine: handles delivery states and retries with backoff on tr
   assert.ok(notif.deliveredAt);
 
   // Mark as read
-  const readNotif = engine.markAsRead(notif.id);
+  const readNotif = await engine.markAsRead(notif.id);
   assert.equal(readNotif?.deliveryState, 'read');
   assert.ok(readNotif?.readAt);
 });
@@ -148,17 +149,22 @@ test('NotificationEngine: caps retry loop and transitions to failed state on per
 });
 
 test('NotificationEngine: persists delivery state in storage across lifecycle', async () => {
-  const savedNotifs = new Map<string, import('../src/types.ts').NotificationRecord>();
+  const savedNotifs = new Map<string, NotificationRecord>();
+  const savedPrefs = new Map<string, NotificationPreferences>();
   const testStorage = {
-    saveNotification: async (notif: import('../src/types.ts').NotificationRecord) => {
+    saveNotification: async (notif: NotificationRecord) => {
       savedNotifs.set(notif.id, { ...notif });
     },
-    updateNotification: async (notif: import('../src/types.ts').NotificationRecord) => {
+    updateNotification: async (notif: NotificationRecord) => {
       savedNotifs.set(notif.id, { ...notif });
     },
     getNotification: async (id: string) => savedNotifs.get(id) ?? null,
     listNotifications: async (userId: string) =>
       Array.from(savedNotifs.values()).filter((n) => n.userId === userId),
+    getUserPreferences: async (userId: string) => savedPrefs.get(userId) ?? null,
+    saveUserPreferences: async (userId: string, preferences: NotificationPreferences) => {
+      savedPrefs.set(userId, preferences);
+    },
   };
 
   const fcm = new MockFcmProvider();
@@ -182,7 +188,7 @@ test('NotificationEngine: persists delivery state in storage across lifecycle', 
   assert.equal(stored.deepLink, 'personal-ai://tasks/task-100');
 
   // Mark as read
-  await engine.markAsReadAsync(notif.id);
+  await engine.markAsRead(notif.id);
   const updatedStored = savedNotifs.get(notif.id);
   assert.equal(updatedStored?.deliveryState, 'read');
   assert.ok(updatedStored?.readAt);

@@ -13,6 +13,7 @@ export interface CreateTaskParams {
   projectId: string;
   kind: string;
   payload: Record<string, unknown>;
+  conversationId?: string | null | undefined;
   idempotencyKey?: string | null | undefined;
   priority?: number | undefined;
   maxAttempts?: number | undefined;
@@ -21,7 +22,10 @@ export interface CreateTaskParams {
 export interface TaskRepository {
   createTask(params: CreateTaskParams): Promise<{ task: TaskRecord; isDuplicate: boolean }>;
   getTask(userId: string, taskId: string): Promise<TaskRecord | null>;
-  listTasks(userId: string, projectId?: string): Promise<TaskRecord[]>;
+  listTasks(
+    userId: string,
+    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+  ): Promise<TaskRecord[]>;
   updateTaskStatus(
     userId: string,
     taskId: string,
@@ -46,4 +50,6 @@ export interface TaskRepository {
     options?: { afterEventId?: string | undefined; limit?: number | undefined },
   ): Promise<TaskEventEnvelope[]>;
   getDanglingRunningTasks(): Promise<TaskRecord[]>;
+  claimTaskForRecovery?(taskId: string): Promise<boolean>;
+  releaseTaskRecovery?(taskId: string): Promise<void>;
 }

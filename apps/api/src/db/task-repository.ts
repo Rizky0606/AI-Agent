@@ -7,7 +7,7 @@ import {
   TaskStateMachine,
   type TaskStatus,
 } from '@personal-ai-os/shared';
-import { and, desc, eq, gt, or } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, or } from 'drizzle-orm';
 import type { Database } from './client.ts';
 import { taskEvents, tasks } from './schema.ts';
 
@@ -18,6 +18,7 @@ export interface CreateTaskParams {
   projectId: string;
   kind: string;
   payload: Record<string, unknown>;
+  conversationId?: string | null | undefined;
   idempotencyKey?: string | null | undefined;
   priority?: number | undefined;
   maxAttempts?: number | undefined;
@@ -26,7 +27,10 @@ export interface CreateTaskParams {
 export interface TaskRepository {
   createTask(params: CreateTaskParams): Promise<{ task: TaskRecord; isDuplicate: boolean }>;
   getTask(userId: string, taskId: string): Promise<TaskRecord | null>;
-  listTasks(userId: string, projectId?: string): Promise<TaskRecord[]>;
+  listTasks(
+    userId: string,
+    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+  ): Promise<TaskRecord[]>;
   updateTaskStatus(
     userId: string,
     taskId: string,
@@ -51,6 +55,8 @@ export interface TaskRepository {
     options?: { afterEventId?: string | undefined; limit?: number | undefined },
   ): Promise<TaskEventEnvelope[]>;
   getDanglingRunningTasks(): Promise<TaskRecord[]>;
+  claimTaskForRecovery?(taskId: string): Promise<boolean>;
+  releaseTaskRecovery?(taskId: string): Promise<void>;
 }
 
 export class SqlTaskRepository implements TaskRepository {
@@ -85,6 +91,7 @@ export class SqlTaskRepository implements TaskRepository {
         status: 'queued',
         kind: params.kind,
         payload: params.payload,
+        conversationId: params.conversationId ?? null,
         idempotencyKey: params.idempotencyKey ?? null,
         priority: params.priority ?? 0,
         maxAttempts: params.maxAttempts ?? 3,
@@ -108,10 +115,16 @@ export class SqlTaskRepository implements TaskRepository {
     return this.mapRow(row);
   }
 
-  async listTasks(userId: string, projectId?: string): Promise<TaskRecord[]> {
+  async listTasks(
+    userId: string,
+    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+  ): Promise<TaskRecord[]> {
     const conditions = [eq(tasks.userId, userId)];
-    if (projectId) {
-      conditions.push(eq(tasks.projectId, projectId));
+    if (filter?.projectId) {
+      conditions.push(eq(tasks.projectId, filter.projectId));
+    }
+    if (filter?.conversationId) {
+      conditions.push(eq(tasks.conversationId, filter.conversationId));
     }
 
     const rows = await this.db
@@ -264,9 +277,47 @@ export class SqlTaskRepository implements TaskRepository {
     const rows = await this.db
       .select()
       .from(tasks)
-      .where(or(eq(tasks.status, 'running'), eq(tasks.status, 'planning')));
+      .where(
+        or(
+          eq(tasks.status, 'running'),
+          eq(tasks.status, 'planning'),
+          eq(tasks.status, 'queued'),
+        ),
+      );
 
     return rows.map((r) => this.mapRow(r));
+  }
+
+  async claimTaskForRecovery(taskId: string): Promise<boolean> {
+    try {
+      const now = new Date();
+      const leaseExpiry = new Date(now.getTime() + 5 * 60 * 1000);
+      const [updated] = await this.db
+        .update(tasks)
+        .set({ leaseExpiresAt: leaseExpiry, updatedAt: now })
+        .where(
+          and(
+            eq(tasks.id, taskId),
+            or(isNull(tasks.leaseExpiresAt), lt(tasks.leaseExpiresAt, now)),
+          ),
+        )
+        .returning();
+
+      return Boolean(updated);
+    } catch {
+      return false;
+    }
+  }
+
+  async releaseTaskRecovery(taskId: string): Promise<void> {
+    try {
+      await this.db
+        .update(tasks)
+        .set({ leaseExpiresAt: null, updatedAt: new Date() })
+        .where(eq(tasks.id, taskId));
+    } catch {
+      // Best effort
+    }
   }
 
   private mapRow(row: typeof tasks.$inferSelect): TaskRecord {
@@ -277,6 +328,7 @@ export class SqlTaskRepository implements TaskRepository {
       status: row.status as TaskStatus,
       kind: row.kind,
       payload: row.payload as Record<string, unknown>,
+      conversationId: row.conversationId,
       progress: row.progress,
       attempt: row.attempt,
       maxAttempts: row.maxAttempts,
@@ -297,6 +349,7 @@ export class SqlTaskRepository implements TaskRepository {
 export class InMemoryTaskRepository implements TaskRepository {
   private tasks = new Map<string, TaskRecord>();
   private events: TaskEventEnvelope[] = [];
+  private recoveryLocks = new Set<string>();
 
   async createTask(params: CreateTaskParams): Promise<{ task: TaskRecord; isDuplicate: boolean }> {
     if (params.idempotencyKey) {
@@ -317,6 +370,7 @@ export class InMemoryTaskRepository implements TaskRepository {
       status: 'queued',
       kind: params.kind,
       payload: params.payload,
+      conversationId: params.conversationId ?? null,
       progress: 0,
       attempt: 0,
       maxAttempts: params.maxAttempts ?? 3,
@@ -338,9 +392,17 @@ export class InMemoryTaskRepository implements TaskRepository {
     return { ...task };
   }
 
-  async listTasks(userId: string, projectId?: string): Promise<TaskRecord[]> {
+  async listTasks(
+    userId: string,
+    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+  ): Promise<TaskRecord[]> {
     return [...this.tasks.values()]
-      .filter((t) => t.userId === userId && (!projectId || t.projectId === projectId))
+      .filter(
+        (t) =>
+          t.userId === userId &&
+          (!filter?.projectId || t.projectId === filter.projectId) &&
+          (!filter?.conversationId || t.conversationId === filter.conversationId),
+      )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((t) => ({ ...t }));
   }
@@ -434,9 +496,32 @@ export class InMemoryTaskRepository implements TaskRepository {
     return matched.map((e) => ({ ...e }));
   }
 
+  async claimTaskForRecovery(taskId: string): Promise<boolean> {
+    if (this.recoveryLocks.has(taskId)) {
+      return false;
+    }
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    const now = new Date();
+    if (task.leaseExpiresAt && task.leaseExpiresAt > now) {
+      return false;
+    }
+    this.recoveryLocks.add(taskId);
+    task.leaseExpiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+    return true;
+  }
+
+  async releaseTaskRecovery(taskId: string): Promise<void> {
+    this.recoveryLocks.delete(taskId);
+    const task = this.tasks.get(taskId);
+    if (task) {
+      task.leaseExpiresAt = null;
+    }
+  }
+
   async getDanglingRunningTasks(): Promise<TaskRecord[]> {
     return [...this.tasks.values()]
-      .filter((t) => t.status === 'running' || t.status === 'planning')
+      .filter((t) => t.status === 'running' || t.status === 'planning' || t.status === 'queued')
       .map((t) => ({ ...t }));
   }
 }

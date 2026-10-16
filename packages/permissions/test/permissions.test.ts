@@ -81,6 +81,24 @@ test('PermissionEngine correctly classifies risks and escalates on destructive c
   assert.equal(destructiveRes.riskLevel, 'CRITICAL');
 });
 
+test('PermissionEngine requires approval for untrusted MCP tool calls', () => {
+  const engine = new PermissionEngine();
+
+  // `McpHub` builds `tool:mcp_<serverId>_<toolName>`. Without a matching rule the engine
+  // would deny by default, so every MCP tool would be registered but permanently unusable.
+  const mcpRes = engine.evaluate({
+    actor: { id: 'user-1', role: 'user' },
+    action: 'tool:mcp_docs-server_read_doc',
+    resource: 'external_mcp://docs-server/read_doc',
+    scope: 'external_mcp',
+  });
+
+  assert.equal(mcpRes.decision, 'require_approval');
+  assert.equal(mcpRes.riskLevel, 'MEDIUM');
+  assert.ok(mcpRes.requiredApproval);
+  assert.ok(mcpRes.requiredApproval.fingerprint);
+});
+
 test('Approval fingerprint binds strictly to specific action, resource, scope, and context', () => {
   const fp1 = computeApprovalFingerprint('git:push', 'repo-A', 'cloud', 'HIGH');
   const fp2 = computeApprovalFingerprint('git:push', 'repo-B', 'cloud', 'HIGH');
@@ -128,10 +146,14 @@ test('SecuredCapabilityGuard prevents execution without approval or with invalid
     },
   };
 
-  const auditEntries: Array<{ action: string; decision: string }> = [];
+  const auditEntries: Array<{ action: string; decision: string; outcome: string }> = [];
   const auditLogger = {
     async log(entry: AuditLogEntry) {
-      auditEntries.push({ action: entry.action, decision: entry.decision });
+      auditEntries.push({
+        action: entry.action,
+        decision: entry.decision,
+        outcome: String(entry.metadata?.outcome),
+      });
     },
   };
 
@@ -228,6 +250,38 @@ test('SecuredCapabilityGuard prevents execution without approval or with invalid
   );
   assert.equal(toolExecuted, false);
 
-  // Verify audit logs were captured
-  assert.ok(auditEntries.length >= 5);
+  // One audit row per call, each recording what actually happened
+  assert.deepEqual(
+    auditEntries.map((entry) => entry.outcome),
+    ['failure', 'failure', 'failure', 'failure', 'success', 'failure'],
+  );
+  assert.equal(auditEntries.length, 6);
+});
+
+test('A failing audit sink never changes the outcome the caller sees', async () => {
+  const guard = new SecuredCapabilityGuard(new PermissionEngine(), {
+    auditLogger: {
+      async log() {
+        throw new Error('audit storage down');
+      },
+    },
+  });
+  const request = {
+    actor: { id: 'user-1' },
+    action: 'fs:read_file',
+    resource: '/workspace/notes.md',
+    scope: 'workspace',
+  };
+
+  // The side effect already happened, so an unwritable audit row must not turn it into an error.
+  assert.equal(await guard.executeProtected(request, async () => 'ran'), 'ran');
+
+  // The real failure is what the caller sees, not the audit failure.
+  await assert.rejects(
+    () =>
+      guard.executeProtected(request, async () => {
+        throw new Error('tool exploded');
+      }),
+    /tool exploded/,
+  );
 });

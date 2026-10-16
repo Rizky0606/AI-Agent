@@ -1,0 +1,56 @@
+{
+  "name": "security-review",
+  "version": "1.0.0",
+  "description": "Memeriksa perubahan kode, diff, atau konfigurasi terhadap kebocoran rahasia (secrets), pola injeksi (command/SQL/path), dan permintaan izin berlebih (excessive permissions).",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "contentOrDiff": { "type": "string" },
+      "targetResource": { "type": "string" },
+      "requestedPermissions": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["contentOrDiff"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "approved": { "type": "boolean" },
+      "riskScore": { "type": "number" },
+      "criticalIssuesCount": { "type": "number" },
+      "findings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "severity": { "type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"] },
+            "category": { "type": "string", "enum": ["secret_leak", "injection", "excessive_permission"] },
+            "description": { "type": "string" },
+            "lineHint": { "type": "string" }
+          },
+          "required": ["severity", "category", "description"]
+        }
+      },
+      "recommendations": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["approved", "riskScore", "criticalIssuesCount", "findings", "recommendations"]
+  },
+  "toolRequirements": [],
+  "permissions": [
+    {
+      "action": "query:security_audit",
+      "resource": "workspace://security",
+      "scope": "workspace",
+      "riskLevel": "LOW",
+      "reason": "Audit statis keamanan kode, kebocoran kredensial, dan pola izin."
+    }
+  ],
+  "compatibility": {
+    "agentCoreVersion": ">=0.2.0",
+    "platforms": ["node", "linux", "windows"]
+  },
+  "metadata": {
+    "category": "security",
+    "author": "personal-ai-os",
+    "risk": "LOW"
+  }
+}

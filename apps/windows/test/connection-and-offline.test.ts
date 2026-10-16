@@ -6,9 +6,14 @@ import { DeviceIdentityManager } from '../src/connection/device-identity.ts';
 import { CapabilityRegistry } from '../src/security/capability-registry.ts';
 import { PathValidator } from '../src/security/path-validator.ts';
 import { CommandExecutor } from '../src/security/command-executor.ts';
-import { DeviceConnectionManager } from '../../api/src/services/device-connection-manager.ts';
+import type { DeviceCommandResult } from '../../api/src/services/device-connection-manager.ts';
+import {
+  parseDevicePublicKey,
+  verifyDeviceSignature,
+} from '../../api/src/services/device-identity.ts';
 import { TaskExecutor } from '../../agent-worker/src/task-executor.ts';
 import type { TaskEventEnvelope, TaskModel, TaskRepository } from '@personal-ai-os/shared';
+
 
 // Mock WebSocket implementation for unit test
 class MockAgentWebSocket extends EventEmitter {
@@ -24,11 +29,12 @@ class MockAgentWebSocket extends EventEmitter {
   constructor(url: string) {
     super();
     this.url = url;
-    setTimeout(() => {
+    // Opened on a microtask so `await connection.connect()` always observes the open handler.
+    queueMicrotask(() => {
       this.readyState = MockAgentWebSocket.OPEN;
       this.emit('open');
       if (typeof this.onopen === 'function') this.onopen();
-    }, 10);
+    });
   }
 
   onopen: (() => void) | null = null;
@@ -36,8 +42,25 @@ class MockAgentWebSocket extends EventEmitter {
   onerror: ((error: unknown) => void) | null = null;
   onclose: (() => void) | null = null;
 
+  private readonly sendWaiters: Array<{
+    matches: (frame: Record<string, unknown>) => boolean;
+    resolve: (frame: Record<string, unknown>) => void;
+  }> = [];
+
+  /** Resolves with the next frame matching `matches`, so tests wait on real sends, not on timers. */
+  waitForSend(matches: (frame: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
+    const { promise, resolve } = Promise.withResolvers<Record<string, unknown>>();
+    this.sendWaiters.push({ matches, resolve });
+    return promise;
+  }
+
   send(data: string): void {
     this.sentMessages.push(data);
+    const frame = JSON.parse(data) as Record<string, unknown>;
+    const index = this.sendWaiters.findIndex((waiter) => waiter.matches(frame));
+    if (index === -1) return;
+    const [waiter] = this.sendWaiters.splice(index, 1);
+    waiter?.resolve(frame);
   }
 
   close(): void {
@@ -53,7 +76,7 @@ class MockAgentWebSocket extends EventEmitter {
   }
 }
 
-test('AgentConnection: Outbound connection sends handshake and tracks heartbeat', async () => {
+test('AgentConnection: signs the server challenge before it counts as a device', async () => {
   const originalWs = globalThis.WebSocket;
   const createdSockets: MockAgentWebSocket[] = [];
 
@@ -65,44 +88,84 @@ test('AgentConnection: Outbound connection sends handshake and tracks heartbeat'
   } as unknown as typeof WebSocket;
 
   try {
-    const identityMgr = new DeviceIdentityManager({
-      id: 'win-test-01',
-      name: 'Test Windows Machine',
-    });
+    const identityMgr = new DeviceIdentityManager({ name: 'Test Windows Machine' });
     const registry = new CapabilityRegistry();
     const validator = new PathValidator([process.cwd()]);
     const executor = new CommandExecutor(registry, validator);
 
     const statuses: ConnectionStatus[] = [];
+    const serverIds: string[] = [];
     const connection = new AgentConnection({
       serverUrl: 'http://127.0.0.1:3000',
       token: 'jwt-auth-token-123',
       identity: identityMgr.getIdentity(),
+      keyStore: identityMgr.keys,
       executor,
       heartbeatIntervalMs: 100,
       onStatusChange: (st) => statuses.push(st),
+      onDeviceId: (id) => serverIds.push(id),
     });
 
     await connection.connect();
-    await new Promise((r) => setTimeout(r, 30));
-
     const mockWs = createdSockets[0];
     assert.ok(mockWs);
+
+    // The agent never claims an id of its own: the server refuses a claimed one.
+    assert.ok(!mockWs.url.includes('deviceId'), 'the connect URL must not carry a deviceId');
+    assert.equal(connection.getStatus(), 'connecting');
+    assert.equal(mockWs.sentMessages.length, 0, 'nothing is sent before the server challenge');
+
+    const challenge = 'device-handshake:test-nonce-01';
+    const handshakeSent = mockWs.waitForSend((frame) => frame['type'] === 'device.handshake');
+    mockWs.simulateServerMessage({ type: 'device.challenge', challenge });
+    const handshake = await handshakeSent;
+
+    assert.equal(handshake['name'], 'Test Windows Machine');
+    assert.equal(handshake['platform'], 'windows');
+    const publicKey = parseDevicePublicKey(handshake['publicKey']);
+    assert.ok(publicKey, 'the handshake must carry a P-256 public key');
+    assert.equal(publicKey.kty, 'EC');
+    assert.equal(publicKey.crv, 'P-256');
+    assert.equal(handshake['privateKey'], undefined, 'private key material must never leave the agent');
+
+    const signature = String(handshake['signature']);
+    assert.equal(
+      verifyDeviceSignature({ publicKey, nonce: challenge, signature }),
+      true,
+      'the server must verify the agent signature with the agent public key',
+    );
+    assert.equal(
+      verifyDeviceSignature({ publicKey, nonce: 'device-handshake:other-nonce', signature }),
+      false,
+      'a signature must not verify against a different challenge',
+    );
+
+    // The socket is not a device until the server acknowledges the key.
+    assert.equal(connection.getStatus(), 'connecting');
+
+    const serverDeviceId = '7d9c0f3a-2b1e-4a5c-9f60-1c2d3e4f5a6b';
+    mockWs.simulateServerMessage({
+      type: 'device.handshake_ack',
+      deviceId: serverDeviceId,
+      status: 'online',
+    });
     assert.equal(connection.getStatus(), 'connected');
+    assert.deepEqual(serverIds, [serverDeviceId]);
 
-    // Verify handshake was sent
-    assert.ok(mockWs.sentMessages.length > 0);
-    const handshake = JSON.parse(mockWs.sentMessages[0]!);
-    assert.equal(handshake.type, 'device.handshake');
-    assert.equal(handshake.device.id, 'win-test-01');
-
-    // Simulate ping from server -> client responds with pong
+    const pongSent = mockWs.waitForSend((frame) => frame['type'] === 'pong');
     mockWs.simulateServerMessage({ type: 'ping' });
-    const lastSent = JSON.parse(mockWs.sentMessages[mockWs.sentMessages.length - 1]!);
-    assert.equal(lastSent.type, 'pong');
+    await pongSent;
+
+    // A refused handshake stops the agent instead of retrying a rejected credential forever.
+    mockWs.simulateServerMessage({
+      type: 'device.error',
+      code: 'DEVICE_SIGNATURE_INVALID',
+      message: 'signature mismatch',
+    });
+    assert.equal(connection.getStatus(), 'disconnected');
+    assert.ok(statuses.includes('connected'));
 
     connection.disconnect();
-    assert.equal(connection.getStatus(), 'disconnected');
   } finally {
     globalThis.WebSocket = originalWs;
   }
@@ -120,7 +183,7 @@ test('AgentConnection: Reconnects upon unexpected socket termination', async () 
   } as unknown as typeof WebSocket;
 
   try {
-    const identityMgr = new DeviceIdentityManager({ id: 'win-test-02' });
+    const identityMgr = new DeviceIdentityManager();
     const registry = new CapabilityRegistry();
     const validator = new PathValidator([process.cwd()]);
     const executor = new CommandExecutor(registry, validator);
@@ -129,13 +192,14 @@ test('AgentConnection: Reconnects upon unexpected socket termination', async () 
       serverUrl: 'http://127.0.0.1:3000',
       token: 'jwt-auth-token-123',
       identity: identityMgr.getIdentity(),
+      keyStore: identityMgr.keys,
       executor,
       maxReconnectAttempts: 3,
     });
 
     await connection.connect();
-    await new Promise((r) => setTimeout(r, 20));
     assert.equal(socketCount, 1);
+
 
     // Simulate unexpected drop
     connection.simulateSocketDrop();
@@ -150,10 +214,14 @@ test('AgentConnection: Reconnects upon unexpected socket termination', async () 
 });
 
 test('Offline behavior: Task requiring Windows fails explicitly when agent is offline', async () => {
-  const deviceManager = new DeviceConnectionManager();
-
-  // No devices connected for user 'user-alice'
-  assert.equal(deviceManager.hasOnlineDeviceForUser('user-alice', 'windows'), false);
+  // Presence is answered by the API, which owns the agent sockets. Nothing is connected here, so
+  // the executor must refuse to dispatch at all.
+  const dispatcher = {
+    listOnlineDevices: async (): Promise<string[]> => [],
+    dispatchCommand: async (): Promise<DeviceCommandResult> => {
+      throw new Error('dispatch must not be attempted while the device is offline');
+    },
+  };
 
   const events: TaskEventEnvelope[] = [];
   const fakeBroadcaster = {
@@ -211,7 +279,7 @@ test('Offline behavior: Task requiring Windows fails explicitly when agent is of
   };
 
   const executor = new TaskExecutor(mockTaskRepo as TaskRepository, fakeBroadcaster, {
-    deviceManager,
+    deviceDispatcher: dispatcher,
   });
 
   await executor.execute({

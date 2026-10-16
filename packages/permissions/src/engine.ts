@@ -79,6 +79,14 @@ const DEFAULT_ACTION_RULES: ActionRule[] = [
     consequence: 'Menjalankan perintah lokal di lingkungan workspace.',
     allowWithoutApproval: true,
   },
+  // MCP: external, untrusted servers. `McpHub` names these `tool:mcp_<serverId>_<toolName>`,
+  // which no read/write rule matches, so without an explicit entry the engine would deny
+  // every MCP call by default. The scope is `external_mcp`, so MEDIUM escalates to approval.
+  {
+    pattern: /^tool:mcp_/i,
+    baseRisk: 'MEDIUM',
+    consequence: 'Memanggil tool pada server MCP eksternal yang tidak tepercaya.',
+  },
 
   // HIGH: External communication, git push, deployment
   {
@@ -110,6 +118,18 @@ const DEFAULT_ACTION_RULES: ActionRule[] = [
     baseRisk: 'HIGH',
     consequence:
       'Menjalankan interaksi formulir sensitif, login kredensial, atau unduhan file eksternal dari web.',
+    allowWithoutApproval: false,
+  },
+  // The Windows agent now parses the command text against a local binary allowlist
+  // (`apps/windows/src/security/command-allowlist.ts`, enforced in `command-executor.ts`,
+  // `tauri-executor.ts`, and Rust `execute_local_command`), so the command string is no longer
+  // arbitrary. Approval stays the outer control: a dispatch to a user device is still an explicit
+  // human decision, and the local allowlist can refuse what the approval let through.
+  {
+    pattern: /^device:(command|script|exec)/i,
+    baseRisk: 'HIGH',
+    consequence:
+      'Menjalankan perintah pada perangkat pengguna melalui Windows Agent, di luar sandbox server.',
     allowWithoutApproval: false,
   },
 

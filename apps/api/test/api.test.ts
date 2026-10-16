@@ -164,3 +164,40 @@ test('device registration requires auth and creates device record', async () => 
 
   await app.close();
 });
+
+test('CORS preflight answers allowlisted browser origins only', async () => {
+  const app = await setup();
+
+  const allowed = await app.inject({
+    method: 'OPTIONS',
+    url: '/v1/tasks',
+    headers: {
+      origin: 'http://localhost:1420',
+      'access-control-request-method': 'GET',
+      'access-control-request-headers': 'authorization',
+    },
+  });
+  assert.equal(allowed.statusCode, 204);
+  assert.equal(allowed.headers['access-control-allow-origin'], 'http://localhost:1420');
+  assert.equal(allowed.headers['access-control-allow-headers'], 'authorization,content-type');
+  assert.equal(allowed.headers.vary, 'Origin');
+
+  const tauri = await app.inject({
+    method: 'GET',
+    url: '/health',
+    headers: { origin: 'tauri://localhost' },
+  });
+  assert.equal(tauri.headers['access-control-allow-origin'], 'tauri://localhost');
+
+  const denied = await app.inject({
+    method: 'GET',
+    url: '/health',
+    headers: { origin: 'https://evil.example' },
+  });
+  assert.equal(denied.headers['access-control-allow-origin'], undefined);
+
+  const native = await app.inject({ method: 'GET', url: '/health' });
+  assert.equal(native.headers['access-control-allow-origin'], undefined);
+
+  await app.close();
+});

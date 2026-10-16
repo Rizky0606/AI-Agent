@@ -10,6 +10,44 @@ import type {
   ToolCallMetric,
 } from './types.ts';
 
+const SENSITIVE_KEY_PATTERNS = [
+  /password/i,
+  /secret/i,
+  /token/i,
+  /auth/i,
+  /cookie/i,
+  /credential/i,
+  /api[_-]?key/i,
+  /bearer/i,
+  /jwt/i,
+  /private[_-]?key/i,
+];
+
+export function redactSensitiveAttributes(
+  attributes?: Record<string, string | number | boolean | undefined> | undefined,
+): Record<string, string | number | boolean | undefined> {
+  if (!attributes) return {};
+  const result: Record<string, string | number | boolean | undefined> = {};
+  for (const [key, val] of Object.entries(attributes)) {
+    if (val === undefined) continue;
+    const isKeySensitive = SENSITIVE_KEY_PATTERNS.some((pat) => pat.test(key));
+    if (isKeySensitive) {
+      result[key] = '[REDACTED]';
+    } else if (typeof val === 'string') {
+      let sanitized = val;
+      if (sanitized.startsWith('Bearer ') || (sanitized.startsWith('ey') && sanitized.length > 30)) {
+        sanitized = '[REDACTED]';
+      } else if (/(sk-[a-zA-Z0-9_-]{20,}|nr-[a-zA-Z0-9_-]{20,})/.test(sanitized)) {
+        sanitized = sanitized.replace(/(sk-[a-zA-Z0-9_-]{20,}|nr-[a-zA-Z0-9_-]{20,})/g, '[REDACTED_KEY]');
+      }
+      result[key] = sanitized;
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
 export class TelemetryTracer {
   private readonly spans: TelemetrySpan[] = [];
   private readonly modelMetrics: ModelCallMetric[] = [];
@@ -19,9 +57,15 @@ export class TelemetryTracer {
   private readonly deviceMetrics = new Map<string, DeviceHealthMetric>();
   private readonly errorMetrics: ErrorMetric[] = [];
   private readonly maxStoredSpans: number;
+  private readonly samplingRatio: number;
 
-  constructor(options?: { maxStoredSpans?: number | undefined }) {
+  constructor(options?: {
+    maxStoredSpans?: number | undefined;
+    samplingRatio?: number | undefined;
+  }) {
     this.maxStoredSpans = options?.maxStoredSpans ?? 1000;
+    const envRatio = process.env.OTEL_SAMPLING_RATIO ? Number(process.env.OTEL_SAMPLING_RATIO) : undefined;
+    this.samplingRatio = options?.samplingRatio ?? (typeof envRatio === 'number' && !isNaN(envRatio) ? envRatio : 0.1);
   }
 
   generateTraceId(): string {
@@ -32,19 +76,33 @@ export class TelemetryTracer {
     return randomBytes(8).toString('hex');
   }
 
-  createTraceparent(traceId: string, spanId: string): string {
-    return `00-${traceId}-${spanId}-01`;
+  createTraceparent(traceId: string, spanId: string, sampled = true): string {
+    const flags = sampled ? '01' : '00';
+    return `00-${traceId}-${spanId}-${flags}`;
   }
 
   parseTraceparent(
     header?: string | undefined,
-  ): { traceId: string; parentSpanId: string } | undefined {
+  ): { traceId: string; parentSpanId: string; isSampled: boolean } | undefined {
     if (!header) return undefined;
     const parts = header.split('-');
     if (parts.length >= 4 && parts[1]?.length === 32 && parts[2]?.length === 16) {
-      return { traceId: parts[1], parentSpanId: parts[2] };
+      return {
+        traceId: parts[1],
+        parentSpanId: parts[2],
+        isSampled: parts[3] === '01',
+      };
     }
     return undefined;
+  }
+
+  shouldSample(traceId: string, isError = false): boolean {
+    if (isError || this.samplingRatio >= 1.0) return true;
+    if (this.samplingRatio <= 0) return false;
+    // Deterministic hash based on the first 8 hex characters of traceId
+    const hexPrefix = traceId.slice(0, 8);
+    const num = parseInt(hexPrefix, 16);
+    return !isNaN(num) && (num % 100) < this.samplingRatio * 100;
   }
 
   startSpan(
@@ -67,7 +125,7 @@ export class TelemetryTracer {
       kind,
       startTime: Date.now(),
       status: 'ok',
-      attributes: options?.attributes ? { ...options.attributes } : {},
+      attributes: redactSensitiveAttributes(options?.attributes),
       events: [],
     };
 
@@ -90,12 +148,15 @@ export class TelemetryTracer {
       span.errorMessage = options.errorMessage;
     }
     if (options?.attributes) {
-      Object.assign(span.attributes, options.attributes);
+      Object.assign(span.attributes, redactSensitiveAttributes(options.attributes));
     }
 
-    this.spans.push(span);
-    if (this.spans.length > this.maxStoredSpans) {
-      this.spans.shift();
+    const isError = span.status === 'error';
+    if (isError || this.shouldSample(span.traceId)) {
+      this.spans.push(span);
+      if (this.spans.length > this.maxStoredSpans) {
+        this.spans.shift();
+      }
     }
 
     return span;

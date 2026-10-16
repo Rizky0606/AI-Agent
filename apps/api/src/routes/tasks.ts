@@ -3,6 +3,7 @@ import type { AuthService } from '../auth/service.ts';
 import { AuthError } from '../auth/service.ts';
 import type { ProjectRepository } from '../db/project-repository.ts';
 import type { TaskRepository } from '../db/task-repository.ts';
+import type { ChatRepository } from '../db/chat-repository.ts';
 import type { TaskEventBroadcaster } from '../services/event-broadcaster.ts';
 import type { TaskQueue } from '../services/task-queue.ts';
 import { createVersionedCheckpoint } from '@personal-ai-os/shared';
@@ -10,6 +11,7 @@ import { createVersionedCheckpoint } from '@personal-ai-os/shared';
 export interface TaskRouteDependencies {
   auth: AuthService;
   projectRepo: ProjectRepository;
+  chatRepo: ChatRepository;
   taskRepo: TaskRepository;
   taskQueue: TaskQueue;
   broadcaster: TaskEventBroadcaster;
@@ -38,6 +40,7 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
             kind: { type: 'string', minLength: 1, maxLength: 80 },
             payload: { type: 'object' },
             idempotencyKey: { type: 'string', maxLength: 128 },
+            conversationId: { type: 'string', format: 'uuid' },
             priority: { type: 'integer', minimum: -20, maximum: 20 },
             maxAttempts: { type: 'integer', minimum: 1, maximum: 10 },
           },
@@ -51,10 +54,35 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
         kind: string;
         payload: Record<string, unknown>;
         idempotencyKey?: string;
+        conversationId?: string;
         priority?: number;
         maxAttempts?: number;
       };
-
+      const requestedMode = body.payload.mode;
+      if (
+        requestedMode !== undefined &&
+        requestedMode !== 'auto' &&
+        requestedMode !== 'fast' &&
+        requestedMode !== 'coding' &&
+        requestedMode !== 'complex' &&
+        requestedMode !== 'research'
+      ) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_MODE', message: 'payload.mode must be auto, fast, coding, complex, or research', requestId: request.id },
+        });
+      }
+      const requestedRuntime = body.payload.runtime;
+      if (
+        requestedRuntime !== undefined &&
+        requestedRuntime !== 'auto' &&
+        requestedRuntime !== 'omp' &&
+        requestedRuntime !== 'hermes' &&
+        requestedRuntime !== 'native'
+      ) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_RUNTIME', message: 'payload.runtime must be auto, omp, hermes, or native', requestId: request.id },
+        });
+      }
       // Ensure project exists and belongs to user
       const project = await deps.projectRepo.getProject(user.id, body.projectId);
       if (!project) {
@@ -67,11 +95,31 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
         });
       }
 
+      // A task launched from chat carries its conversation; ownership is checked like any other
+      // resource so a guessed uuid cannot attach a task to someone else's transcript.
+      if (body.conversationId) {
+        const conversation = await deps.chatRepo.getConversation(user.id, body.conversationId);
+        if (!conversation) {
+          return reply.code(404).send({
+            error: { code: 'NOT_FOUND', message: 'Conversation not found', requestId: request.id },
+          });
+        }
+      }
+
+      const outgoingTraceparent =
+        (reply.getHeader('traceparent') as string | undefined) ??
+        (typeof request.headers['traceparent'] === 'string' ? request.headers['traceparent'] : undefined);
+      const enrichedPayload = {
+        ...body.payload,
+        ...(outgoingTraceparent && !body.payload.traceparent ? { traceparent: outgoingTraceparent } : {}),
+      };
+
       const { task, isDuplicate } = await deps.taskRepo.createTask({
         userId: user.id,
         projectId: body.projectId,
         kind: body.kind,
-        payload: body.payload,
+        payload: enrichedPayload,
+        conversationId: body.conversationId ?? null,
         idempotencyKey: body.idempotencyKey,
         priority: body.priority,
         maxAttempts: body.maxAttempts,
@@ -83,6 +131,7 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
           projectId: task.projectId,
           kind: task.kind,
           priority: task.priority,
+          ...(task.conversationId ? { conversationId: task.conversationId } : {}),
         });
         deps.broadcaster.publish(createdEvent);
 
@@ -128,17 +177,17 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
         });
       }
 
-      const tasks = await deps.taskRepo.listTasks(user.id, request.params.projectId);
+      const tasks = await deps.taskRepo.listTasks(user.id, { projectId: request.params.projectId });
       return reply.send({ tasks });
     },
   );
 
   // 3b. List Tasks for authenticated user (optionally filtered by projectId or status)
-  app.get<{ Querystring: { projectId?: string; status?: string } }>(
+  app.get<{ Querystring: { projectId?: string; status?: string; conversationId?: string } }>(
     '/v1/tasks',
     async (request, reply) => {
       const user = await extractUser(request, deps.auth);
-      const { projectId, status } = request.query;
+      const { projectId, status, conversationId } = request.query;
       if (projectId) {
         const project = await deps.projectRepo.getProject(user.id, projectId);
         if (!project) {
@@ -152,7 +201,7 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
         }
       }
 
-      let tasks = await deps.taskRepo.listTasks(user.id, projectId);
+      let tasks = await deps.taskRepo.listTasks(user.id, { projectId, conversationId });
       if (status) {
         tasks = tasks.filter((t) => t.status === status);
       }

@@ -7,6 +7,7 @@ import {
   InMemoryMemoryStore,
   MemoryWritePolicy,
   redactSensitiveData,
+  MemoryCandidateExtractor,
 } from '../src/index.ts';
 
 test('Sensitive Data Filter: detects and redacts credentials and secrets', () => {
@@ -270,4 +271,119 @@ test('ContextManager: respects token budget, caps tool output, and preserves sec
       `Security policy '${pol}' was omitted from context assembly!`,
     );
   }
+});
+
+test('Sensitive Data Filter: detects and redacts identity numbers (NIK), credit cards, and Indonesian passwords', () => {
+  const text =
+    'Data pendaftar: NIK 3171012345670001, kartu kredit 4111-2222-3333-4444, dan kata_sandi: rahasiaNegara123';
+
+  const detection = detectSensitiveData(text);
+  assert.equal(detection.found, true);
+  assert.ok(detection.categories.includes('identity_number'));
+  assert.ok(detection.categories.includes('credit_card'));
+  assert.ok(detection.categories.includes('password_assignment'));
+
+  const redaction = redactSensitiveData(text);
+  assert.equal(redaction.sanitized.includes('3171012345670001'), false);
+  assert.equal(redaction.sanitized.includes('4111-2222-3333-4444'), false);
+  assert.equal(redaction.sanitized.includes('rahasiaNegara123'), false);
+  assert.ok(redaction.sanitized.includes('[REDACTED_IDENTITY_NUMBER]'));
+  assert.ok(redaction.sanitized.includes('[REDACTED_CREDIT_CARD]'));
+  assert.ok(redaction.sanitized.includes('[REDACTED_SECRET]'));
+});
+
+test('ContextManager: supports topK selection and exposes usedMemories with IDs', () => {
+  const manager = new ContextManager();
+  const memories = [
+    {
+      id: 'mem-1',
+      userId: 'u1',
+      type: 'decision' as const,
+      content: 'Keputusan 1: PostgreSQL pgvector',
+      scope: 'arch',
+      provenance: 'user_explicit' as const,
+      metadata: {},
+      retention: 'permanent' as const,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
+      id: 'mem-2',
+      userId: 'u1',
+      type: 'preference' as const,
+      content: 'Preferensi 2: Bahasa Indonesia ringkas',
+      scope: 'pref',
+      provenance: 'user_explicit' as const,
+      metadata: {},
+      retention: 'permanent' as const,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
+      id: 'mem-3',
+      userId: 'u1',
+      type: 'knowledge' as const,
+      content: 'Fakta 3: Fastify v5 strict type',
+      scope: 'tech',
+      provenance: 'user_explicit' as const,
+      metadata: {},
+      retention: 'permanent' as const,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  ];
+
+  const result = manager.assemble({
+    systemPolicies: ['Aturan keamanan'],
+    userPrompt: 'Pertanyaan teknis',
+    relevantMemories: memories,
+    options: { topK: 2 },
+  });
+
+  assert.equal(result.usedMemories.length, 2);
+  assert.deepEqual(result.usedMemoryIds, ['mem-1', 'mem-2']);
+  assert.equal(result.assembledMessages.length, 2);
+});
+
+test('MemoryCandidateExtractor: extracts proposals from task and conversation, filters noise and sensitive data', () => {
+  const extractor = new MemoryCandidateExtractor();
+
+  // 1. Rejects casual banter from conversation
+  const banterCandidates = extractor.extractFromConversation({
+    userId: 'u1',
+    userMessage: 'Halo selamat pagi apa kabar?',
+  });
+  assert.equal(banterCandidates.length, 0, 'Conversational noise must not produce candidates');
+
+  // 2. Substantive preference creates a proposal (isProposal: true)
+  const prefCandidates = extractor.extractFromConversation({
+    userId: 'u1',
+    userMessage: 'Mulai sekarang preferensi saya: selalu gunakan Bahasa Indonesia dan format markdown.',
+  });
+  assert.equal(prefCandidates.length, 1);
+  assert.equal(prefCandidates[0].metadata?.isProposal, true);
+  assert.equal(prefCandidates[0].metadata?.status, 'proposed');
+  assert.equal(prefCandidates[0].type, 'preference');
+
+  // 3. Task with sensitive credentials gets redacted/filtered
+  const sensitiveTaskCandidates = extractor.extractFromTask({
+    taskId: 'task-123',
+    userId: 'u1',
+    title: 'Deploy database',
+    instructions: 'Setup database dengan password rahasia123 dan sk-1234567890abcdef1234567890',
+  });
+  assert.equal(sensitiveTaskCandidates.length, 0, 'Sensitive credentials must be rejected by write policy');
+
+  // 4. Substantive task outcome produces proposal
+  const validTaskCandidates = extractor.extractFromTask({
+    taskId: 'task-456',
+    userId: 'u1',
+    title: 'Setup PostgreSQL and pgvector',
+    instructions: 'Konfigurasi pgvector untuk pencarian semantic di backend',
+    result: 'Ekstensi pgvector terpasang dan migrasi berhasil dijalankan.',
+  });
+  assert.equal(validTaskCandidates.length, 1);
+  assert.equal(validTaskCandidates[0].metadata?.isProposal, true);
+  assert.equal(validTaskCandidates[0].metadata?.status, 'proposed');
+  assert.equal(validTaskCandidates[0].metadata?.sourceTaskId, 'task-456');
 });

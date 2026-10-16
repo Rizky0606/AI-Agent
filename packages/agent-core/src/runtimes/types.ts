@@ -30,10 +30,13 @@ export interface RuntimeExecuteInput {
   prompt: string;
   workspaceRoot?: string | undefined;
   model?: string | undefined;
+  sessionId?: string | undefined;
+  resume?: boolean | undefined;
   timeoutMs?: number | undefined;
   env?: Record<string, string> | undefined;
   untrusted?: boolean | undefined;
   metadata?: Record<string, unknown> | undefined;
+  onEvent?: ((event: Record<string, unknown>) => void) | undefined;
 }
 
 export interface RuntimeExecuteResult {
@@ -41,6 +44,7 @@ export interface RuntimeExecuteResult {
   status: 'completed' | 'failed' | 'cancelled' | 'paused';
   output: string;
   rawOutput?: string | undefined;
+  events?: Array<Record<string, unknown>> | undefined;
   proposedActions?: RuntimeProposedAction[] | undefined;
   appliedActions?:
     | Array<{

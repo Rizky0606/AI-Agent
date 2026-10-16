@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { AuditLogEntry, AuditLogger } from '@personal-ai-os/permissions';
+import type { ArtifactAuditRecord } from '@personal-ai-os/tools';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Database } from './client.ts';
 import { auditLogs } from './schema.ts';
@@ -27,6 +28,23 @@ export const redactAuditMetadata = (data: unknown): unknown => {
   }
   return result;
 };
+
+/** Maps a stored artifact onto the audit row that records the write. */
+export const artifactWriteAuditEntry = (record: ArtifactAuditRecord): AuditLogEntry => ({
+  userId: record.ownerId,
+  projectId: record.projectId ?? null,
+  action: 'artifact:write',
+  resourceType: 'artifact',
+  resourceId: record.artifactId,
+  decision: 'allow',
+  metadata: {
+    filename: record.filename,
+    mimeType: record.mimeType,
+    size: record.size,
+    checksum: record.checksum,
+    taskId: record.taskId ?? null,
+  },
+});
 
 export interface AuditRepository extends AuditLogger {
   log(entry: AuditLogEntry): Promise<void>;

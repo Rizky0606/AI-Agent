@@ -2,6 +2,8 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 RUN corepack enable
+# runtime-bridge workspace preparation shells out to git for repo init and task branches
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
 # Copy root workspace manifests
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
@@ -22,6 +24,15 @@ COPY packages/tools/package.json packages/tools/package.json
 # Install production dependencies
 RUN pnpm install --frozen-lockfile --prod
 
+# Browser tooling: Chromium plus its shared-library set. Installed as root into a
+# world-readable path so the non-root `node` user can launch it. The exec runs from
+# the workspace that owns the playwright dependency.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN cd apps/agent-worker \
+ && pnpm exec playwright install --with-deps chromium \
+ && rm -rf /var/lib/apt/lists/* \
+ && chmod -R 755 /ms-playwright
+
 # Copy source trees needed by worker service
 COPY packages packages
 COPY apps/api apps/api
@@ -29,6 +40,9 @@ COPY apps/agent-worker apps/agent-worker
 COPY apps/scheduler apps/scheduler
 
 # Run as non-root user
+# Coding task workspaces live on a named volume mounted here. Creating the directory with the
+# right ownership in the image is what makes a fresh volume writable by the non-root user.
+RUN mkdir -p /app/data/workspaces
 RUN chown -R node:node /app
 USER node
 

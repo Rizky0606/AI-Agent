@@ -134,7 +134,7 @@ test('Agent Worker executes generic task with explicit placeholder labels, check
     userId: 'user-1',
     projectId: 'proj-1',
     kind: 'generic_task',
-    payload: { goal: 'Execute sample OS task' },
+    payload: { goal: 'Execute sample OS task', isSimulation: true },
   });
 
   await executor.execute({
@@ -191,8 +191,173 @@ test('Agent Worker executes explicit runtime task through RuntimeManager and eva
   await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
   const updated = await repo.getTask(task.userId, task.id);
   assert.equal(updated?.status, 'completed');
-  assert.equal((updated?.artifacts?.[0] as Record<string, unknown>)?.content, 'OK');
+  assert.equal(
+    (updated?.artifacts?.[0] as Record<string, unknown>)?.content,
+    '<untrusted_content is_instruction="false">\nOK\n</untrusted_content>',
+  );
   assert.ok(broadcaster.published.some((event) => event.eventType === 'task.tool_call' && event.payload.untrustedOutputWarning === true));
+});
+
+test('Agent Worker executes Hermes runtime task and emits untrusted warning', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new TestBroadcaster();
+  const manager = new RuntimeManager();
+  const hermesRuntime: AgentRuntime = {
+    id: 'hermes',
+    name: 'Hermes Agent',
+    version: '0.20.5',
+    capabilities: [{ name: 'automation', level: 'execute' }],
+    getStatus: () => 'idle',
+    initialize: async () => undefined,
+    healthCheck: async () => ({ healthy: true, lastChecked: new Date().toISOString() }),
+    execute: async (input) => ({
+      taskId: input.taskId,
+      status: 'completed',
+      output: 'Hermes automation workflow completed.',
+      durationMs: 12,
+      untrustedOutputWarning: true,
+    }),
+    pause: async () => undefined,
+    resume: async () => undefined,
+    cancel: async () => undefined,
+  };
+  manager.register(hermesRuntime);
+  const executor = new TaskExecutor(repo, broadcaster, { runtimeManager: manager });
+  const { task } = await repo.createTask({
+    userId: 'user-1',
+    projectId: 'proj-1',
+    kind: 'generic_task',
+    payload: { runtime: 'hermes', prompt: 'Run telegram automation' },
+  });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+  const updated = await repo.getTask(task.userId, task.id);
+  assert.equal(updated?.status, 'completed');
+  assert.ok(
+    String((updated?.artifacts?.[0] as Record<string, unknown>)?.content).includes('<untrusted_content is_instruction="false">'),
+  );
+});
+
+test('Agent Worker emits explicit fallback event when task payload indicates runtimeFallback', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new TestBroadcaster();
+  const executor = new TaskExecutor(repo, broadcaster);
+  const { task } = await repo.createTask({
+    userId: 'user-1',
+    projectId: 'proj-1',
+    kind: 'generic_task',
+    payload: {
+      goal: 'Check system status',
+      isSimulation: true,
+      runtimeFallback: true,
+      originalRuntimeId: 'omp',
+      fallbackReason: 'OMP socket down. Dialihkan ke Bawaan.',
+    },
+  });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+  const fallbackEvents = broadcaster.published.filter(
+    (ev) => ev.eventType === 'task.progress' && ev.payload.action === 'runtime_fallback',
+  );
+  assert.equal(fallbackEvents.length, 1);
+  assert.equal(fallbackEvents[0]?.payload.fallbackReason, 'OMP socket down. Dialihkan ke Bawaan.');
+});
+
+test('Agent Worker streams runtime events (tool_start, file_edit with diff) into task events', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new TestBroadcaster();
+  const manager = new RuntimeManager();
+  const runtime: AgentRuntime = {
+    id: 'omp',
+    name: 'fake omp streaming',
+    version: '18.6.1',
+    capabilities: [{ name: 'coding', level: 'execute' }],
+    getStatus: () => 'idle',
+    initialize: async () => undefined,
+    healthCheck: async () => ({ healthy: true, lastChecked: new Date().toISOString() }),
+    execute: async (input) => {
+      // Simulate streaming events from omp
+      if (input.onEvent) {
+        input.onEvent({
+          type: 'tool_start',
+          timestamp: new Date().toISOString(),
+          data: { toolName: 'read_source', input: { file: 'index.ts' } },
+        });
+        input.onEvent({
+          type: 'file_edit',
+          timestamp: new Date().toISOString(),
+          data: { path: 'index.ts', diff: '+ const updated = true;' },
+        });
+        input.onEvent({
+          type: 'text',
+          timestamp: new Date().toISOString(),
+          data: { text: 'Perbaikan selesai.' },
+        });
+      }
+      return { taskId: input.taskId, status: 'completed', output: 'OK', durationMs: 10, untrustedOutputWarning: true };
+    },
+    pause: async () => undefined,
+    resume: async () => undefined,
+    cancel: async () => undefined,
+  };
+  manager.register(runtime);
+  const executor = new TaskExecutor(repo, broadcaster, { runtimeManager: manager, preferredRuntimeId: 'omp' });
+  const { task } = await repo.createTask({
+    userId: 'user-1',
+    projectId: 'proj-1',
+    kind: 'coding_runtime',
+    payload: { useRuntime: true, prompt: 'fix issue' },
+  });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+
+  // Verify task tool_call event was created and broadcast
+  const toolCallEvt = broadcaster.published.find((e) => e.eventType === 'task.tool_call' && e.payload.action === 'read_source');
+  assert.ok(toolCallEvt, 'Should publish task.tool_call for tool_start event');
+
+  // Verify file_edit event was created and broadcast with diff
+  const fileEditEvt = broadcaster.published.find((e) => e.eventType === 'task.progress' && e.payload.action === 'file_edit');
+  assert.ok(fileEditEvt, 'Should publish task.progress for file_edit event');
+  assert.equal(fileEditEvt.payload.path, 'index.ts');
+  assert.equal(fileEditEvt.payload.diff, '+ const updated = true;');
+});
+
+test('Agent Worker strictly denies prohibited runtime actions (git push / deploy)', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new TestBroadcaster();
+  const manager = new RuntimeManager();
+  const runtime: AgentRuntime = {
+    id: 'omp',
+    name: 'fake omp',
+    version: '18.6.1',
+    capabilities: [{ name: 'coding', level: 'execute' }],
+    getStatus: () => 'idle',
+    initialize: async () => undefined,
+    healthCheck: async () => ({ healthy: true, lastChecked: new Date().toISOString() }),
+    execute: async (input) => ({
+      taskId: input.taskId,
+      status: 'completed',
+      output: 'attempting push',
+      durationMs: 5,
+      proposedActions: [
+        { id: 'act-1', type: 'command', action: 'git push origin main', resource: 'remote' },
+      ],
+      untrustedOutputWarning: true,
+    }),
+    pause: async () => undefined,
+    resume: async () => undefined,
+    cancel: async () => undefined,
+  };
+  manager.register(runtime);
+  const executor = new TaskExecutor(repo, broadcaster, { runtimeManager: manager, preferredRuntimeId: 'omp' });
+  const { task } = await repo.createTask({
+    userId: 'user-1',
+    projectId: 'proj-1',
+    kind: 'coding_runtime',
+    payload: { useRuntime: true, prompt: 'push to repo' },
+  });
+  await executor.execute({ taskId: task.id, userId: task.userId, projectId: task.projectId, kind: task.kind, attempt: 0, maxAttempts: 3 });
+
+  const updated = await repo.getTask(task.userId, task.id);
+  assert.equal(updated?.status, 'failed');
+  assert.ok(String(updated?.error).includes('Aksi push, merge, atau deploy dilarang keras'));
 });
 
 
@@ -543,6 +708,7 @@ test('Task resume from versioned checkpoint verifies last step before executing 
     kind: 'generic_task',
     payload: {
       action: 'tool:call_external_service',
+      isSimulation: true,
     },
   });
 

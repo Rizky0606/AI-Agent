@@ -23,16 +23,22 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
   const {
     data: conversations,
     isLoading,
+    isError,
     refetch,
   } = useConversations(activeProjectId ?? undefined);
   const createConversation = useCreateConversation();
 
   const handleCreate = async () => {
-    const newConv = await createConversation.mutateAsync({
-      projectId: activeProjectId ?? undefined,
-      title: `Percakapan ${new Date().toLocaleDateString('id-ID')}`,
-    });
-    onSelectConversation(newConv.id, newConv.title ?? undefined);
+    if (createConversation.isPending) return;
+    try {
+      const newConv = await createConversation.mutateAsync({
+        projectId: activeProjectId ?? undefined,
+        title: `Percakapan ${new Date().toLocaleDateString('id-ID')}`,
+      });
+      onSelectConversation(newConv.id, newConv.title ?? undefined);
+    } catch {
+      useUiStore.getState().showToast('Percakapan baru gagal dibuat');
+    }
   };
 
   return (
@@ -49,14 +55,13 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
             const isSelected = activeProjectId === item.id;
             return (
               <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityState={{ selected: isSelected }}
+                accessibilityLabel={`Workspace ${item.name}`}
                 style={[styles.projectChip, isSelected && styles.projectChipSelected]}
                 onPress={() => setActiveProjectId(item.id)}
               >
-                <Text
-                  style={[styles.projectChipText, isSelected && styles.projectChipTextSelected]}
-                >
-                  {item.name}
-                </Text>
+                <Text style={[styles.projectChipText, isSelected && styles.projectChipTextSelected]}>{item.name}</Text>
               </TouchableOpacity>
             );
           }}
@@ -67,14 +72,20 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
       {isLoading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator color={theme.colors.primary} size="large" />
+          <Text style={styles.stateText}>Memuat percakapan…</Text>
+        </View>
+      ) : isError ? (
+        <View style={styles.centerContainer}>
+          <Text style={styles.emptyTitle}>Percakapan gagal dimuat</Text>
+          <Text style={styles.emptySubtitle}>Periksa koneksi, lalu coba lagi.</Text>
+          <TouchableOpacity accessibilityRole="button" style={styles.createButton} onPress={() => void refetch()}><Text style={styles.createButtonText}>Coba lagi</Text></TouchableOpacity>
         </View>
       ) : conversations?.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyTitle}>Belum Ada Percakapan</Text>
-          <Text style={styles.emptySubtitle}>Mulai percakapan baru dengan asisten AI Anda</Text>
-          <TouchableOpacity style={styles.createButton} onPress={handleCreate}>
-            <Text style={styles.createButtonText}>+ Percakapan Baru</Text>
-          </TouchableOpacity>
+          <Text style={styles.emptyMark}>✦</Text>
+          <Text style={styles.emptyTitle}>Belum ada percakapan</Text>
+          <Text style={styles.emptySubtitle}>Mulai percakapan baru. Riwayat tersedia lintas perangkat.</Text>
+          <TouchableOpacity accessibilityRole="button" style={styles.createButton} onPress={handleCreate} disabled={createConversation.isPending}><Text style={styles.createButtonText}>{createConversation.isPending ? 'Membuat…' : '+ Percakapan baru'}</Text></TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -84,31 +95,20 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
           refreshing={isLoading}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.convCard}
-              onPress={() => onSelectConversation(item.id, item.title ?? undefined)}
-            >
-              <View style={styles.convHeader}>
-                <Text style={styles.convTitle} numberOfLines={1}>
-                  {item.title || 'Percakapan Tanpa Judul'}
-                </Text>
-                <Text style={styles.convDate}>
-                  {new Date(item.updatedAt).toLocaleDateString('id-ID')}
-                </Text>
-              </View>
-              <Text style={styles.convPreview} numberOfLines={1}>
-                Ketuk untuk membuka obrolan streaming...
-              </Text>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Buka ${item.title || 'percakapan tanpa judul'}`} style={styles.convCard} onPress={() => onSelectConversation(item.id, item.title ?? undefined)}>
+              <View style={styles.convHeader}><Text style={styles.convTitle} numberOfLines={1}>{item.title || 'Percakapan Tanpa Judul'}</Text><Text style={styles.convDate}>{new Date(item.updatedAt).toLocaleDateString('id-ID')}</Text></View>
+              <Text style={styles.convPreview} numberOfLines={1}>Ketuk untuk membuka obrolan streaming…</Text>
             </TouchableOpacity>
           )}
         />
       )}
 
       {conversations && conversations.length > 0 ? (
-        <TouchableOpacity style={styles.fab} onPress={handleCreate}>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Buat percakapan baru" style={styles.fab} onPress={handleCreate} disabled={createConversation.isPending}>
           <Text style={styles.fabText}>+</Text>
         </TouchableOpacity>
       ) : null}
+
     </View>
   );
 };
@@ -157,6 +157,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: theme.spacing.xl,
   },
+  stateText: { color: theme.colors.textSecondary, ...theme.typography.body, marginTop: theme.spacing.sm },
+  emptyMark: { color: theme.colors.primary, fontSize: 32, marginBottom: theme.spacing.sm },
   emptyTitle: {
     color: theme.colors.textPrimary,
     fontSize: 18,
@@ -214,9 +216,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: theme.spacing.xl,
     right: theme.spacing.xl,
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: theme.controls.minTouchTarget,
+    height: theme.controls.minTouchTarget,
+    borderRadius: theme.controls.minTouchTarget / 2,
     backgroundColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',

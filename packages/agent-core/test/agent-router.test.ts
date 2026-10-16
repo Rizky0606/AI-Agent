@@ -123,3 +123,105 @@ test('AgentRouter: routes tasks to appropriate model, runtime, and handles devic
   assert.equal(sandboxRes.route.requiresSandbox, true);
   assert.match(sandboxRes.route.reason, /sandbox isolasi belum tersedia/i);
 });
+
+test('AgentRouter: policy-based routing to omp, hermes, and native', () => {
+  const router = new AgentRouter();
+
+  // Coding -> omp
+  const codingRes = router.route('Perbaiki bug syntax di repo frontend', { userId: 'u1' });
+  assert.equal(codingRes.route.intent, 'coding');
+  assert.equal(codingRes.route.selectedRuntimeId, 'omp');
+
+  // Automation / Skill -> hermes
+  const autoRes = router.route('Jalankan otomasi jadwal workflow telegram bot', { userId: 'u1' });
+  assert.equal(autoRes.route.intent, 'automation');
+  assert.equal(autoRes.route.selectedRuntimeId, 'hermes');
+  assert.equal(autoRes.plan.taskKind, 'automation');
+
+  // Simple chat -> native
+  const chatRes = router.route('Halo selamat malam', { userId: 'u1' });
+  assert.equal(chatRes.route.intent, 'simple_chat');
+  assert.equal(chatRes.route.selectedRuntimeId, 'native');
+});
+
+test('AgentRouter: user runtime overrides bypass intent-based defaults', () => {
+  const router = new AgentRouter();
+
+  // Prompt is coding, but user overrides with 'hermes'
+  const overrideHermes = router.route('Perbaiki bug syntax di repo frontend', {
+    userId: 'u1',
+    preferredRuntimeId: 'hermes',
+  });
+  assert.equal(overrideHermes.route.intent, 'coding');
+  assert.equal(overrideHermes.route.selectedRuntimeId, 'hermes');
+
+  // Prompt is automation, but user overrides with 'omp'
+  const overrideOmp = router.route('Jalankan workflow otomasi berkala', {
+    userId: 'u1',
+    preferredRuntimeId: 'omp',
+  });
+  assert.equal(overrideOmp.route.intent, 'automation');
+  assert.equal(overrideOmp.route.selectedRuntimeId, 'omp');
+
+  // User explicitly selects 'native'
+  const overrideNative = router.route('Perbaiki fungsi kalkulasi di repo', {
+    userId: 'u1',
+    preferredRuntimeId: 'native',
+  });
+  assert.equal(overrideNative.route.selectedRuntimeId, 'native');
+});
+
+test('AgentRouter: routeWithHealth triggers explicit fallback when primary runtime is unhealthy', async () => {
+  const mockManager = {
+    getAllRuntimes() {
+      return [{ id: 'omp' }, { id: 'hermes' }];
+    },
+    getRuntime(id: string) {
+      if (id === 'omp' || id === 'hermes') return {} as never;
+      return undefined;
+    },
+    async healthCheck(id: string) {
+      if (id === 'omp') {
+        return { healthy: false, error: 'OMP socket connection refused' };
+      }
+      if (id === 'hermes') {
+        return { healthy: true };
+      }
+      return { healthy: true };
+    },
+  };
+
+  const router = new AgentRouter(undefined, undefined, mockManager as never);
+
+  // Coding would normally route to 'omp', but 'omp' is unhealthy -> falls back to 'hermes'
+  const result = await router.routeWithHealth('Perbaiki bug di repo auth', { userId: 'u1' });
+  assert.equal(result.route.selectedRuntimeId, 'hermes');
+  assert.equal(result.route.fallbackUsed, true);
+  assert.equal(result.route.originalRuntimeId, 'omp');
+  assert.ok(result.route.fallbackReason?.includes('omp'));
+  assert.ok(result.route.fallbackReason?.includes('hermes'));
+});
+
+test('AgentRouter: routeWithHealth falls back to native when both external runtimes are unhealthy', async () => {
+  const mockManager = {
+    getAllRuntimes() {
+      return [{ id: 'omp' }, { id: 'hermes' }];
+    },
+    getRuntime(id: string) {
+      if (id === 'omp' || id === 'hermes') return {} as never;
+      return undefined;
+    },
+    async healthCheck(id: string) {
+      return { healthy: false, error: `${id} is down` };
+    },
+  };
+
+  const router = new AgentRouter(undefined, undefined, mockManager as never);
+
+  const result = await router.routeWithHealth('Jalankan skrip otomasi workflow telegram', { userId: 'u1' });
+  assert.equal(result.route.selectedRuntimeId, 'native');
+  assert.equal(result.route.fallbackUsed, true);
+  assert.equal(result.route.originalRuntimeId, 'hermes');
+  assert.ok(result.route.fallbackReason?.includes('native'));
+});
+

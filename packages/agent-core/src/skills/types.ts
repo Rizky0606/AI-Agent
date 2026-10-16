@@ -42,6 +42,11 @@ export interface SkillRecord {
   isEnabled: boolean;
   isDefault: boolean;
   scope: string;
+  source?: string | undefined;
+  isReadOnly?: boolean | undefined;
+  lastUsedAt?: Date | null | undefined;
+  lastOutcome?: 'success' | 'failure' | undefined;
+  lastError?: string | null | undefined;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -145,7 +145,44 @@ export class IntentAnalyzer {
       };
     }
 
-    // 5. Default to Simple Chat
+    // 5. Check for Automation & Skill intent (Hermes)
+    const automationKeywords = [
+      'otomasi',
+      'automasi',
+      'automation',
+      'skill',
+      'hermes',
+      'workflow',
+      'jadwal',
+      'schedule',
+      'cron',
+      'telegram',
+      'bot',
+      'script',
+      'notifikasi',
+      'integrasi',
+      'webhook',
+    ];
+
+    const hasAutomationKeywords = automationKeywords.some((kw) => {
+      const regex = new RegExp(`\\b${kw}\\b`, 'i');
+      return regex.test(lower);
+    });
+
+    if (hasAutomationKeywords) {
+      return {
+        intent: 'automation',
+        confidence: 0.9,
+        recommendedRuntime: 'repo_runtime',
+        reasoning:
+          'Permintaan melibatkan alur kerja otomasi tugas, eksekusi skill, atau integrasi layanan.',
+        extractedEntities: {
+          actions: [trimmed],
+        },
+      };
+    }
+
+    // 6. Default to Simple Chat
     return {
       intent: 'simple_chat',
       confidence: 0.95,

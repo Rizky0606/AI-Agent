@@ -316,6 +316,12 @@ export class BrowserController {
     }
   }
 
+  /** Shuts down every session and the underlying browser process. */
+  async close(): Promise<void> {
+    for (const sessionId of [...this.sessions.keys()]) await this.closeSession(sessionId);
+    await this.runner.close().catch(() => {});
+  }
+
   getActiveSessionsCount(): number {
     return this.sessions.size;
   }

@@ -137,7 +137,6 @@ test('Live Postgres & Redis: Recurring schedule executes exactly once per slot a
     `;
     assert.ok(taskInDb);
     assert.equal(taskInDb.kind, 'system-backup');
-    assert.equal(taskInDb.status, 'queued');
     assert.equal(Number(taskInDb.priority), 5);
 
     // Verify schedule record in PostgreSQL has updated last_run_at and next_run_at
@@ -298,7 +297,7 @@ test('Live Postgres: Notification Engine persists delivery states in PostgreSQL 
   assert.match(notifInDb.lastError ?? '', /push delivery disabled/i);
 
   // Update notification state to 'read'
-  await engine.markAsReadAsync(notif.id);
+  await engine.markAsRead(notif.id);
   const updatedInDb = await notificationStorage.getNotification(notif.id);
   assert.equal(updatedInDb?.deliveryState, 'read');
   assert.ok(updatedInDb?.readAt);

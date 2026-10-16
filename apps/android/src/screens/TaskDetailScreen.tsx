@@ -83,6 +83,8 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
   const humanTimeline = liveEvents.map((evt) => {
     let title = 'Pembaruan Tugas';
     let detail = '';
+    let diff: string | undefined;
+    let path: string | undefined;
 
     switch (evt.eventType) {
       case 'task.created':
@@ -94,18 +96,31 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
         detail = 'Asisten AI mulai menganalisis rencana kerja.';
         break;
       case 'task.progress':
-        title = `Progres: ${evt.payload?.progress ?? 0}%`;
-        detail =
-          typeof evt.payload?.action === 'string'
-            ? `Langkah: ${evt.payload.action.replace('_', ' ')}`
-            : 'Menjalankan instruksi berurutan...';
+        if (evt.payload?.action === 'file_edit') {
+          title = 'Modifikasi File (Diff)';
+          path = typeof evt.payload?.path === 'string' ? evt.payload.path : undefined;
+          diff = typeof evt.payload?.diff === 'string' ? evt.payload.diff : undefined;
+          detail = path ? `Mengubah file: ${path}` : 'Perubahan file diterapkan.';
+        } else if (evt.payload?.action === 'runtime_fallback') {
+          title = 'Pengalihan Runtime (Fallback)';
+          detail = String(evt.payload?.fallbackReason ?? 'Runtime dialihkan karena kendala kesiapan sistem.');
+        } else if (evt.payload?.action === 'runtime_stream') {
+          title = 'Output Runtime (Streaming)';
+          detail = String(evt.payload?.text ?? '');
+        } else {
+          title = `Progres: ${evt.payload?.progress ?? 0}%`;
+          detail =
+            typeof evt.payload?.action === 'string'
+              ? `Langkah: ${evt.payload.action.replace('_', ' ')}`
+              : 'Menjalankan instruksi berurutan...';
+        }
         break;
       case 'task.tool_call':
-        title = 'Penggunaan Alat / Resource';
+        title = 'Penggunaan Alat: ' + (evt.payload?.action ?? evt.payload?.tool ?? 'tool');
         detail =
-          typeof evt.payload?.action === 'string'
-            ? `Menjalankan alat: ${evt.payload.action}`
-            : 'Pemeriksaan resource selesai.';
+          typeof evt.payload?.output === 'string'
+            ? evt.payload.output.slice(0, 150)
+            : 'Pemeriksaan resource / alat selesai.';
         break;
       case 'task.waiting_approval':
         title = 'Menunggu Persetujuan Anda ⚠️';
@@ -143,6 +158,8 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
       id: evt.id,
       title,
       detail,
+      diff,
+      path,
       time: new Date(evt.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
   });
@@ -184,7 +201,23 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
 
         {/* Overview Card */}
         <View style={styles.card}>
-          <Text style={styles.taskKindTitle}>{task.kind.replace('_', ' ').toUpperCase()}</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.taskKindTitle}>{task.kind.replace('_', ' ').toUpperCase()}</Text>
+            {Boolean(task.payload?.runtime || task.payload?.selectedRuntimeId) && (
+              <Text style={styles.runtimeBadgeText}>
+                {String(task.payload?.runtime || task.payload?.selectedRuntimeId)}
+              </Text>
+            )}
+          </View>
+
+          {task.payload?.runtimeFallback === true ? (
+            <View style={styles.fallbackNotice}>
+              <Text style={styles.fallbackNoticeTitle}>⚠️ Pengalihan Runtime Otomatis</Text>
+              <Text style={styles.fallbackNoticeText}>
+                {String(task.payload?.fallbackReason || `Dialihkan dari ${task.payload?.originalRuntimeId}`)}
+              </Text>
+            </View>
+          ) : null}
 
           <View style={styles.progressRow}>
             <Text style={styles.label}>Penyelesaian</Text>
@@ -230,7 +263,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
 
         {/* Action Controls */}
         <View style={styles.controlsRow}>
-          {task.status === 'running' ? (
+          {task.status === 'running' && task.payload?.supportsPause === true ? (
             <TouchableOpacity
               style={[styles.controlBtn, styles.pauseBtn]}
               onPress={() => pauseMutation.mutate(task.id)}
@@ -239,7 +272,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
             </TouchableOpacity>
           ) : null}
 
-          {task.status === 'paused' ? (
+          {task.status === 'paused' && task.payload?.supportsPause === true ? (
             <TouchableOpacity
               style={[styles.controlBtn, styles.resumeBtn]}
               onPress={() => resumeMutation.mutate(task.id)}
@@ -255,7 +288,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
               style={[styles.controlBtn, styles.cancelBtn]}
               onPress={() => cancelMutation.mutate(task.id)}
             >
-              <Text style={styles.controlBtnText}>Batalkan</Text>
+              <Text style={styles.controlBtnText}>Hentikan</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -275,6 +308,12 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
                     <Text style={styles.timelineTime}>{item.time}</Text>
                   </View>
                   <Text style={styles.timelineDetail}>{item.detail}</Text>
+                  {item.diff ? (
+                    <View style={{ marginTop: 6, padding: 8, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4 }}>
+                      {item.path ? <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>{item.path}</Text> : null}
+                      <Text style={{ fontFamily: 'monospace', fontSize: 11, color: theme.colors.textPrimary }}>{item.diff}</Text>
+                    </View>
+                  ) : null}
                 </View>
               </View>
             ))
@@ -403,6 +442,42 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '700',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: theme.spacing.sm,
+  },
+  runtimeBadgeText: {
+    color: theme.colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    backgroundColor: theme.colors.surfaceElevated,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+  },
+  fallbackNotice: {
+    backgroundColor: theme.colors.riskHighBg,
+    borderColor: theme.colors.warning,
+    borderWidth: 1,
+    padding: theme.spacing.sm,
+    borderRadius: theme.borderRadius.sm,
+    marginBottom: theme.spacing.md,
+  },
+  fallbackNoticeTitle: {
+    color: theme.colors.warning,
+    fontWeight: '700',
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  fallbackNoticeText: {
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    lineHeight: 16,
   },
   errorNotice: {
     backgroundColor: theme.colors.dangerBg,

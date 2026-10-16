@@ -1,4 +1,17 @@
-export type { TaskRecord, TaskEventEnvelope, TaskStatus } from '@personal-ai-os/shared';
+import type { TaskRecord, TaskEventEnvelope, TaskStatus } from '@personal-ai-os/shared';
+export type { TaskRecord, TaskEventEnvelope, TaskStatus };
+export type TaskItem = TaskRecord;
+
+export type RuntimeId = 'auto' | 'omp' | 'hermes' | 'native';
+
+export interface RuntimeDescriptor {
+  id: 'omp' | 'hermes' | 'native';
+  name: string;
+  version: string;
+  status: 'ready' | 'offline';
+  healthText: string;
+  capabilities: string[];
+}
 
 export interface User {
   id: string;
@@ -85,19 +98,99 @@ export interface ApprovalRecord {
   createdAt: string;
 }
 
+export type ApprovalRequest = ApprovalRecord;
+
 export interface ArtifactItem {
   id: string;
-  name: string;
-  type: 'file' | 'code' | 'markdown' | 'report';
-  sizeBytes?: number | undefined;
-  url?: string | undefined;
+  filename: string;
+  mimeType: string;
+  size: number;
+  checksum?: string | undefined;
+  version?: number | undefined;
+  projectId?: string | null | undefined;
+  conversationId?: string | null | undefined;
+  taskId?: string | null | undefined;
   createdAt: string;
-  taskId?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface ArtifactPreview {
+  content: string;
+  truncated: boolean;
+}
+
+/** Body of `GET /ready`, the endpoint that actually reports dependency health. */
+export interface ReadyResponse {
+  status: 'ready' | 'not_ready';
+  checks: {
+    database: boolean;
+    redis: boolean;
+  };
 }
 
 export interface HealthResponse {
-  status: 'ok';
-  uptimeSeconds: number;
+  status: 'ready' | 'not_ready';
   database: 'connected' | 'disconnected';
   redis: 'connected' | 'disconnected';
 }
+
+export type ChatMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+
+export interface CapabilityDetail {
+  status: 'probed' | 'declared' | 'unknown';
+  latencyMs?: number | undefined;
+  verifiedAt?: string | undefined;
+}
+
+export interface ModelDescriptor {
+  id: string;
+  name?: string | undefined;
+  provider: string;
+  capabilities: string[];
+  capabilityDetails?: Record<string, CapabilityDetail> | undefined;
+  contextWindow?: number | undefined;
+  costMetadata?: Record<string, unknown> | undefined;
+  isRecommended?: boolean | undefined;
+  isDefault?: boolean | undefined;
+  availabilityStatus?: 'available' | 'degraded' | 'unavailable' | undefined;
+  lastLatencyMs?: number | null | undefined;
+}
+
+export interface UserPreferences {
+  defaultModel: string | null;
+  defaultMode: 'fast' | 'coding' | 'complex' | 'research';
+}
+
+export interface ModelCatalogResponse {
+  source: 'live' | 'persisted';
+  models: ModelDescriptor[];
+}
+
+export interface MemoryItem {
+  id: string;
+  userId: string;
+  projectId?: string | null | undefined;
+  type: 'preference' | 'decision' | 'knowledge' | 'session' | 'project' | 'task';
+  content: string;
+  scope: string;
+  provenance: string;
+  retention: string;
+  metadata?: Record<string, unknown> | undefined;
+  isProposal?: boolean | undefined;
+  status?: string | undefined;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemorySearchResult {
+  data: Array<{
+    memory: MemoryItem;
+    score: number;
+    searchMode?: 'semantic' | 'text_fallback' | undefined;
+  }>;
+  semanticSearchActive: boolean;
+  searchMode: 'semantic' | 'text_fallback';
+  status: 'active' | 'inactive';
+  notice?: string | undefined;
+}
+

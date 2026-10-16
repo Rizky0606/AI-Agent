@@ -1,48 +1,21 @@
-export const theme = {
-  colors: {
-    background: '#090d16',
-    surface: '#111827',
-    surfaceElevated: '#1f2937',
-    surfaceBorder: '#374151',
+import { createAndroidTheme, type AndroidTheme, type ColorScheme } from '@personal-ai-os/shared';
 
-    primary: '#3b82f6',
-    primaryHover: '#2563eb',
-    accent: '#6366f1',
+export const darkTheme = createAndroidTheme('dark');
+export const lightTheme = createAndroidTheme('light');
 
-    textPrimary: '#f9fafb',
-    textSecondary: '#9ca3af',
-    textMuted: '#6b7280',
+/** Default fallback theme for static StyleSheet definitions */
+export const theme = darkTheme;
 
-    // Risk levels
-    riskLow: '#38bdf8',
-    riskLowBg: '#082f49',
-    riskMedium: '#facc15',
-    riskMediumBg: '#422006',
-    riskHigh: '#fb923c',
-    riskHighBg: '#431407',
-    riskCritical: '#f87171',
-    riskCriticalBg: '#450a0a',
+/**
+ * Resolves the active theme based on user preference and system color scheme.
+ */
+export function resolveTheme(
+  preference: 'system' | 'light' | 'dark',
+  systemScheme?: ColorScheme | null,
+): AndroidTheme {
+  if (preference === 'light') return lightTheme;
+  if (preference === 'dark') return darkTheme;
+  return systemScheme === 'light' ? lightTheme : darkTheme;
+}
 
-    // Status colors
-    success: '#22c55e',
-    successBg: '#052e16',
-    warning: '#f59e0b',
-    danger: '#ef4444',
-    dangerBg: '#450a0a',
-    info: '#06b6d4',
-  },
-  spacing: {
-    xs: 4,
-    sm: 8,
-    md: 12,
-    lg: 16,
-    xl: 24,
-    xxl: 32,
-  },
-  borderRadius: {
-    sm: 6,
-    md: 10,
-    lg: 16,
-    full: 9999,
-  },
-};
+export type { AndroidTheme, ColorScheme };

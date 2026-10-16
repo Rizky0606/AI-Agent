@@ -13,11 +13,30 @@ export type MessageRecord = {
   createdAt: Date;
 };
 
+export type SessionMode = 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+
+export type ConversationMetadata = {
+  mode?: SessionMode;
+  model?: string | null;
+  workspaceId?: string | null;
+  parentConversationId?: string | null;
+  compactedSummary?: string | null;
+  lastEventId?: string | null;
+  archivedAt?: Date | null;
+};
+
 export type ConversationRecord = {
   id: string;
   userId: string;
   projectId: string;
   title?: string | null | undefined;
+  mode: SessionMode;
+  model?: string | null;
+  workspaceId?: string | null;
+  parentConversationId?: string | null;
+  compactedSummary?: string | null;
+  lastEventId?: string | null;
+  archivedAt?: Date | null;
   createdAt: Date;
 };
 
@@ -28,18 +47,20 @@ export interface ChatRepository {
     projectId: string,
     conversationId?: string,
     title?: string,
+    metadata?: ConversationMetadata,
   ): Promise<string>;
   createConversation(
     userId: string,
     projectId: string,
     title?: string,
+    metadata?: ConversationMetadata,
   ): Promise<ConversationRecord>;
-  listConversations(userId: string, projectId: string): Promise<ConversationRecord[]>;
+  listConversations(userId: string, projectId?: string): Promise<ConversationRecord[]>;
   getConversation(userId: string, conversationId: string): Promise<ConversationRecord | null>;
   updateConversation(
     userId: string,
     conversationId: string,
-    updates: { title?: string },
+    updates: { title?: string } & ConversationMetadata,
   ): Promise<ConversationRecord | null>;
   deleteConversation(userId: string, conversationId: string): Promise<boolean>;
   appendMessage(
@@ -48,6 +69,7 @@ export interface ChatRepository {
     role: 'system' | 'user' | 'assistant' | 'tool',
     content: string,
     metadata?: Record<string, unknown>,
+    id?: string,
   ): Promise<MessageRecord>;
   getMessages(userId: string, conversationId: string): Promise<MessageRecord[]>;
 }
@@ -86,6 +108,7 @@ export class SqlChatRepository implements ChatRepository {
     projectId: string,
     conversationId?: string,
     title?: string,
+    metadata?: ConversationMetadata,
   ): Promise<string> {
     if (conversationId) {
       const [existing] = await this.db
@@ -98,13 +121,8 @@ export class SqlChatRepository implements ChatRepository {
 
     const [created] = await this.db
       .insert(conversations)
-      .values({
-        userId,
-        projectId,
-        title: title ?? 'New Conversation',
-      })
+      .values({ userId, projectId, title: title ?? 'New Conversation', ...metadata })
       .returning({ id: conversations.id });
-
     if (!created) throw new Error('Failed to create conversation');
     return created.id;
   }
@@ -113,40 +131,25 @@ export class SqlChatRepository implements ChatRepository {
     userId: string,
     projectId: string,
     title?: string,
+    metadata?: ConversationMetadata,
   ): Promise<ConversationRecord> {
     const [created] = await this.db
       .insert(conversations)
-      .values({
-        userId,
-        projectId,
-        title: title ?? 'New Conversation',
-      })
+      .values({ userId, projectId, title: title ?? 'New Conversation', ...metadata })
       .returning();
 
     if (!created) throw new Error('Failed to create conversation');
-    return {
-      id: created.id,
-      userId: created.userId,
-      projectId: created.projectId,
-      title: created.title,
-      createdAt: created.createdAt,
-    };
+    return { ...created, mode: created.mode as SessionMode };
   }
 
-  async listConversations(userId: string, projectId: string): Promise<ConversationRecord[]> {
+  async listConversations(userId: string, projectId?: string): Promise<ConversationRecord[]> {
     const rows = await this.db
       .select()
       .from(conversations)
-      .where(and(eq(conversations.userId, userId), eq(conversations.projectId, projectId)))
+      .where(and(eq(conversations.userId, userId), projectId ? eq(conversations.projectId, projectId) : undefined))
       .orderBy(desc(conversations.createdAt));
 
-    return rows.map((r) => ({
-      id: r.id,
-      userId: r.userId,
-      projectId: r.projectId,
-      title: r.title,
-      createdAt: r.createdAt,
-    }));
+    return rows.map((r) => ({ ...r, mode: r.mode as SessionMode }));
   }
 
   async getConversation(
@@ -160,34 +163,21 @@ export class SqlChatRepository implements ChatRepository {
       .limit(1);
 
     if (!row) return null;
-    return {
-      id: row.id,
-      userId: row.userId,
-      projectId: row.projectId,
-      title: row.title,
-      createdAt: row.createdAt,
-    };
+    return { ...row, mode: row.mode as SessionMode };
   }
 
   async updateConversation(
     userId: string,
     conversationId: string,
-    updates: { title?: string },
+    updates: { title?: string } & ConversationMetadata,
   ): Promise<ConversationRecord | null> {
     const [row] = await this.db
       .update(conversations)
-      .set({ title: updates.title })
+      .set(updates)
       .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
       .returning();
-
     if (!row) return null;
-    return {
-      id: row.id,
-      userId: row.userId,
-      projectId: row.projectId,
-      title: row.title,
-      createdAt: row.createdAt,
-    };
+    return { ...row, mode: row.mode as SessionMode };
   }
 
   async deleteConversation(userId: string, conversationId: string): Promise<boolean> {
@@ -205,10 +195,12 @@ export class SqlChatRepository implements ChatRepository {
     role: 'system' | 'user' | 'assistant' | 'tool',
     content: string,
     metadata?: Record<string, unknown>,
+    id?: string,
   ): Promise<MessageRecord> {
     const [created] = await this.db
       .insert(messages)
       .values({
+        id,
         userId,
         conversationId,
         role,
@@ -250,10 +242,7 @@ export class SqlChatRepository implements ChatRepository {
 
 export class InMemoryChatRepository implements ChatRepository {
   private projects = new Map<string, { id: string; userId: string; name: string }>();
-  private conversations = new Map<
-    string,
-    { id: string; userId: string; projectId: string; title: string; createdAt: Date }
-  >();
+  private conversations = new Map<string, ConversationRecord>();
   private messages: MessageRecord[] = [];
 
   async getOrCreateDefaultProject(userId: string): Promise<string> {
@@ -271,17 +260,20 @@ export class InMemoryChatRepository implements ChatRepository {
     projectId: string,
     conversationId?: string,
     title?: string,
+    metadata?: ConversationMetadata,
   ): Promise<string> {
     if (conversationId && this.conversations.has(conversationId)) {
       const conv = this.conversations.get(conversationId)!;
       if (conv.userId === userId) return conv.id;
     }
-    const id = conversationId ?? crypto.randomUUID();
+    const id = crypto.randomUUID();
     this.conversations.set(id, {
       id,
       userId,
       projectId,
       title: title ?? 'New Conversation',
+      mode: metadata?.mode ?? 'auto',
+      ...metadata,
       createdAt: new Date(),
     });
     return id;
@@ -291,22 +283,20 @@ export class InMemoryChatRepository implements ChatRepository {
     userId: string,
     projectId: string,
     title?: string,
+    metadata?: ConversationMetadata,
   ): Promise<ConversationRecord> {
-    const id = crypto.randomUUID();
-    const conv = {
-      id,
-      userId,
-      projectId,
-      title: title ?? 'New Conversation',
-      createdAt: new Date(),
+    const conv: ConversationRecord = {
+      id: crypto.randomUUID(), userId, projectId,
+      title: title ?? 'New Conversation', mode: metadata?.mode ?? 'auto',
+      ...metadata, createdAt: new Date(),
     };
-    this.conversations.set(id, conv);
+    this.conversations.set(conv.id, conv);
     return { ...conv };
   }
 
-  async listConversations(userId: string, projectId: string): Promise<ConversationRecord[]> {
+  async listConversations(userId: string, projectId?: string): Promise<ConversationRecord[]> {
     return [...this.conversations.values()]
-      .filter((c) => c.userId === userId && c.projectId === projectId)
+      .filter((c) => c.userId === userId && (!projectId || c.projectId === projectId))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((c) => ({ ...c }));
   }
@@ -323,11 +313,12 @@ export class InMemoryChatRepository implements ChatRepository {
   async updateConversation(
     userId: string,
     conversationId: string,
-    updates: { title?: string },
+    updates: { title?: string } & ConversationMetadata,
   ): Promise<ConversationRecord | null> {
     const conv = this.conversations.get(conversationId);
     if (!conv || conv.userId !== userId) return null;
     if (updates.title !== undefined) conv.title = updates.title;
+    Object.assign(conv, updates);
     return { ...conv };
   }
 
@@ -345,9 +336,10 @@ export class InMemoryChatRepository implements ChatRepository {
     role: 'system' | 'user' | 'assistant' | 'tool',
     content: string,
     metadata?: Record<string, unknown>,
+    id?: string,
   ): Promise<MessageRecord> {
     const msg: MessageRecord = {
-      id: crypto.randomUUID(),
+      id: id ?? crypto.randomUUID(),
       userId,
       conversationId,
       role,

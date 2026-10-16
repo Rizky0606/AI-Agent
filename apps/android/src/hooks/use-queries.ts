@@ -79,7 +79,7 @@ export const useCreateConversation = () => {
 
 // --- Tasks ---
 export const useTasks = (
-  filters?: { projectId?: string | undefined; status?: string | undefined } | undefined,
+  filters?: { projectId?: string | undefined; status?: string | undefined; conversationId?: string | undefined } | undefined,
 ) =>
   useQuery({
     queryKey: ['tasks', filters],
@@ -107,6 +107,7 @@ export const useCreateTask = () => {
       projectId: string;
       kind: string;
       payload?: Record<string, unknown> | undefined;
+      conversationId?: string | undefined;
       priority?: number | undefined;
     }) => defaultApiClient.createTask(data),
     onSuccess: () => {
@@ -193,3 +194,44 @@ export const useHealth = () =>
     queryFn: () => defaultApiClient.checkHealth(),
     refetchInterval: 30_000,
   });
+
+// --- Skills ---
+export const useSkills = () =>
+  useQuery({
+    queryKey: ['skills'],
+    queryFn: () => defaultApiClient.listSkills().then((r) => r.skills),
+  });
+
+export const useProjectSkills = (projectId: string) =>
+  useQuery({
+    queryKey: ['project-skills', projectId],
+    queryFn: () => defaultApiClient.listProjectSkills(projectId).then((r) => r.skills),
+    enabled: Boolean(projectId),
+  });
+
+export const useToggleProjectSkill = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { projectId: string; skillName: string; isEnabled: boolean }) =>
+      defaultApiClient.toggleProjectSkill(data.projectId, data.skillName, data.isEnabled),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['skills'] });
+      void qc.invalidateQueries({ queryKey: ['project-skills', vars.projectId] });
+    },
+  });
+};
+
+// --- MCP ---
+export const useMcpServers = () =>
+  useQuery({
+    queryKey: ['mcp-servers'],
+    queryFn: () => defaultApiClient.listMcpServers().then((r) => r.servers),
+  });
+
+export const useMcpLogs = (serverId?: string) =>
+  useQuery({
+    queryKey: ['mcp-logs', serverId],
+    queryFn: () => defaultApiClient.listMcpLogs(serverId ? { serverId, limit: 30 } : { limit: 30 }).then((r) => r.logs),
+  });
+
+

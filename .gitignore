@@ -8,4 +8,10 @@ coverage/
 *.log
 *.tsbuildinfo
 apps/android/personal-ai-os.apk
+# Expo continuous native generation output (recreate with `npx expo prebuild`)
+apps/android/android/
+# Metro bundle smoke output, produced by the android `build` script.
+apps/android/.expo-export/
+data/
 apps/windows/src-tauri/target/
+apps/windows/src-tauri/gen/schemas/

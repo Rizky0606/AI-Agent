@@ -12,4 +12,6 @@ export interface StorageAdapter {
   putStream(key: string, stream: Readable): Promise<StoragePutResult>;
   delete(key: string): Promise<boolean>;
   exists(key: string): Promise<boolean>;
+  /** Enumerates keys beginning with `prefix`. An absent prefix yields an empty list. */
+  listKeys(prefix: string): Promise<string[]>;
 }

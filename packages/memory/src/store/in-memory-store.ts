@@ -4,6 +4,7 @@ import type {
   MemoryFilter,
   MemoryProvenance,
   MemoryRecord,
+  MemoryStatus,
   SemanticSearchOptions,
   SemanticSearchResult,
 } from '../types.ts';
@@ -40,6 +41,8 @@ export class InMemoryMemoryStore implements MemoryStore {
       scope: candidate.scope,
       provenance: candidate.provenance,
       metadata: candidate.metadata ?? {},
+      isProposal: candidate.metadata?.['isProposal'] === true,
+      status: (candidate.metadata?.['status'] as MemoryStatus | undefined) ?? (candidate.metadata?.['isProposal'] === true ? 'proposed' : undefined),
       retention: candidate.retention ?? 'permanent',
       embedding,
       createdAt: now,
@@ -83,6 +86,14 @@ export class InMemoryMemoryStore implements MemoryStore {
       // 5. Scope filter
       if (filter?.scope && record.scope !== filter.scope) continue;
 
+      // 6. Proposal filter: by default omit proposed items unless includeProposals is true
+      if (
+        !filter?.includeProposals &&
+        (record.metadata['isProposal'] === true || record.metadata['status'] === 'proposed')
+      ) {
+        continue;
+      }
+
       results.push(record);
     }
 
@@ -92,6 +103,86 @@ export class InMemoryMemoryStore implements MemoryStore {
     const offset = filter?.offset ?? 0;
     const limit = filter?.limit ?? 100;
     return results.slice(offset, offset + limit);
+  }
+
+  async listProposals(userId: string, projectId?: string | null | undefined): Promise<readonly MemoryRecord[]> {
+    const results: MemoryRecord[] = [];
+    for (const record of this.records.values()) {
+      if (record.userId !== userId) continue;
+      if (record.deletedAt) continue;
+      if (projectId !== undefined && record.projectId !== projectId && record.projectId !== null) {
+        continue;
+      }
+      if (record.metadata['isProposal'] === true || record.metadata['status'] === 'proposed') {
+        results.push(record);
+      }
+    }
+    results.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return results;
+  }
+
+  async createProposal(candidate: MemoryCandidate): Promise<MemoryRecord> {
+    return this.store({
+      ...candidate,
+      metadata: {
+        ...(candidate.metadata ?? {}),
+        isProposal: true,
+        status: 'proposed',
+      },
+    });
+  }
+
+  async approveProposal(userId: string, id: string): Promise<MemoryRecord> {
+    const existing = this.records.get(id);
+    if (!existing || existing.userId !== userId) {
+      throw new Error(`Proposal '${id}' not found for user '${userId}'.`);
+    }
+    const updated: MemoryRecord = {
+      ...existing,
+      isProposal: false,
+      status: 'approved',
+      metadata: {
+        ...existing.metadata,
+        isProposal: false,
+        status: 'approved',
+      },
+      updatedAt: new Date(),
+    };
+    this.records.set(id, updated);
+    return updated;
+  }
+
+  async rejectProposal(userId: string, id: string): Promise<boolean> {
+    const existing = this.records.get(id);
+    if (!existing || existing.userId !== userId) return false;
+    existing.deletedAt = new Date();
+    existing.isProposal = false;
+    existing.status = 'rejected';
+    existing.metadata = {
+      ...existing.metadata,
+      status: 'rejected',
+    };
+    this.records.set(id, existing);
+    return true;
+  }
+
+  sweep(now: Date = new Date()): string[] {
+    const sweptIds: string[] = [];
+    for (const record of this.records.values()) {
+      if (record.deletedAt) continue;
+      const ageMs = now.getTime() - record.createdAt.getTime();
+      let expired = false;
+      if (record.retention === 'ephemeral' && ageMs >= 3_600_000) expired = true;
+      else if (record.retention === 'session' && ageMs >= 86_400_000) expired = true;
+      else if (record.retention === '30d' && ageMs >= 30 * 86_400_000) expired = true;
+      else if (record.retention === '90d' && ageMs >= 90 * 86_400_000) expired = true;
+
+      if (expired) {
+        record.deletedAt = now;
+        sweptIds.push(record.id);
+      }
+    }
+    return sweptIds;
   }
 
   async correct(
@@ -162,7 +253,11 @@ export class InMemoryMemoryStore implements MemoryStore {
       }
 
       if (score >= threshold) {
-        results.push({ memory: mem, score });
+        results.push({
+          memory: mem,
+          score,
+          searchMode: options.queryEmbedding ? 'semantic' : 'text_fallback',
+        });
       }
     }
 

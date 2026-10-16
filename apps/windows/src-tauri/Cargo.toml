@@ -1,6 +1,6 @@
 [package]
 name = "personal-ai-os-windows"
-version = "0.1.0"
+version = "0.3.0"
 description = "Personal AI OS Windows Agent Tauri 2 application"
 edition = "2021"
 
@@ -8,14 +8,21 @@ edition = "2021"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = [] }
-tauri-plugin-shell = "2.0"
+tauri = { version = "2.0", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 thiserror = "2.0"
 tracing = "0.1"
 dunce = "1.0"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "sha256", "std"] }
+base64 = "0.22"
+rand_core = { version = "0.6", features = ["std"] }
+tauri-plugin-updater = "2.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

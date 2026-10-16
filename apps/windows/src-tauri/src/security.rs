@@ -10,12 +10,23 @@ pub enum SecurityError {
     PathTraversal(String),
     #[error("Invalid path format: alternate data streams or device namespaces rejected ('{0}')")]
     InvalidPathFormat(String),
-    #[error("Capability '{0}' is disabled by user policy")]
-    CapabilityDisabled(String),
     #[error("Command execution timed out after {0} ms")]
     ExecutionTimeout(u64),
-    #[error("Output exceeded max buffer size ({0} bytes)")]
-    OutputBufferExceeded(usize),
+    #[error("COMMAND_NOT_ALLOWED ({1}): \"{0}\" is not on the local command allowlist")]
+    CommandNotAllowed(String, &'static str),
+}
+
+impl SecurityError {
+    /// The wire code the Windows agent reports; the human-readable detail is in `Display`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            SecurityError::PathOutsideAllowlist(_) => "PATH_OUTSIDE_ALLOWLIST",
+            SecurityError::PathTraversal(_) => "PATH_TRAVERSAL",
+            SecurityError::InvalidPathFormat(_) => "INVALID_PATH_FORMAT",
+            SecurityError::ExecutionTimeout(_) => "EXECUTION_TIMEOUT",
+            SecurityError::CommandNotAllowed(_, _) => "COMMAND_NOT_ALLOWED",
+        }
+    }
 }
 
 pub struct PathAllowlistManager {
@@ -26,12 +37,6 @@ impl PathAllowlistManager {
     pub fn new() -> Self {
         Self {
             allowed_roots: RwLock::new(Vec::new()),
-        }
-    }
-
-    pub fn with_roots(roots: Vec<PathBuf>) -> Self {
-        Self {
-            allowed_roots: RwLock::new(roots),
         }
     }
 
@@ -57,21 +62,49 @@ impl PathAllowlistManager {
     pub fn validate_safe_path(&self, candidate: &Path) -> Result<(), SecurityError> {
         let path_str = candidate.to_string_lossy();
 
-        // 1. Reject Alternate Data Streams (e.g., file.txt:secret)
-        if path_str.contains(':') && !path_str[1..].starts_with(":\\") && !path_str[1..].starts_with(":/") {
+        // 0. Reject Null Bytes
+        if path_str.contains('\0') {
             return Err(SecurityError::InvalidPathFormat(path_str.to_string()));
         }
 
-        // 2. Reject Device Namespaces (e.g. \\.\ or \\?\)
-        if path_str.starts_with(r"\\.\") || path_str.starts_with(r"\\?\") {
+        // 1. Reject Alternate Data Streams (e.g., file.txt:secret, C:\dir:stream, C:\file::$DATA)
+        // On Windows, the ONLY valid colon is at index 1 following an ASCII drive letter (e.g. C:\ or C:/).
+        let has_invalid_colon = path_str.chars().enumerate().any(|(i, c)| {
+            if c == ':' {
+                if i != 1 {
+                    return true;
+                }
+                let first_char = path_str.chars().next().unwrap_or('\0');
+                if !first_char.is_ascii_alphabetic() {
+                    return true;
+                }
+            }
+            false
+        });
+        if has_invalid_colon {
             return Err(SecurityError::InvalidPathFormat(path_str.to_string()));
         }
 
-        // 3. Reject Traversal components (ParentDir / ..)
+        // 2. Reject Device Namespaces (e.g. \\.\ or \\?\) and UNC paths (e.g. \\server\share)
+        if path_str.starts_with(r"\\") {
+            return Err(SecurityError::InvalidPathFormat(path_str.to_string()));
+        }
+
+        // 3. Reject Traversal components (ParentDir / ..) and URL-encoded traversal
+        let lowered = path_str.to_ascii_lowercase();
+        if lowered.contains("%2e%2e") || lowered.contains("%2e") {
+            return Err(SecurityError::PathTraversal(path_str.to_string()));
+        }
+
         for comp in candidate.components() {
             if let Component::ParentDir = comp {
                 return Err(SecurityError::PathTraversal(path_str.to_string()));
             }
+        }
+
+        // 4. Reject trailing dots/spaces that Windows Win32 API strips/normalizes
+        if path_str.ends_with('.') || path_str.ends_with(' ') {
+            return Err(SecurityError::InvalidPathFormat(path_str.to_string()));
         }
 
         Ok(())
@@ -81,27 +114,99 @@ impl PathAllowlistManager {
         self.validate_safe_path(candidate)?;
 
         let target = if candidate.exists() {
-            dunce::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf())
+            dunce::canonicalize(candidate).map_err(|_| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?
         } else {
-            // Normalize path by resolving parent
-            candidate.to_path_buf()
+            let parent = candidate.parent().ok_or_else(|| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?;
+            let canonical_parent = dunce::canonicalize(parent).map_err(|_| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?;
+            canonical_parent.join(candidate.file_name().ok_or_else(|| {
+                SecurityError::PathOutsideAllowlist(candidate.to_string_lossy().to_string())
+            })?)
         };
 
         let roots = self.allowed_roots.read().unwrap();
-        if roots.is_empty() {
-            return Err(SecurityError::PathOutsideAllowlist(
+        if roots.iter().any(|root| target.starts_with(root)) {
+            Ok(target)
+        } else {
+            Err(SecurityError::PathOutsideAllowlist(
                 candidate.to_string_lossy().to_string(),
-            ));
+            ))
         }
+    }
+}
 
-        for root in roots.iter() {
-            if target.starts_with(root) {
-                return Ok(target);
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        Err(SecurityError::PathOutsideAllowlist(
-            candidate.to_string_lossy().to_string(),
-        ))
+    #[test]
+    fn test_rejects_alternate_data_streams_with_or_without_drive_letter() {
+        let manager = PathAllowlistManager::new();
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("C:\\allowed\\file.txt:secret")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("file.txt:stream")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("C:\\file.txt::$DATA")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("1:\\invalid\\drive")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+    }
+
+    #[test]
+    fn test_rejects_unc_and_device_namespaces() {
+        let manager = PathAllowlistManager::new();
+        assert!(matches!(
+            manager.validate_safe_path(Path::new(r"\\attacker\share\payload.exe")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new(r"\\.\COM1")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new(r"\\?\C:\secret")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+    }
+
+    #[test]
+    fn test_rejects_traversal_and_null_bytes() {
+        let manager = PathAllowlistManager::new();
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("C:\\allowed\\..\\..\\windows")),
+            Err(SecurityError::PathTraversal(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("C:\\allowed\\%2e%2e\\evil")),
+            Err(SecurityError::PathTraversal(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("C:\\allowed\\file\0.txt")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+        assert!(matches!(
+            manager.validate_safe_path(Path::new("C:\\allowed\\trailing.")),
+            Err(SecurityError::InvalidPathFormat(_))
+        ));
+    }
+
+    #[test]
+    fn test_accepts_valid_safe_paths() {
+        let manager = PathAllowlistManager::new();
+        assert!(manager.validate_safe_path(Path::new("C:\\allowed\\workspace\\file.txt")).is_ok());
+        assert!(manager.validate_safe_path(Path::new("relative/safe/path.txt")).is_ok());
     }
 }

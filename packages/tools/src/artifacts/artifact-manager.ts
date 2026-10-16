@@ -11,6 +11,7 @@ import {
   InvalidMimeTypeError,
   type CreateArtifactInput,
 } from './types.ts';
+import { MAGIC_BYTES_LENGTH, assertMimeMatchesContent } from './magic-bytes.ts';
 
 const DEFAULT_ALLOWED_MIME_TYPES = new Set([
   'text/plain',
@@ -31,12 +32,24 @@ const DEFAULT_ALLOWED_MIME_TYPES = new Set([
 const DEFAULT_USER_QUOTA_BYTES = 100 * 1024 * 1024; // 100 MB per user
 const DEFAULT_MAX_SINGLE_ARTIFACT_BYTES = 25 * 1024 * 1024; // 25 MB single artifact
 
+export interface ArtifactAuditRecord {
+  artifactId: string;
+  ownerId: string;
+  projectId?: string | null | undefined;
+  taskId?: string | null | undefined;
+  filename: string;
+  mimeType: string;
+  size: number;
+  checksum: string;
+}
+
 export interface ArtifactManagerOptions {
   storage: StorageAdapter;
   signingSecret?: string | undefined;
   userQuotaBytes?: number | undefined;
   maxSingleArtifactBytes?: number | undefined;
   allowedMimeTypes?: Set<string> | undefined;
+  auditSink?: ((record: ArtifactAuditRecord) => Promise<void> | void) | undefined;
 }
 
 export class ArtifactManager {
@@ -45,11 +58,14 @@ export class ArtifactManager {
   private readonly userQuotaBytes: number;
   private readonly maxSingleArtifactBytes: number;
   private readonly allowedMimeTypes: Set<string>;
+  private readonly auditSink?: ((record: ArtifactAuditRecord) => Promise<void> | void) | undefined;
 
   // Metadata store
   private readonly metadataStore = new Map<string, ArtifactMetadata>();
-  // User storage tracking
-  private readonly userUsage = new Map<string, number>();
+
+  // Metadata sidecar prefix. The in-memory map is process-local, so a shared
+  // storage backend is what lets the worker's artifacts resolve in the API process.
+  private static readonly META_PREFIX = '_meta/';
 
   constructor(options: ArtifactManagerOptions) {
     this.storage = options.storage;
@@ -58,6 +74,29 @@ export class ArtifactManager {
     this.maxSingleArtifactBytes =
       options.maxSingleArtifactBytes ?? DEFAULT_MAX_SINGLE_ARTIFACT_BYTES;
     this.allowedMimeTypes = options.allowedMimeTypes ?? DEFAULT_ALLOWED_MIME_TYPES;
+    this.auditSink = options.auditSink;
+  }
+
+  private metaKey(artifactId: string): string {
+    return `${ArtifactManager.META_PREFIX}${artifactId}.json`;
+  }
+
+  /**
+   * Resolves artifact metadata, falling back to a sidecar another process wrote and
+   * caching the result so repeated lookups stay in-memory.
+   */
+  private async loadMetadata(artifactId: string): Promise<ArtifactMetadata | undefined> {
+    const cached = this.metadataStore.get(artifactId);
+    if (cached) return cached;
+    try {
+      const raw = await this.storage.get(this.metaKey(artifactId));
+      const parsed = JSON.parse(raw.toString('utf8')) as ArtifactMetadata;
+      if (parsed.id !== artifactId) return undefined;
+      this.metadataStore.set(artifactId, parsed);
+      return parsed;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -101,16 +140,59 @@ export class ArtifactManager {
   }
 
   /**
+   * Returns the leading bytes used for signature validation. A stream keeps its bytes: the
+   * peeked head is pushed back so the upload still reaches storage complete.
+   */
+  private async headBytes(content: CreateArtifactInput['content']): Promise<Buffer> {
+    if (typeof (content as Readable).pipe !== 'function') {
+      const buffer = Buffer.isBuffer(content)
+        ? content
+        : Buffer.from(content as Uint8Array | string);
+      return buffer.subarray(0, MAGIC_BYTES_LENGTH);
+    }
+
+    const stream = content as Readable;
+    const head = await new Promise<Buffer>((resolve, reject) => {
+      const onReadable = (): void => {
+        const chunk = stream.read(MAGIC_BYTES_LENGTH) as Buffer | null;
+        if (!chunk) return;
+        stream.off('readable', onReadable);
+        stream.off('end', onEnd);
+        // Synchronous: an awaited unshift lands after the stream has already seen EOF and is
+        // destroyed, which would silently drop the bytes.
+        stream.unshift(chunk);
+        resolve(chunk);
+      };
+      // A stream that ends before the peek returns everything it had, including nothing.
+      const onEnd = (): void => {
+        stream.off('readable', onReadable);
+        resolve((stream.read() as Buffer | null) ?? Buffer.alloc(0));
+      };
+      stream.on('readable', onReadable);
+      stream.on('end', onEnd);
+      stream.on('error', reject);
+    });
+    return head;
+  }
+
+  /**
    * Stores a new artifact, enforcing MIME validation, quota, and path traversal protection.
    */
   async createArtifact(input: CreateArtifactInput): Promise<ArtifactMetadata> {
     const sanitizedFilename = this.sanitizeFilename(input.filename);
     this.validateMimeType(input.mimeType);
-
+    // The declared type must match the actual bytes, otherwise a client could store an
+    // executable under `image/png`. Streams are peeked without buffering the whole body.
+    assertMimeMatchesContent(input.mimeType, await this.headBytes(input.content));
     const artifactId = randomUUID();
     const storageKey = `${input.ownerId}/${artifactId}/${sanitizedFilename}`;
 
-    const currentUsage = this.userUsage.get(input.ownerId) ?? 0;
+    // Usage is summed from the shared sidecars rather than tracked in a per-process counter,
+    // so the cap holds across the API/worker split and survives a container restart.
+    const currentUsage = (await this.listArtifactsByUser(input.ownerId)).reduce(
+      (total, artifact) => total + artifact.size,
+      0,
+    );
 
     // Check quota before upload if size is known
     if (input.size !== undefined) {
@@ -147,9 +229,6 @@ export class ArtifactManager {
       );
     }
 
-    // Update user usage
-    this.userUsage.set(input.ownerId, currentUsage + putResult.size);
-
     const metadata: ArtifactMetadata = {
       id: artifactId,
       ownerId: input.ownerId,
@@ -169,6 +248,34 @@ export class ArtifactManager {
     };
 
     this.metadataStore.set(artifactId, metadata);
+    await this.storage.put(this.metaKey(artifactId), JSON.stringify(metadata));
+
+    // The artifact is already durable here, so a failing audit sink must not fail the upload:
+    // a retry would write a second copy. Report it instead.
+    if (this.auditSink) {
+      try {
+        await this.auditSink({
+          artifactId: metadata.id,
+          ownerId: metadata.ownerId,
+          projectId: metadata.projectId,
+          taskId: metadata.taskId,
+          filename: metadata.filename,
+          mimeType: metadata.mimeType,
+          size: metadata.size,
+          checksum: metadata.checksum,
+        });
+      } catch (err: unknown) {
+        console.error(
+          JSON.stringify({
+            service: 'tools',
+            event: 'artifact_audit_failed',
+            artifactId: metadata.id,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+    }
+
     return metadata;
   }
 
@@ -180,7 +287,7 @@ export class ArtifactManager {
     requestingUserId?: string | undefined,
     signedToken?: string | undefined,
   ): Promise<ArtifactMetadata> {
-    const artifact = this.metadataStore.get(artifactId);
+    const artifact = await this.loadMetadata(artifactId);
     if (!artifact) {
       throw new ArtifactNotFoundError(artifactId);
     }
@@ -217,39 +324,24 @@ export class ArtifactManager {
    * Deletes an artifact, verifying ownership and reclaiming quota.
    */
   async deleteArtifact(artifactId: string, requestingUserId: string): Promise<boolean> {
-    const artifact = this.metadataStore.get(artifactId);
-    if (!artifact) {
-      throw new ArtifactNotFoundError(artifactId);
-    }
-
-    if (artifact.ownerId !== requestingUserId) {
-      throw new ArtifactAccessDeniedError(artifactId, requestingUserId);
-    }
+    const artifact = await this.getArtifact(artifactId, requestingUserId);
 
     await this.storage.delete(artifact.storageKey);
+    await this.storage.delete(this.metaKey(artifactId)).catch(() => false);
     this.metadataStore.delete(artifactId);
 
-    const currentUsage = this.userUsage.get(artifact.ownerId) ?? 0;
-    this.userUsage.set(artifact.ownerId, Math.max(0, currentUsage - artifact.size));
     return true;
   }
 
   /**
    * Creates a signed temporary access token with expiry.
    */
-  createSignedAccessToken(
+  async createSignedAccessToken(
     artifactId: string,
     requestingUserId: string,
     expiresInMs = 3600000, // 1 hour default
-  ): { token: string; expiresAt: string } {
-    const artifact = this.metadataStore.get(artifactId);
-    if (!artifact) {
-      throw new ArtifactNotFoundError(artifactId);
-    }
-
-    if (artifact.ownerId !== requestingUserId) {
-      throw new ArtifactAccessDeniedError(artifactId, requestingUserId);
-    }
+  ): Promise<{ token: string; expiresAt: string }> {
+    const artifact = await this.getArtifact(artifactId, requestingUserId);
 
     const expiresAt = Date.now() + expiresInMs;
     const payload: ArtifactSignedTokenPayload = {
@@ -317,19 +409,21 @@ export class ArtifactManager {
     throw new ArtifactAccessDeniedError(artifact.id, requestingUserId);
   }
 
-  getUserStorageUsage(userId: string): number {
-    return this.userUsage.get(userId) ?? 0;
+  async listArtifactsByUser(userId: string, projectId?: string | null): Promise<ArtifactMetadata[]> {
+    return (await this.listAllArtifacts()).filter(
+      (artifact) =>
+        artifact.ownerId === userId && (!projectId || artifact.projectId === projectId),
+    );
   }
 
-  listArtifactsByUser(userId: string, projectId?: string | null): ArtifactMetadata[] {
-    const list: ArtifactMetadata[] = [];
-    for (const art of this.metadataStore.values()) {
-      if (art.ownerId === userId) {
-        if (!projectId || art.projectId === projectId) {
-          list.push(art);
-        }
-      }
+  /**
+   * Enumerates every artifact regardless of owner, for cross-user maintenance jobs such as
+   * the retention sweep. Metadata written by other processes is loaded from the sidecars.
+   */
+  async listAllArtifacts(): Promise<ArtifactMetadata[]> {
+    for (const key of await this.storage.listKeys(ArtifactManager.META_PREFIX)) {
+      await this.loadMetadata(key.slice(ArtifactManager.META_PREFIX.length, -'.json'.length));
     }
-    return list;
+    return [...this.metadataStore.values()];
   }
 }

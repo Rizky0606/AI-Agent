@@ -1,18 +1,38 @@
 import type { ICommandExecutor } from '../security/types.ts';
 import type { CapabilityName } from '../security/capability-registry.ts';
 import type { DeviceIdentity } from './device-identity.ts';
+import type { DeviceKeyStore } from './device-key.ts';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+
+
+export interface ChatFrame {
+  type: string;
+  conversationId?: string;
+  messageId?: string;
+  delta?: string;
+  content?: string;
+  code?: string;
+  message?: string | { id: string; role: 'user' | 'assistant' | 'system'; content: string; cancelled?: boolean; metadata?: Record<string, unknown> };
+  usage?: Record<string, unknown>;
+  resolvedModel?: string;
+  model?: string;
+  fallbackUsed?: boolean;
+}
 
 export interface AgentConnectionOptions {
   serverUrl: string;
   token: string;
   identity: DeviceIdentity;
+  /** Holds the P-256 key this agent signs the server's challenge with. */
+  keyStore: DeviceKeyStore;
   executor: ICommandExecutor;
   heartbeatIntervalMs?: number | undefined;
   maxReconnectAttempts?: number | undefined;
   onStatusChange?: ((status: ConnectionStatus) => void) | undefined;
   onLogMessage?: ((level: 'info' | 'warn' | 'error', message: string) => void) | undefined;
+  /** Receives the id the server assigned to this device key. */
+  onDeviceId?: ((deviceId: string) => void) | undefined;
 }
 
 export interface InboundServerMessage {
@@ -24,7 +44,22 @@ export interface InboundServerMessage {
   action?: string | undefined;
   cwd?: string | undefined;
   timeoutMs?: number | undefined;
+  challenge?: string | undefined;
+  deviceId?: string | undefined;
+  code?: string | undefined;
+  message?: string | undefined;
 }
+
+/** Server codes that a retry cannot fix: the credential or the key is wrong, not the network. */
+const FATAL_HANDSHAKE_CODES = new Set([
+  'UNAUTHORIZED',
+  'DEVICE_KEY_INVALID',
+  'DEVICE_SIGNATURE_INVALID',
+  'DEVICE_SIGNATURE_MISSING',
+  'DEVICE_NAME_INVALID',
+  'DEVICE_PLATFORM_INVALID',
+]);
+
 
 export class AgentConnection {
   private options: AgentConnectionOptions;
@@ -62,9 +97,10 @@ export class AgentConnection {
 
     try {
       const httpBase = this.options.serverUrl.replace(/\/+$/, '');
+      // No deviceId here: the server issues it after verifying the key, and refuses a claimed one.
       const wsUrl =
         httpBase.replace(/^http(s?):/i, 'ws$1:') +
-        `/v1/agent/ws?token=${encodeURIComponent(this.options.token)}&deviceId=${encodeURIComponent(this.options.identity.id)}&platform=windows`;
+        `/v1/agent/ws?token=${encodeURIComponent(this.options.token)}`;
 
       this.log('info', `Initiating outbound WSS connection to ${httpBase}...`);
 
@@ -72,18 +108,7 @@ export class AgentConnection {
 
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
-        this.setStatus('connected');
-        this.log('info', `Successfully connected to server as device ${this.options.identity.id}`);
-
-        // Send device registration handshake
-        this.send({
-          type: 'device.handshake',
-          device: this.options.identity,
-          capabilities: this.options.executor.getCapabilityRegistry().getAllRules(),
-          allowedRoots: this.options.executor.getPathValidator().getAllowedRoots(),
-        });
-
-        this.startHeartbeat();
+        this.log('info', 'Socket open; waiting for the server challenge to sign');
       };
 
       this.ws.onmessage = (event: MessageEvent) => {
@@ -92,10 +117,7 @@ export class AgentConnection {
           const msg = JSON.parse(raw) as InboundServerMessage;
           void this.handleServerMessage(msg);
         } catch (err) {
-          this.log(
-            'warn',
-            `Failed to parse inbound message: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          this.log('warn', `Failed to parse inbound message: ${err instanceof Error ? err.message : String(err)}`);
         }
       };
 
@@ -122,6 +144,23 @@ export class AgentConnection {
 
   private async handleServerMessage(msg: InboundServerMessage): Promise<void> {
     switch (msg.type) {
+      case 'device.challenge':
+        await this.answerChallenge(msg.challenge);
+        break;
+
+      case 'device.handshake_ack':
+        if (msg.deviceId) {
+          this.log('info', `Server registered this device as ${msg.deviceId}`);
+          this.options.onDeviceId?.(msg.deviceId);
+        }
+        this.setStatus('connected');
+        this.startHeartbeat();
+        break;
+
+      case 'device.error':
+        this.handleHandshakeError(msg);
+        break;
+
       case 'ping':
         this.send({ type: 'pong', timestamp: Date.now() });
         break;
@@ -141,6 +180,47 @@ export class AgentConnection {
       default:
         this.log('warn', `Received unhandled message type: ${msg.type}`);
     }
+  }
+
+  /** Signs the server's nonce with the device key and reports the public half back. */
+  private async answerChallenge(challenge: string | undefined): Promise<void> {
+    if (!challenge) {
+      this.log('error', 'Server sent a challenge without a nonce');
+      return;
+    }
+
+    try {
+      const [publicKey, signature] = await Promise.all([
+        this.options.keyStore.publicKey(),
+        this.options.keyStore.sign(challenge),
+      ]);
+      this.send({
+        type: 'device.handshake',
+        publicKey,
+        signature,
+        name: this.options.identity.name,
+        platform: this.options.identity.platform,
+        hostname: this.options.identity.hostname,
+        capabilities: this.options.executor.getCapabilityRegistry().getAllRules(),
+        allowedRoots: this.options.executor.getPathValidator().getAllowedRoots(),
+      });
+    } catch (err) {
+      this.log(
+        'error',
+        `Could not sign the device challenge: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private handleHandshakeError(msg: InboundServerMessage): void {
+    const code = msg.code ?? 'DEVICE_HANDSHAKE_FAILED';
+    this.log('error', `Device handshake refused (${code}): ${msg.message ?? 'no detail'}`);
+    if (FATAL_HANDSHAKE_CODES.has(code)) {
+      // Reconnecting with the same rejected credential would only repeat the failure.
+      this.isClosedExplicitly = true;
+      this.setStatus('disconnected');
+    }
+    this.ws?.close();
   }
 
   private async handleExecuteCommand(msg: InboundServerMessage): Promise<void> {
@@ -224,7 +304,6 @@ export class AgentConnection {
       this.activeAbortControllers.delete(cmdId);
     }
   }
-
   private send(payload: Record<string, unknown>): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(payload));
@@ -300,5 +379,127 @@ export class AgentConnection {
     }
     this.setStatus('disconnected');
     this.log('info', 'Agent disconnected explicitly');
+  }
+}
+
+/** Chat uses account authentication only; no device registration or command permissions. */
+export class ChatConnection {
+  private ws: WebSocket | null = null;
+  private pending: Record<string, unknown> | null = null;
+  private activeMessageId: string | undefined;
+  private cancelPending = false;
+  private authenticated = false;
+  private status: ConnectionStatus = 'disconnected';
+  private reconnectAttempts = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private closedExplicitly = false;
+  private readonly options: {
+    serverUrl: string;
+    token: string;
+    onFrame: (frame: ChatFrame) => void;
+    onStatusChange?: ((status: ConnectionStatus) => void) | undefined;
+    maxReconnectAttempts?: number | undefined;
+  };
+  constructor(options: ChatConnection['options']) { this.options = options; }
+
+  private setStatus(status: ConnectionStatus): void {
+    if (this.status === status) return;
+    this.status = status;
+    this.options.onStatusChange?.(status);
+  }
+
+  private open(): void {
+    const base = this.options.serverUrl.replace(/\/+$/, '').replace(/^http(s?):/i, 'ws$1:');
+    this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+    const ws = new WebSocket(`${base}/v1/chat/ws?token=${encodeURIComponent(this.options.token)}`);
+    this.ws = ws;
+    ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
+      try {
+        const frame = JSON.parse(String(event.data)) as ChatFrame;
+        if (frame.type === 'auth.ok') {
+          this.authenticated = true;
+          this.reconnectAttempts = 0;
+          this.setStatus('connected');
+          if (this.pending) ws.send(JSON.stringify(this.pending));
+          this.pending = null;
+          if (this.cancelPending) this.cancelChat();
+        }
+        if (frame.type === 'message.created' && typeof frame.message === 'object' && frame.message.role === 'assistant') this.activeMessageId = frame.message.id;
+        this.options.onFrame(frame);
+      } catch { this.options.onFrame({ type: 'error', code: 'INVALID_FRAME', message: 'Invalid chat frame received' }); }
+    };
+    ws.onerror = () => {
+      if (this.ws !== ws || this.closedExplicitly) return;
+      this.options.onFrame({ type: 'error', code: 'CHAT_CONNECTION', message: 'Chat connection failed' });
+    };
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.ws = null;
+      this.authenticated = false;
+      this.cancelPending = false;
+      if (this.closedExplicitly) { this.setStatus('disconnected'); return; }
+      this.options.onFrame({ type: 'error', code: 'CHAT_CLOSED', message: 'Chat connection lost. Reconnecting…' });
+      this.scheduleReconnect();
+    };
+  }
+
+  sendChatMessage(payload: Record<string, unknown>): void {
+    if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
+      this.ws.send(JSON.stringify(payload));
+      return;
+    }
+    // Queue for the open (possibly still authenticating) socket instead of dialling a second one.
+    this.pending = payload;
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
+    this.closedExplicitly = false;
+    this.reconnectAttempts = 0;
+    this.open();
+  }
+
+  /** Opens the socket before the first message so connection state is visible immediately. */
+  connect(): void {
+    if (this.ws) return;
+    this.closedExplicitly = false;
+    this.reconnectAttempts = 0;
+    this.open();
+  }
+
+  cancelChat(): void {
+    this.cancelPending = this.ws?.readyState !== WebSocket.OPEN;
+    if (!this.cancelPending) this.ws?.send(JSON.stringify({ type: 'chat.cancel', ...(this.activeMessageId ? { messageId: this.activeMessageId } : {}) }));
+  }
+
+  private scheduleReconnect(): void {
+    const maxAttempts = this.options.maxReconnectAttempts ?? 10;
+    if (this.reconnectAttempts >= maxAttempts) {
+      this.setStatus('disconnected');
+      this.options.onFrame({ type: 'error', code: 'CHAT_RECONNECT_EXHAUSTED', message: 'Chat is offline. Retry to reconnect.' });
+      return;
+    }
+    this.setStatus('reconnecting');
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 10_000);
+    this.reconnectAttempts++;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.open(); }, delay);
+  }
+
+  disconnect(): void {
+    this.closedExplicitly = true;
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const ws = this.ws;
+    this.ws = null;
+    this.authenticated = false;
+    this.pending = null;
+    this.cancelPending = false;
+    ws?.close();
+    this.setStatus('disconnected');
   }
 }

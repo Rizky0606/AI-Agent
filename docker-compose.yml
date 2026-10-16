@@ -18,6 +18,10 @@ services:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.api
     env_file: .env
+    environment:
+      # Shared service token for the worker's device-dispatch calls to /v1/internal/*. Left
+      # optional: without it the API simply does not mount those routes and dispatch fails closed.
+      RUNTIME_BRIDGE_TOKEN: ${RUNTIME_BRIDGE_TOKEN:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -31,6 +35,10 @@ services:
       - edge
     expose:
       - '3000'
+    volumes:
+      # Bind mount, not a named volume: the worker writes browser screenshots here
+      # and the API serves them, so both need the same host-visible directory.
+      - ./data/artifacts:/app/data/artifacts
     stop_grace_period: 30s
     healthcheck:
       test:
@@ -58,6 +66,17 @@ services:
     environment:
       RUNTIME_BRIDGE_URL: ${RUNTIME_BRIDGE_URL:-http://host.docker.internal:9120}
       RUNTIME_BRIDGE_TOKEN: ${RUNTIME_BRIDGE_TOKEN:?RUNTIME_BRIDGE_TOKEN is required}
+      # Device commands are dispatched by the API, which owns the Windows agent WSS sessions.
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:3000}
+      ARTIFACTS_DIR: /app/data/artifacts
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # Per-task coding workspaces: real git repos the agent runs lint/typecheck/test/build in.
+      CODING_WORKSPACE_ROOT: /app/data/workspaces
+    volumes:
+      - ./data/artifacts:/app/data/artifacts
+      # Named volume, not a bind mount: a fresh install would otherwise hand the worker a
+      # root-owned host directory it cannot write task workspaces into.
+      - coding-workspaces:/app/data/workspaces
     extra_hosts:
       - host.docker.internal:host-gateway
     depends_on:
@@ -87,8 +106,9 @@ services:
       resources:
         limits:
           cpus: '0.75'
-          memory: 1536M
-    mem_limit: 1536m
+          # Chromium needs headroom above the previous 1536M; one browser session max.
+          memory: 2048M
+    mem_limit: 2048m
     restart: unless-stopped
 
   scheduler:
@@ -249,6 +269,7 @@ volumes:
   redis-data:
   caddy-data:
   caddy-config:
+  coding-workspaces:
 
 networks:
   # Internal network: isolated with no internet access (internal: true)

@@ -2,7 +2,7 @@
   "name": "personal-ai-os",
   "private": true,
   "type": "module",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packageManager": "pnpm@10.13.1",
   "engines": {
     "node": ">=22"

@@ -1,6 +1,12 @@
 // Core Types
 export * from './types.ts';
 
+// Execution rate/concurrency limiting
+export * from './execution-limiter.ts';
+
+// HTML text extraction
+export * from './html-text.ts';
+
 // SSRF Guard
 export * from './ssrf/ssrf-guard.ts';
 
@@ -24,4 +30,6 @@ export * from './builtin/workspace-read-file.ts';
 export * from './builtin/web-search.ts';
 export * from './builtin/web-fetch.ts';
 export * from './builtin/browser-navigate.ts';
+export * from './registry/create-default-tool-registry.ts';
 export * from './builtin/save-artifact.ts';
+export * from './sanitizer.ts';

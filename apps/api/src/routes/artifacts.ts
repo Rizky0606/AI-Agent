@@ -7,6 +7,7 @@ import {
   InvalidFilenameError,
   InvalidMimeTypeError,
 } from '@personal-ai-os/tools';
+import type { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { AuthService } from '../auth/service.ts';
@@ -16,6 +17,10 @@ interface AuthUser {
   id: string;
   email: string;
 }
+
+// The JSON route keeps Fastify's 1 MiB default; the streaming route accepts up to the
+// manager's per-artifact cap (25 MiB by default) because the body is never buffered.
+const STREAM_UPLOAD_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
 
 export function registerArtifactRoutes(
   app: FastifyInstance,
@@ -92,6 +97,70 @@ export function registerArtifactRoutes(
     },
   );
 
+  // 1b. Streaming Upload Artifact.
+  // Contract: POST /v1/artifacts/stream?filename=<name>&mimeType=<type> with
+  // Content-Type: application/octet-stream and the raw file bytes as the body.
+  // Optional query: projectId, taskId, conversationId, retention.
+  app.addContentTypeParser('application/octet-stream', (_req, payload, done) =>
+    done(null, payload),
+  );
+  app.post(
+    '/v1/artifacts/stream',
+    { bodyLimit: STREAM_UPLOAD_BODY_LIMIT_BYTES },
+    async (
+      req: FastifyRequest<{
+        Querystring: {
+          filename?: string | undefined;
+          mimeType?: string | undefined;
+          projectId?: string | undefined;
+          taskId?: string | undefined;
+          conversationId?: string | undefined;
+          retention?: ArtifactRetention | undefined;
+        };
+        Body: Readable;
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const user = await getUser(req);
+      const { filename, mimeType, projectId, taskId, conversationId, retention } = req.query;
+
+      if (!filename || !mimeType) {
+        return reply
+          .status(400)
+          .send({ error: 'filename dan mimeType harus disediakan sebagai query parameter.' });
+      }
+
+      // Fastify skips body parsing for an empty request, so `req.body` can be undefined here.
+      const body = req.body as Readable | undefined;
+      if (!body || typeof body.pipe !== 'function') {
+        return reply.status(400).send({ error: 'Body biner artefak harus dikirim.' });
+      }
+
+      try {
+        const artifact = await artifactManager.createArtifact({
+          ownerId: user.id,
+          filename,
+          mimeType,
+          content: body,
+          projectId,
+          taskId,
+          conversationId,
+          retention,
+        });
+        return reply.status(201).send({ data: artifact });
+      } catch (err: unknown) {
+        if (
+          err instanceof InvalidFilenameError ||
+          err instanceof InvalidMimeTypeError ||
+          err instanceof ArtifactQuotaExceededError
+        ) {
+          return reply.status(400).send({ error: err.message });
+        }
+        throw err;
+      }
+    },
+  );
+
   // 2. List Artifacts for User
   app.get(
     '/v1/artifacts',
@@ -102,7 +171,7 @@ export function registerArtifactRoutes(
       reply: FastifyReply,
     ) => {
       const user = await getUser(req);
-      const list = artifactManager.listArtifactsByUser(user.id, req.query.projectId ?? null);
+      const list = await artifactManager.listArtifactsByUser(user.id, req.query.projectId ?? null);
       return reply.send({ data: list });
     },
   );
@@ -152,16 +221,12 @@ export function registerArtifactRoutes(
 
       try {
         const artifact = await artifactManager.getArtifact(req.params.id, userId, signedToken);
-        const content = await artifactManager.getArtifactContent(
-          req.params.id,
-          userId,
-          signedToken,
-        );
+        const stream = await artifactManager.getArtifactStream(req.params.id, userId, signedToken);
 
         return reply
           .header('Content-Type', artifact.mimeType)
           .header('Content-Disposition', `attachment; filename="${artifact.filename}"`)
-          .send(content);
+          .send(stream);
       } catch (err: unknown) {
         if (err instanceof ArtifactNotFoundError) {
           return reply.status(404).send({ error: err.message });
@@ -188,7 +253,7 @@ export function registerArtifactRoutes(
       const expiresInMs = req.body?.expiresInMs ?? 3600000;
 
       try {
-        const signed = artifactManager.createSignedAccessToken(req.params.id, user.id, expiresInMs);
+        const signed = await artifactManager.createSignedAccessToken(req.params.id, user.id, expiresInMs);
         return reply.send({
           data: {
             token: signed.token,

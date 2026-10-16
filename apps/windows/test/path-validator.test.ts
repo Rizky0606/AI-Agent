@@ -90,3 +90,47 @@ test('PathValidator: Valid subpaths and exact roots in allowlist are accepted', 
   assert.equal(validator.isPathAllowed('C:\\AllowedWorkspace\\package.json'), true);
   assert.equal(validator.isPathAllowed('D:\\OtherDrive\\file.txt'), false);
 });
+
+test('PathValidator: UNC network paths, encoded traversal, and null bytes are rejected', () => {
+  const validator = new PathValidator(['C:\\AllowedWorkspace']);
+
+  // UNC network share
+  assert.throws(
+    () => validator.assertPathAllowed('\\\\attacker\\share\\payload.exe'),
+    (err: unknown) => {
+      assert.ok(err instanceof SecurityError);
+      assert.equal(err.code, 'DEVICE_PATH_FORBIDDEN');
+      return true;
+    },
+  );
+
+  // URL-encoded traversal
+  assert.throws(
+    () => validator.assertPathAllowed('C:\\AllowedWorkspace\\%2e%2e\\secret.txt'),
+    (err: unknown) => {
+      assert.ok(err instanceof SecurityError);
+      assert.equal(err.code, 'PATH_TRAVERSAL_DETECTED');
+      return true;
+    },
+  );
+
+  // Null byte injection
+  assert.throws(
+    () => validator.assertPathAllowed('C:\\AllowedWorkspace\\file\0.txt'),
+    (err: unknown) => {
+      assert.ok(err instanceof SecurityError);
+      assert.equal(err.code, 'NULL_BYTE_DETECTED');
+      return true;
+    },
+  );
+
+  // Trailing dot / space
+  assert.throws(
+    () => validator.assertPathAllowed('C:\\AllowedWorkspace\\trailing.'),
+    (err: unknown) => {
+      assert.ok(err instanceof SecurityError);
+      assert.equal(err.code, 'INVALID_PATH_FORMAT');
+      return true;
+    },
+  );
+});

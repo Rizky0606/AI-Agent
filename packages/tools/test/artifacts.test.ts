@@ -3,15 +3,18 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { Readable } from 'node:stream';
 import {
   ArtifactAccessDeniedError,
   ArtifactManager,
   ArtifactQuotaExceededError,
   DiskArtifactStorage,
   InMemoryArtifactStorage,
+  ArtifactNotFoundError,
   InvalidFilenameError,
   InvalidMimeTypeError,
 } from '../src/index.ts';
+import { sniffContentKind } from '../src/artifacts/magic-bytes.ts';
 
 test('ArtifactManager creates artifact and validates ownership strictly', async () => {
   const storage = new InMemoryArtifactStorage();
@@ -67,7 +70,7 @@ test('ArtifactManager generates signed temporary access tokens with expiry', asy
   });
 
   // Generate signed token valid for 500ms
-  const { token } = manager.createSignedAccessToken(artifact.id, 'alice', 500);
+  const { token } = await manager.createSignedAccessToken(artifact.id, 'alice', 500);
 
   // 1. Accessing via valid signed token succeeds for third party
   const contentWithToken = await manager.getArtifactContent(artifact.id, undefined, token);
@@ -177,6 +180,56 @@ test('ArtifactManager strictly enforces user storage quotas', async () => {
   );
 });
 
+test('ArtifactManager enforces the quota across processes sharing storage', async () => {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'artifact-quota-'));
+  try {
+    const openManager = () =>
+      new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir), userQuotaBytes: 1000 });
+
+    await openManager().createArtifact({
+      ownerId: 'alice',
+      filename: 'first.bin',
+      mimeType: 'application/octet-stream',
+      content: Buffer.alloc(600),
+    });
+
+    // A fresh manager has an empty in-memory map, so the cap only holds if usage is
+    // derived from the sidecars the first manager wrote.
+    await assert.rejects(
+      async () =>
+        openManager().createArtifact({
+          ownerId: 'alice',
+          filename: 'second.bin',
+          mimeType: 'application/octet-stream',
+          content: Buffer.alloc(600),
+        }),
+      (err: unknown) => err instanceof ArtifactQuotaExceededError,
+    );
+
+    // Usage stays scoped to the owner.
+    await openManager().createArtifact({
+      ownerId: 'bob',
+      filename: 'bob.bin',
+      mimeType: 'application/octet-stream',
+      content: Buffer.alloc(600),
+    });
+
+    // Deleting releases the bytes, so the owner can write again.
+    const manager = openManager();
+    const [artifact] = await manager.listArtifactsByUser('alice');
+    assert.ok(artifact);
+    await manager.deleteArtifact(artifact.id, 'alice');
+    await manager.createArtifact({
+      ownerId: 'alice',
+      filename: 'third.bin',
+      mimeType: 'application/octet-stream',
+      content: Buffer.alloc(600),
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('DiskArtifactStorage stores and streams files safely with atomic write', async () => {
   const tmpDir = await mkdtemp(join(tmpdir(), 'disk-artifact-'));
   const diskStorage = new DiskArtifactStorage(tmpDir);
@@ -209,4 +262,213 @@ test('DiskArtifactStorage stores and streams files safely with atomic write', as
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('ArtifactManager resolves artifacts written by another process over shared storage', async () => {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'artifact-shared-'));
+  try {
+    // The worker writes the artifact; the API serves it from a separate manager instance.
+    const writer = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    const artifact = await writer.createArtifact({
+      ownerId: 'alice',
+      filename: 'screenshot.png',
+      mimeType: 'image/png',
+      content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    });
+
+    const reader = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    const content = await reader.getArtifactContent(artifact.id, 'alice');
+    assert.equal(content.toString('hex'), '89504e47');
+
+    const { token } = await reader.createSignedAccessToken(artifact.id, 'alice');
+    const shared = await reader.getArtifactContent(artifact.id, undefined, token);
+    assert.equal(shared.toString('hex'), '89504e47');
+
+    await assert.rejects(
+      async () => reader.getArtifactContent(artifact.id, 'bob'),
+      (err: unknown) => err instanceof ArtifactAccessDeniedError,
+    );
+
+    await reader.deleteArtifact(artifact.id, 'alice');
+    const third = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    await assert.rejects(
+      async () => third.getArtifact(artifact.id, 'alice'),
+      (err: unknown) => err instanceof ArtifactNotFoundError,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactManager lists artifacts written by another process', async () => {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'artifact-list-'));
+  try {
+    const writer = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    await writer.createArtifact({
+      ownerId: 'alice',
+      filename: 'worker-screenshot.png',
+      mimeType: 'image/png',
+      content: Buffer.from([0x89, 0x50]),
+    });
+    await writer.createArtifact({
+      ownerId: 'bob',
+      filename: 'other-user.txt',
+      mimeType: 'text/plain',
+      content: 'not alice',
+    });
+
+    const reader = new ArtifactManager({ storage: new DiskArtifactStorage(tmpDir) });
+    const listed = await reader.listArtifactsByUser('alice');
+    assert.deepEqual(
+      listed.map((artifact) => artifact.filename),
+      ['worker-screenshot.png'],
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactManager reports every written artifact to the audit sink', async () => {
+  const records: Array<{ artifactId: string; ownerId: string; filename: string }> = [];
+  const manager = new ArtifactManager({
+    storage: new InMemoryArtifactStorage(),
+    auditSink: (record) => void records.push(record),
+  });
+
+  const artifact = await manager.createArtifact({
+    ownerId: 'alice',
+    projectId: '11111111-1111-4111-8111-111111111111',
+    taskId: '22222222-2222-4222-8222-222222222222',
+    filename: 'audited.txt',
+    mimeType: 'text/plain',
+    content: 'audited content',
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0]?.artifactId, artifact.id);
+  assert.equal(records[0]?.ownerId, 'alice');
+  assert.equal(records[0]?.filename, 'audited.txt');
+});
+
+test('ArtifactManager keeps the artifact when the audit sink fails', async () => {
+  const storage = new InMemoryArtifactStorage();
+  const manager = new ArtifactManager({
+    storage,
+    auditSink: () => {
+      throw new Error('audit storage down');
+    },
+  });
+
+  const artifact = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'kept.txt',
+    mimeType: 'text/plain',
+    content: 'kept content',
+  });
+
+  assert.equal((await manager.getArtifactContent(artifact.id, 'alice')).toString('utf-8'), 'kept content');
+  assert.equal((await manager.listArtifactsByUser('alice')).length, 1);
+});
+
+test('ArtifactManager rejects content that contradicts the declared MIME type', async () => {
+  const manager = new ArtifactManager({ storage: new InMemoryArtifactStorage() });
+
+  await assert.rejects(
+    async () =>
+      manager.createArtifact({
+        ownerId: 'alice',
+        filename: 'fake.png',
+        mimeType: 'image/png',
+        content: 'plain text pretending to be a PNG',
+      }),
+    (err: unknown) => err instanceof InvalidMimeTypeError,
+  );
+
+  await assert.rejects(
+    async () =>
+      manager.createArtifact({
+        ownerId: 'alice',
+        filename: 'fake.pdf',
+        mimeType: 'application/pdf',
+        content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      }),
+    (err: unknown) => err instanceof InvalidMimeTypeError,
+  );
+
+  // `application/octet-stream` claims nothing, so any bytes are acceptable.
+  const binary = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'blob.bin',
+    mimeType: 'application/octet-stream',
+    content: Buffer.from([0x00, 0x01, 0x02, 0x03]),
+  });
+  assert.equal(binary.size, 4);
+
+  const png = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'real.png',
+    mimeType: 'image/png',
+    content: Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('body'),
+    ]),
+  });
+  assert.equal(png.mimeType, 'image/png');
+
+  // An empty text file carries no signature but is still valid text.
+  const empty = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'empty.txt',
+    mimeType: 'text/plain',
+    content: '',
+  });
+  assert.equal(empty.size, 0);
+});
+
+test('ArtifactManager stores a streamed upload without losing bytes to the signature peek', async () => {
+  const manager = new ArtifactManager({ storage: new InMemoryArtifactStorage() });
+  const bytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(2 * 1024 * 1024, 0x41)]);
+
+  const artifact = await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'large.pdf',
+    mimeType: 'application/pdf',
+    content: Readable.from(bytes),
+  });
+
+  assert.equal(artifact.size, bytes.length);
+  assert.ok((await manager.getArtifactContent(artifact.id, 'alice')).equals(bytes));
+});
+
+test('sniffContentKind classifies the supported signatures', () => {
+  assert.equal(sniffContentKind(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), 'jpeg');
+  assert.equal(sniffContentKind(Buffer.from('GIF89a...')), 'gif');
+  assert.equal(sniffContentKind(Buffer.from('RIFF\u0000\u0000\u0000\u0000WEBPVP8 ')), 'webp');
+  assert.equal(sniffContentKind(Buffer.from('%PDF-1.7')), 'pdf');
+  assert.equal(sniffContentKind(Buffer.from([0x50, 0x4b, 0x03, 0x04])), 'zip');
+  assert.equal(sniffContentKind(Buffer.from('{"a":1}')), 'text');
+  // A text file that merely starts with "PK" is not a ZIP.
+  assert.equal(sniffContentKind(Buffer.from('PK notes about zips')), 'text');
+  assert.equal(sniffContentKind(Buffer.from([0x00, 0x01, 0x02])), undefined);
+});
+
+test('ArtifactManager lists every artifact across owners', async () => {
+  const manager = new ArtifactManager({ storage: new InMemoryArtifactStorage() });
+  await manager.createArtifact({
+    ownerId: 'alice',
+    filename: 'a.txt',
+    mimeType: 'text/plain',
+    content: 'a',
+  });
+  await manager.createArtifact({
+    ownerId: 'bob',
+    filename: 'b.txt',
+    mimeType: 'text/plain',
+    content: 'b',
+  });
+
+  assert.deepEqual(
+    (await manager.listAllArtifacts()).map((artifact) => artifact.filename).sort(),
+    ['a.txt', 'b.txt'],
+  );
 });

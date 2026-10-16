@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { after, before } from 'node:test';
 import { Redis } from 'ioredis';
 import postgres from 'postgres';
@@ -23,13 +26,14 @@ import {
   type TaskRepository,
   type TaskStatus,
 } from '@personal-ai-os/shared';
-import { CodingEvaluator } from '@personal-ai-os/evaluator';
+import { prepareCodingWorkspace } from '@personal-ai-os/agent-core';
 
 import { createAgentWorker } from '../../agent-worker/src/index.ts';
 import { TaskExecutor } from '../../agent-worker/src/task-executor.ts';
 import { CommandExecutor } from '../../windows/src/security/command-executor.ts';
 import { PathValidator, SecurityError } from '../../windows/src/security/path-validator.ts';
 import { CapabilityRegistry } from '../../windows/src/security/capability-registry.ts';
+import { connectDeviceAgent, waitForDeviceOffline } from './support/device-agent.ts';
 
 const JWT_SECRET = 'e2e-test-secret-at-least-32-chars-long-12345';
 const REDIS_URL = process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6379';
@@ -593,7 +597,8 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
   const project = await projectRepo.createProject(user.user.id, 'Project Workflow');
 
   const taskRepo = new InMemoryTaskRepo();
-  const taskQueue = new BullMqTaskQueue(redisPublisher);
+  const queueName = `e2e-scenario-2-${randomUUID()}`;
+  const taskQueue = new BullMqTaskQueue(redisPublisher, { queueName });
   const broadcaster = new RedisTaskEventBroadcaster({
     publisher: redisPublisher,
     subscriber: redisSubscriber,
@@ -612,14 +617,25 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
   await app.listen({ port: 0, host: '127.0.0.1' });
   const port = (app.server.address() as { port: number }).port;
 
-  // Start Worker with real CodingEvaluator
+  // Real checks run against a real directory, so the fixture supplies scripts that actually pass.
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'aios-e2e-coding-'));
+  const fixtureWorkspace = await prepareCodingWorkspace(fixtureRoot, 'scenario-2');
+  const passingScript = 'node -e "process.exit(0)"';
+  await writeFile(
+    join(fixtureWorkspace, 'package.json'),
+    JSON.stringify({
+      name: 'e2e-coding-fixture',
+      private: true,
+      scripts: { lint: passingScript, typecheck: passingScript, test: passingScript, build: passingScript },
+    }),
+  );
+
   const workerHandle = createAgentWorker({
     redisUrl: REDIS_URL,
+    queueName,
     taskRepo: taskRepo as never,
     broadcaster,
-    executorOptions: {
-      codingEvaluator: new CodingEvaluator(),
-    },
+    executorOptions: { codingWorkspaceRoot: fixtureRoot },
   });
 
   try {
@@ -656,6 +672,7 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
           category: 'coding',
           title: 'Implement unit tests',
           instructions: 'Implement unit tests for calculator service',
+          workspaceDir: fixtureWorkspace,
           filesToModify: [
             {
               path: 'src/calc.ts',
@@ -683,6 +700,11 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
     assert.equal(finalTask?.progress, 100);
 
     // 4. Verify live events were streamed to the client WebSocket
+    const wsWaitStart = Date.now();
+    while (Date.now() - wsWaitStart < 3000) {
+      if (receivedEvents.some((e) => e.eventType === 'task.completed')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const completedEvent = receivedEvents.find((e) => e.eventType === 'task.completed');
     assert.ok(completedEvent, 'Client must receive realtime task.completed event via WebSocket');
     assert.equal(
@@ -709,7 +731,8 @@ test('Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; 
   const project = await projectRepo.createProject(user.user.id, 'Deployment Project');
 
   const taskRepo = new InMemoryTaskRepo();
-  const taskQueue = new BullMqTaskQueue(redisPublisher);
+  const queueName = `e2e-scenario-3-${randomUUID()}`;
+  const taskQueue = new BullMqTaskQueue(redisPublisher, { queueName });
   const broadcaster = new RedisTaskEventBroadcaster({
     publisher: redisPublisher,
     subscriber: redisSubscriber,
@@ -746,6 +769,7 @@ test('Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; 
   let activeApprovalId = '';
   const workerHandle = createAgentWorker({
     redisUrl: REDIS_URL,
+    queueName,
     taskRepo: taskRepo as never,
     broadcaster,
     executorOptions: {
@@ -909,7 +933,7 @@ test('Skenario 4: Matikan worker di tengah task, hidupkan lagi, task pulih dari 
   assert.equal(sideEffectStep2Count, 1, 'Side effect 2 must execute exactly once');
 });
 
-test('Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di luar allowlist ditolak, offline ditangani', async () => {
+test('Skenario 5: Windows Agent terhubung dengan kunci sendiri, perintah di luar allowlist ditolak, offline ditangani', async () => {
   const authRepo = new InMemoryAuthRepository();
   const auth = createAuthService(authRepo, JWT_SECRET);
   const user = await auth.register('windows-agent@e2e.test', 'Password123!');
@@ -920,39 +944,24 @@ test('Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di lu
   const app = await buildApp({
     auth,
     deviceManager,
-    listDevices: async () => [
-      {
-        id: 'win-host-1',
-        name: 'Dev PC',
-        platform: 'windows',
-        isOnline: deviceManager.isDeviceOnline('win-host-1'),
-      },
-    ],
+    registerAgent: async (_userId, input) => ({ id: randomUUID(), ...input }),
   });
 
   await app.listen({ port: 0, host: '127.0.0.1' });
   const port = (app.server.address() as { port: number }).port;
 
   try {
-    // 1. Initial status: offline
-    assert.equal(deviceManager.isDeviceOnline('win-host-1'), false);
-
-    // 2. Outbound WSS connection from Windows Agent
-    const wsUrl = `ws://127.0.0.1:${port}/v1/agent/ws?token=${encodeURIComponent(token)}&deviceId=win-host-1&platform=windows`;
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve();
-      ws.onerror = reject;
+    // 1. Outbound WSS connection from the Windows Agent: it signs the server challenge, so the
+    //    server — not the agent — decides which device this session belongs to.
+    const session = await connectDeviceAgent({
+      port,
+      token,
+      name: 'Dev PC',
     });
+    assert.match(session.deviceId, /^[0-9a-f-]{36}$/);
+    assert.equal(deviceManager.isDeviceOnline(session.deviceId), true, 'Agent must be marked online');
 
-    // Send handshake
-    ws.send(JSON.stringify({ type: 'device.handshake', deviceId: 'win-host-1' }));
-    await new Promise((r) => setTimeout(r, 60));
-
-    assert.equal(deviceManager.isDeviceOnline('win-host-1'), true, 'Agent must be marked online');
-
-    // 3. Security Check: PathValidator & CommandExecutor on Windows
+    // 2. Security Check: PathValidator & CommandExecutor on Windows
     const allowedDir = process.cwd();
     const validator = new PathValidator([allowedDir]);
     const registry = new CapabilityRegistry();
@@ -974,12 +983,12 @@ test('Skenario 5: Windows Agent terhubung, perintah di allowlist berjalan, di lu
       validator.assertPathAllowed('C:\\Windows\\System32');
     }, SecurityError);
 
-    // 4. Disconnect WSS -> transitions to offline
-    ws.close();
-    await new Promise((r) => setTimeout(r, 60));
-
+    // 3. Disconnect WSS -> transitions to offline
+    const wentOffline = waitForDeviceOffline(deviceManager, session.deviceId);
+    session.close();
+    await wentOffline;
     assert.equal(
-      deviceManager.isDeviceOnline('win-host-1'),
+      deviceManager.isDeviceOnline(session.deviceId),
       false,
       'Agent must transition to offline',
     );

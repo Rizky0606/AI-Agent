@@ -10,6 +10,15 @@ export interface ToolExecutionContext {
   metadata?: Record<string, unknown> | undefined;
 }
 
+/** Arguments accepted by `ToolRegistry.executeTool`; shared with the internal limited path. */
+export interface ToolExecutionOptions<TInput = unknown> {
+  toolName: string;
+  input: TInput;
+  context: ToolExecutionContext;
+  approvalId?: string | undefined;
+  resource?: string | undefined;
+}
+
 export interface ToolHealthCheckResult {
   status: 'healthy' | 'degraded' | 'unhealthy';
   latencyMs: number;

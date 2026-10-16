@@ -24,18 +24,18 @@ Dokumen ini mendefinisikan standar operasional prosedur untuk deployment produks
 
 ### 1.2 Resource Budgeting & Batas Container Stack
 
-Total alokasi limit stack container dibatasi ketat ke ~5,056 MiB (~4.94 GiB), menyisakan buffer bebas >1.0 GiB untuk OS host dan perlindungan terhadap OOM:
+Total alokasi limit stack container dibatasi ketat ke ~5,568 MiB (~5.44 GiB), menyisakan buffer bebas >1.0 GiB untuk OS host dan perlindungan terhadap OOM:
 
 | Service         | CPU Limit   | CPU Reserv.  | Memory Limit | Memory Reserv. | OOM Score Adj | Keterangan                                                         |
 | :-------------- | :---------- | :----------- | :----------- | :------------- | :------------ | :----------------------------------------------------------------- |
 | `postgres`      | 0.75        | 0.25         | **1536M**    | 512M           | -500          | Database utama + pgvector; proteksi tinggi dari OOM kill           |
 | `redis`         | 0.25        | 0.10         | **384M**     | 128M           | -500          | Queue BullMQ, cache, realtime pub/sub                              |
 | `api`           | 0.50        | 0.15         | **768M**     | 256M           | 0             | Fastify REST API, JWT auth, WebSocket events                       |
-| `worker`        | 0.75        | 0.25         | **1536M**    | 512M           | 100           | Agent Core, tool execution, LLM routing (buffer Chromium terpisah) |
+| `worker`        | 0.75        | 0.25         | **2048M**    | 512M           | 100           | Agent Core, tool execution, LLM routing, Chromium headless (`BROWSER_MAX_CONCURRENCY=1`) |
 | `scheduler`     | 0.25        | 0.10         | **384M**     | 128M           | 0             | Cron engine, event deduplication, notification engine              |
 | `backup`        | 0.25        | 0.05         | **256M**     | 64M            | 200           | Cron pg_dump berkala setiap 6 jam                                  |
 | `caddy`         | 0.25        | 0.05         | **192M**     | 64M            | -200          | Edge reverse proxy, TLS termination, static security headers       |
-| **Total Stack** | **3.0 CPU** | **0.90 CPU** | **5056 MiB** | **1664 MiB**   | -             | **Bebas: ~1.2 GiB OS + ~1.8 GiB Chromium + ~3.0 GiB Hermes**       |
+| **Total Stack** | **3.0 CPU** | **0.90 CPU** | **5568 MiB** | **1664 MiB**   | -             | **Bebas: ~1.2 GiB OS + ~1.8 GiB Chromium + ~3.0 GiB Hermes**       |
 
 ---
 
@@ -178,6 +178,20 @@ curl -f http://localhost:3000/ready
    docker compose build api worker scheduler
    docker image inspect personal-ai-os-api:latest --format '{{.Os}}/{{.Architecture}}'  # harapkan linux/arm64
    ```
+
+   Kedua container berjalan sebagai uid 1000 (`node`). Buat direktori bind mount artifact sebelum start, jika tidak Docker akan membuatnya sebagai root dan worker tidak dapat menulis screenshot:
+
+   ```sh
+   mkdir -p ~/apps/personal-ai-os/data/artifacts
+   sudo chown -R 1000:1000 ~/apps/personal-ai-os/data
+   ```
+
+   Sweeper retensi artefak berjalan di proses API dan **mati secara default**. Aktifkan dengan
+   mengisi `ARTIFACT_RETENTION_SWEEP_INTERVAL_MS` (milidetik, mis. `900000` untuk 15 menit) di
+   `.env`; nilai kosong/`0` mematikannya. Sweep menghapus artefak `ephemeral` yang melewati
+   `ARTIFACT_EPHEMERAL_TTL_MS` (default 24 jam), artefak `task_duration` setelah task-nya
+   terminal, dan artefak `project_lifetime` setelah project-nya hilang; artefak `permanent`
+   tidak pernah dihapus.
 4. **Jalankan Migrasi Database** (service one-shot `migrate`, idempoten via tabel `schema_migrations`):
    ```sh
    docker compose run --rm migrate
@@ -236,8 +250,12 @@ Jika rilis mengalami error fatal (500 internal errors, crash loop, atau OOM):
    docker compose ps
    ```
 
-## 8. Hardening yang Sudah Diterapkan (2026-10-11)
+## 8. Hardening yang Sudah Diterapkan (2026-10-16, Versi 0.3.0)
 
-- Worker production memakai `SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo })` (commit `7fe8246`): aksi HIGH (`git:push`, `deploy:*`, `external:send`) wajib `waiting_approval` + approve/deny via `/v1/approvals`.
+- Worker production memakai `SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo })`: aksi HIGH (`git:push`, `deploy:*`, `external:send`, `powershell_execute`) wajib `waiting_approval` + approve/deny via `/v1/approvals`.
 - Migrasi one-shot `migrate` idempoten (`schema_migrations`), `api/worker/scheduler` `depends_on: migrate service_completed_successfully`.
-- Backup: `sh /scripts/backup-postgres.sh`, retensi `RETENTION_DAYS` (default 14), tanpa `|| echo` penutup kegagalan.
+- Backup lokal & offsite: `sh /scripts/backup-postgres.sh` (retensi 14 hari) dan `scripts/backup-offsite.sh` (AES-256 terenkripsi ke S3/Oracle Object Storage dengan uji restore dan verifikasi baris tabel).
+- Observabilitas & Alerting: `VpsAlertChecker` memantau `/ready`, BullMQ, disk, TLS, dan backup dengan peringatan otomatis ke Telegram via `TelegramAlertTransport`. Tracing OpenTelemetry dengan W3C `traceparent` dan redaksi data sensitif.
+- Migrasi 0013 (`0013_model_capabilities_and_preferences.sql`): Idempoten, menambahkan kolom preferensi pengguna (`default_model`, `default_mode`), metadata kapabilitas model terverifikasi (`capability_details`, `is_recommended`, `is_default`, `availability_status`, `last_latency_ms`, `last_verified_at`), dan tabel `model_routing_policies`. Konfigurasi mode Auto didukung lewat env (`AUTO_MODEL_FAST`, `AUTO_MODEL_CODING`, `AUTO_MODEL_COMPLEX`, `AUTO_MODEL_RESEARCH`, `AUTO_MODEL_DEFAULT`) atau tabel tanpa hardcode nama model di kode sumber.
+- Rilis Klien 0.3.0: Alur Actions `.github/workflows/release-installers.yml` menghasilkan installer Windows NSIS (`Personal AI OS - Windows Agent_0.3.0_x64-setup.exe`) dan Android APK (`personal-ai-os.apk`).
+

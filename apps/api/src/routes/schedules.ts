@@ -252,7 +252,7 @@ export const registerSchedulesRoutes = async (
     const user = await authenticate(request, reply);
     if (!user) return;
 
-    const list = notificationEngine.listNotifications(user.id);
+    const list = await notificationEngine.listNotifications(user.id);
     return reply.code(200).send({ notifications: list });
   });
 
@@ -263,14 +263,14 @@ export const registerSchedulesRoutes = async (
       const user = await authenticate(request, reply);
       if (!user) return;
 
-      const notif = notificationEngine.getNotification(request.params.id);
+      const notif = await notificationEngine.getNotification(request.params.id);
       if (!notif || notif.userId !== user.id) {
         return reply
           .code(404)
           .send({ error: { code: 'NOT_FOUND', message: 'Notifikasi tidak ditemukan' } });
       }
 
-      const updated = notificationEngine.markAsRead(notif.id);
+      const updated = await notificationEngine.markAsRead(notif.id);
       return reply.code(200).send({ notification: updated });
     },
   );
@@ -282,7 +282,7 @@ export const registerSchedulesRoutes = async (
       const user = await authenticate(request, reply);
       if (!user) return;
 
-      const prefs = notificationEngine.getUserPreferences(user.id);
+      const prefs = await notificationEngine.getUserPreferences(user.id);
       return reply.code(200).send({ preferences: prefs });
     },
   );
@@ -305,7 +305,7 @@ export const registerSchedulesRoutes = async (
         });
       }
 
-      notificationEngine.setUserPreferences(user.id, request.body.preferences);
+      await notificationEngine.setUserPreferences(user.id, request.body.preferences);
       return reply.code(200).send({ preferences: request.body.preferences });
     },
   );
