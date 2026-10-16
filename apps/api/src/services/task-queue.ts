@@ -11,6 +11,7 @@ export interface TaskJobData {
   kind: string;
   attempt: number;
   maxAttempts: number;
+  traceparent?: string | undefined;
 }
 
 export interface TaskQueue {
@@ -38,6 +39,9 @@ export class BullMqTaskQueue implements TaskQueue {
       }
     }
 
+    const payloadObj = task.payload as Record<string, unknown> | null | undefined;
+    const traceparent = typeof payloadObj?.traceparent === 'string' ? payloadObj.traceparent : undefined;
+
     await this.queue.add(
       task.kind,
       {
@@ -47,6 +51,7 @@ export class BullMqTaskQueue implements TaskQueue {
         kind: task.kind,
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
+        traceparent,
       },
       {
         jobId: task.id,

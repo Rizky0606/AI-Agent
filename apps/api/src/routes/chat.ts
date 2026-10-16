@@ -9,6 +9,7 @@ import type { ModelRouter } from '../services/model-router.ts';
 import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import { ModelGatewayError } from '@personal-ai-os/model-gateway';
 import { MemoryCandidateExtractor } from '@personal-ai-os/memory';
+import { defaultTracer } from '@personal-ai-os/shared';
 import type { MemoryRepository } from '../db/memory-repository.ts';
 
 export type ChatRouteDependencies = {
@@ -169,10 +170,41 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         });
       }
 
-      const response = await deps.router.chat(
-        { messages },
-        requirements,
-      );
+      const modelSpan = defaultTracer.startSpan('model_call', 'model_call', {
+        attributes: {
+          'model.id': resolution.primary.model,
+          'model.mode': effectiveMode,
+        },
+      });
+
+      let response;
+      try {
+        response = await deps.router.chat({ messages }, requirements);
+        defaultTracer.endSpan(modelSpan, {
+          status: 'ok',
+          attributes: {
+            'model.tokens_prompt': response.usage?.promptTokens,
+            'model.tokens_completion': response.usage?.completionTokens,
+          },
+        });
+        defaultTracer.recordModelCall({
+          modelId: response.resolvedModel ?? resolution.primary.model,
+          provider: '9router',
+          durationMs: modelSpan.durationMs ?? 0,
+          promptTokens: response.usage?.promptTokens ?? 0,
+          completionTokens: response.usage?.completionTokens ?? 0,
+          totalCostUsd: 0,
+          retryCount: 0,
+          status: 'success',
+          traceId: modelSpan.traceId,
+        });
+      } catch (chatErr) {
+        defaultTracer.endSpan(modelSpan, {
+          status: 'error',
+          errorMessage: chatErr instanceof Error ? chatErr.message : String(chatErr),
+        });
+        throw chatErr;
+      }
 
       // Persist assistant message
       const savedAssistant = await deps.chatRepo.appendMessage(

@@ -74,6 +74,7 @@ export interface TaskJobData {
   kind: string;
   attempt: number;
   maxAttempts: number;
+  traceparent?: string | undefined;
 }
 
 export interface TaskQueueEnqueuer {
@@ -169,7 +170,10 @@ export class TaskExecutor {
   }
 
   async execute(job: TaskJobData): Promise<void> {
+    const parsedTrace = defaultTracer.parseTraceparent(job.traceparent);
     const span = defaultTracer.startSpan('task_execution', 'task_execution', {
+      traceId: parsedTrace?.traceId,
+      parentSpanId: parsedTrace?.parentSpanId,
       attributes: {
         'task.id': job.taskId,
         'user.id': job.userId,

@@ -106,11 +106,19 @@ export const registerTaskRoutes = (app: FastifyInstance, deps: TaskRouteDependen
         }
       }
 
+      const outgoingTraceparent =
+        (reply.getHeader('traceparent') as string | undefined) ??
+        (typeof request.headers['traceparent'] === 'string' ? request.headers['traceparent'] : undefined);
+      const enrichedPayload = {
+        ...body.payload,
+        ...(outgoingTraceparent && !body.payload.traceparent ? { traceparent: outgoingTraceparent } : {}),
+      };
+
       const { task, isDuplicate } = await deps.taskRepo.createTask({
         userId: user.id,
         projectId: body.projectId,
         kind: body.kind,
-        payload: body.payload,
+        payload: enrichedPayload,
         conversationId: body.conversationId ?? null,
         idempotencyKey: body.idempotencyKey,
         priority: body.priority,

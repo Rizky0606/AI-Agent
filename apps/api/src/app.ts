@@ -13,7 +13,7 @@ import type { ModelGateway } from '@personal-ai-os/model-gateway';
 import type { TaskEventBroadcaster } from './services/event-broadcaster.ts';
 import type { TaskQueue } from './services/task-queue.ts';
 import type { ModelRouter } from './services/model-router.ts';
-import { defaultTracer, IllegalTaskStateTransitionError } from '@personal-ai-os/shared';
+import { defaultTracer, IllegalTaskStateTransitionError, type TelemetrySpan } from '@personal-ai-os/shared';
 import { registerChatRoutes } from './routes/chat.ts';
 import { registerProjectRoutes } from './routes/projects.ts';
 import type { ApprovalRepository } from './db/approval-repository.ts';
@@ -215,8 +215,41 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
   await app.register(rateLimit, { max: 100, timeWindow: '1 minute', allowList: ['127.0.0.1'] });
   await app.register(websocket);
   app.addHook('onRequest', async (request, reply) => {
+    // Security headers (HSTS, nosniff, DENY, referrer-policy, permissions-policy)
+    reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+
+    // W3C Traceparent extraction and propagation
+    const traceparentHeader =
+      typeof request.headers['traceparent'] === 'string' ? request.headers['traceparent'] : undefined;
+    const parsedTrace = defaultTracer.parseTraceparent(traceparentHeader);
+    const traceId = parsedTrace?.traceId ?? defaultTracer.generateTraceId();
+    const parentSpanId = parsedTrace?.parentSpanId;
+    const isSampled = defaultTracer.shouldSample(traceId);
+
+    const routePattern = (request as unknown as { routeOptions?: { url?: string } }).routeOptions?.url ?? request.url;
+    const span = defaultTracer.startSpan(
+      `${request.method} ${routePattern}`,
+      'http_request',
+      {
+        traceId,
+        parentSpanId,
+        attributes: {
+          'http.method': request.method,
+          'http.url': request.url,
+          'http.route': routePattern,
+        },
+      },
+    );
+    (request as unknown as { telemetrySpan: TelemetrySpan }).telemetrySpan = span;
+
+    const outgoingTraceparent = defaultTracer.createTraceparent(traceId, span.spanId, isSampled);
     reply.header('x-request-id', request.id);
-    reply.header('x-trace-id', request.id);
+    reply.header('x-trace-id', traceId);
+    reply.header('traceparent', outgoingTraceparent);
 
     const origin = request.headers.origin;
     if (!origin || !CORS_ALLOWED_ORIGINS.includes(origin)) return;
@@ -226,10 +259,23 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'OPTIONS') {
       reply
         .header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
-        .header('Access-Control-Allow-Headers', 'authorization,content-type')
+        .header('Access-Control-Allow-Headers', 'authorization,content-type,traceparent')
         .header('Access-Control-Max-Age', '600')
         .code(204)
         .send();
+    }
+  });
+
+  app.addHook('onResponse', async (request, reply) => {
+    const span = (request as unknown as { telemetrySpan?: TelemetrySpan }).telemetrySpan;
+    if (span) {
+      const isError = reply.statusCode >= 400;
+      defaultTracer.endSpan(span, {
+        status: isError ? 'error' : 'ok',
+        attributes: {
+          'http.status_code': reply.statusCode,
+        },
+      });
     }
   });
 
