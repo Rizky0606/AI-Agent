@@ -226,7 +226,11 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     const traceparentHeader =
       typeof request.headers['traceparent'] === 'string' ? request.headers['traceparent'] : undefined;
     const parsedTrace = defaultTracer.parseTraceparent(traceparentHeader);
-    const traceId = parsedTrace?.traceId ?? defaultTracer.generateTraceId();
+    const traceId =
+      parsedTrace?.traceId ??
+      (typeof request.headers['x-trace-id'] === 'string'
+        ? request.headers['x-trace-id']
+        : defaultTracer.generateTraceId());
     const parentSpanId = parsedTrace?.parentSpanId;
     const isSampled = defaultTracer.shouldSample(traceId);
 
@@ -259,7 +263,7 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     if (request.method === 'OPTIONS') {
       reply
         .header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
-        .header('Access-Control-Allow-Headers', 'authorization,content-type,traceparent')
+        .header('Access-Control-Allow-Headers', 'authorization,content-type')
         .header('Access-Control-Max-Age', '600')
         .code(204)
         .send();

@@ -24,7 +24,7 @@ interface ColumnRow {
  * assumed it existed. Only the schema -> database direction fails the test; extra tables in the
  * database are allowed because the migration runner owns `schema_migrations`.
  */
-test('schema.ts matches the database the migrations build', async () => {
+test('schema.ts matches the database the migrations build', async (t) => {
   const baseUrl =
     process.env['DATABASE_URL'] ??
     'postgresql://personal_ai_os:personal_ai_secret@127.0.0.1:5432/personal_ai_os';
@@ -32,7 +32,20 @@ test('schema.ts matches the database the migrations build', async () => {
   const scratchName = `schema_parity_${randomBytes(6).toString('hex')}`;
   const adminUrl = new URL(baseUrl);
   adminUrl.pathname = '/postgres';
-  const admin = postgres(adminUrl.toString(), { max: 1, prepare: false, onnotice: () => undefined });
+  const admin = postgres(adminUrl.toString(), { max: 1, prepare: false, connect_timeout: 2, onnotice: () => undefined });
+
+  try {
+    await admin`SELECT 1 as ok`;
+  } catch (err) {
+    try {
+      await admin.end({ timeout: 1 });
+    } catch {
+      // ignore
+    }
+    t.skip(`PostgreSQL not reachable: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
   const scratchUrl = new URL(baseUrl);
   scratchUrl.pathname = `/${scratchName}`;
   const scratch = postgres(scratchUrl.toString(), { max: 1, prepare: false, onnotice: () => undefined });

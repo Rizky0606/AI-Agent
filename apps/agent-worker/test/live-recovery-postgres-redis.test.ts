@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Redis } from 'ioredis';
+import postgres from 'postgres';
 import { eq } from 'drizzle-orm';
 import {
   createVersionedCheckpoint,
@@ -26,7 +27,42 @@ const DATABASE_URL =
   process.env.DATABASE_URL ??
   'postgresql://personal_ai_os:personal_ai_secret@127.0.0.1:5432/personal_ai_os';
 
-test('Postgres + Redis Live Recovery Drill: Task running -> Worker crash -> Restart -> Checkpoint resume exactly once', async () => {
+let isPostgresAvailable = false;
+let isRedisAvailable = false;
+let probed = false;
+
+async function probeBackends() {
+  if (probed) return { isPostgresAvailable, isRedisAvailable };
+  probed = true;
+  try {
+    const sql = postgres(DATABASE_URL, { max: 1, connect_timeout: 2, onnotice: () => undefined });
+    await sql`SELECT 1 as ok`;
+    await sql.end({ timeout: 1 });
+    isPostgresAvailable = true;
+  } catch {
+    isPostgresAvailable = false;
+  }
+
+  try {
+    const redis = new Redis(REDIS_URL, { connectTimeout: 2000, maxRetriesPerRequest: 1 });
+    const ping = await redis.ping();
+    if (ping === 'PONG') {
+      isRedisAvailable = true;
+    }
+    await redis.quit();
+  } catch {
+    isRedisAvailable = false;
+  }
+
+  return { isPostgresAvailable, isRedisAvailable };
+}
+
+test('Postgres + Redis Live Recovery Drill: Task running -> Worker crash -> Restart -> Checkpoint resume exactly once', async (t) => {
+  const { isPostgresAvailable: pgOk, isRedisAvailable: redisOk } = await probeBackends();
+  if (!pgOk || !redisOk) {
+    t.skip('Live PostgreSQL and Redis required for this recovery test');
+    return;
+  }
   const { client: sqlClient, db } = createDatabase(DATABASE_URL);
   const taskRepo = new SqlTaskRepository(db);
   const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
@@ -186,7 +222,12 @@ test('Postgres + Redis Live Recovery Drill: Task running -> Worker crash -> Rest
   }
 });
 
-test('Postgres Live Recovery Drill: Bounded retries abort crash-looping tasks', async () => {
+test('Postgres Live Recovery Drill: Bounded retries abort crash-looping tasks', async (t) => {
+  const { isPostgresAvailable: pgOk, isRedisAvailable: redisOk } = await probeBackends();
+  if (!pgOk || !redisOk) {
+    t.skip('Live PostgreSQL and Redis required for this recovery test');
+    return;
+  }
   const { client: sqlClient, db } = createDatabase(DATABASE_URL);
   const taskRepo = new SqlTaskRepository(db);
   const broadcaster = new RedisTaskEventBroadcaster({ redisUrl: REDIS_URL });
@@ -248,7 +289,12 @@ test('Postgres Live Recovery Drill: Bounded retries abort crash-looping tasks', 
   }
 });
 
-test('Postgres Live Recovery Drill: Corrupted checkpoint fails task safely without resuming', async () => {
+test('Postgres Live Recovery Drill: Corrupted checkpoint fails task safely without resuming', async (t) => {
+  const { isPostgresAvailable: pgOk, isRedisAvailable: redisOk } = await probeBackends();
+  if (!pgOk || !redisOk) {
+    t.skip('Live PostgreSQL and Redis required for this recovery test');
+    return;
+  }
   const { client: sqlClient, db } = createDatabase(DATABASE_URL);
   const taskRepo = new SqlTaskRepository(db);
   const broadcaster = new RedisTaskEventBroadcaster({ redisUrl: REDIS_URL });
@@ -314,7 +360,12 @@ test('Postgres Live Recovery Drill: Corrupted checkpoint fails task safely witho
   }
 });
 
-test('Postgres Live Recovery Drill: PostgreSQL advisory lock prevents concurrent recovery race', async () => {
+test('Postgres Live Recovery Drill: PostgreSQL advisory lock prevents concurrent recovery race', async (t) => {
+  const { isPostgresAvailable: pgOk } = await probeBackends();
+  if (!pgOk) {
+    t.skip('Live PostgreSQL required for advisory lock test');
+    return;
+  }
   const { client: sqlClient, db } = createDatabase(DATABASE_URL);
   const taskRepo = new SqlTaskRepository(db);
 
