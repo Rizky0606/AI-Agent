@@ -89,6 +89,7 @@ capabilities:
       - Lainnya Tab: Clean consumer view with 7 sections: Akun (with Logout), Model default, Notifikasi (push switch), Tampilan (Sistem/Terang/Gelap via dynamic useAppTheme synchronized with ui-store and OS appearance), Memori (scaffold Sesi 10), Skill & MCP (Sesi 14 implemented: per-project toggle, manifest viewer, and MCP server/tool status & logs), and collapsible Lanjutan (Server endpoint, Device ID, User ID, PostgreSQL/Redis/API health status, Artifacts, Projects).
       - Centralized Indonesian localization in `src/locales/id-ID.ts` with 100% consistent Indonesian copy.
       - Client Model Selector integrated (Sesi 6, ADR 0008): Model chip bottom sheet with provider grouping, capability verification badges, catalog 503 resilience, and per-conversation model/mode persistence.
+      - Sesi 17 QA & Release: All 56 test files passing in CI. Expo export bundles cleanly (3.7 MB JS, 17 assets). APK generation pipeline verified in `.github/workflows/release-installers.yml` with release version 0.3.0. Manual verification on real device remains necessary for physical rendering.
       - Remaining gaps: attachment upload unavailable; physical Android device visual rendering requires manual verification.
   windows:
     status: partial
@@ -115,6 +116,7 @@ capabilities:
       - Windows CI & Smoke Test: Added `windows-ci` job in `.github/workflows/ci.yml` running on `windows-latest` for `cargo test`, full allowlist test suite, NSIS bundle, and silent install/verify/uninstall smoke test (`scripts/windows-installer-smoke.ps1`).
       - Code Signing & Auto-Updater Runbooks: Published `docs/windows/code-signing-runbook.md` (evaluating Azure Trusted Signing vs Cloud HSM vs EV) and ADR 0017 (`docs/adr/0017-usulan-windows-auto-updater-tauri.md`).
       - High-Risk Capabilities: Enforced default OFF with `requiresExplicitOptIn: true` for `powershell`, `docker`, and `vscode`, plus folder allowlist boundary for filesystem.
+      - Sesi 17 QA & Release: All 74 test files passing in CI. Vite production bundle builds in <8s (dist/index.html, Inter fonts, CSS 62.5 KB, JS 334 KB). Tauri NSIS installer target configured for version 0.3.0. Manual verification on real Windows hardware remains necessary for SmartScreen and display rendering.
       - Remaining gaps: Physical Windows hardware screen visual inspection and real code signing certificate procurement require manual user action.
   memory_artifacts_observability:
     status: partial

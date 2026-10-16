@@ -1,13 +1,16 @@
-# Installable app releases
+# Installable app releases (v0.3.0)
 
 ## Build installers
 
-GitHub Actions → **Build installable apps** → **Run workflow**. Both jobs build from source with no repository secret: Android runs `expo prebuild` plus `gradlew assembleRelease` on `ubuntu-latest`, Windows runs `tauri build --bundles nsis` on `windows-latest`. Download artifacts from the completed Actions run:
+GitHub Actions → **Build installable apps** (`.github/workflows/release-installers.yml`) → **Run workflow**. Both jobs build from source with no repository secrets required:
+- Android runs `expo prebuild` plus `gradlew assembleRelease` on `ubuntu-latest`.
+- Windows runs `tauri build --bundles nsis` on `windows-latest`.
 
-- `personal-ai-os-android-apk` → `personal-ai-os.apk`
-- `personal-ai-os-windows-installer` → `.exe`
+Download artifacts from the completed Actions run:
+- `personal-ai-os-android-apk` → `personal-ai-os.apk` (Versi 0.3.0)
+- `personal-ai-os-windows-installer` → `Personal AI OS - Windows Agent_0.3.0_x64-setup.exe` (Versi 0.3.0)
 
-No installer is committed to the repository. No signing secret is required. Windows may show SmartScreen warnings because the installer is not signed by a trusted code-signing certificate, and the APK carries the debug keystore.
+No installer is committed to the Git repository. Windows may display a Windows Defender SmartScreen ("Windows protected your PC") warning because the binary is unsigned by an EV certificate (see `docs/windows/code-signing-runbook.md` for production signing options), and the APK carries the debug keystore for easy sideloading.
 
 ### Building without GitHub Actions
 
@@ -118,3 +121,109 @@ Windows Agent connects as a local device agent. It does not run OMP/Hermes local
 ## Security and production
 
 Rotate previously exposed production secrets before routine use. Do not embed credentials in either installer. Protect artifact downloads and avoid public sharing of personal-server APKs/installers.
+
+---
+
+## 📋 Skenario End-to-End Verifikasi Klien (Checklist Pengujian Manual)
+
+Berikut adalah panduan langkah demi langkah yang dapat diulang secara mandiri untuk menguji fungsionalitas penuh Personal AI OS pada perangkat klien Windows dan Android:
+
+### A. Checklist Verifikasi Windows Agent (`Personal AI OS - Windows Agent`)
+
+- [ ] **1. Instalasi Bersih (*Fresh Install*)**:
+  - Unduh `Personal AI OS - Windows Agent_0.3.0_x64-setup.exe` dari rilis Actions.
+  - Jalankan installer. Jika muncul SmartScreen ("Windows protected your PC"), klik *More info* → *Run anyway*.
+  - Selesaikan instalasi NSIS ke direktori pengguna (`%LOCALAPPDATA%\Programs\personal-ai-os-windows`).
+  - *Alternatif pengujian senyap via CI/PowerShell*:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts/windows-installer-smoke.ps1
+    ```
+- [ ] **2. Single-Step Login (Google PKCE / Email)**:
+  - Buka aplikasi. Jendela 1024x720 terbuka dengan tema sistem default.
+  - Klik **Masuk dengan Google**: browser sistem terbuka secara otomatis ke alur OAuth PKCE (`GET /v1/auth/google/start`).
+  - Lakukan otorisasi di browser; browser mengalihkan kembali ke loopback agent (`127.0.0.1:<port>/auth`).
+  - Aplikasi Windows langsung masuk ke dashboard utama tanpa perlu klik "Hubungkan" secara manual. Kunci privat ECDSA P-256 dibuat dan diamankan di Rust DPAPI.
+- [ ] **3. Chat Awal dengan Mode Auto**:
+  - Pastikan chip model pada komposer obrolan menunjukkan **Auto (Disarankan)**.
+  - Ketik pesan: `"Halo, jelaskan arsitektur Personal AI OS dan prinsip izin keamanannya."`
+  - Tekan **Enter** untuk mengirim. Streaming teks muncul *real-time*. Pada gelembung jawaban asisten, pastikan label menampilkan `Dijawab oleh <model>`.
+- [ ] **4. Pemilihan Model Spesifik (*Model Selector Popover*)**:
+  - Klik chip Model pada komposer. Popover pemilih model terbuka dengan pengelompokan provider (OpenAI, Anthropic, Google, DeepSeek).
+  - Verifikasi badge kapabilitas terverifikasi (*Stream*, *Tools*, *Vision*) dan indikator latensi.
+  - Pilih salah satu model spesifik. Kirim pertanyaan tindak lanjut. Pastikan respons mencantumkan model yang dipilih.
+- [ ] **5. Task Coding via OMP dengan Langkah Live**:
+  - Pada baris chip komposer, ubah chip Runtime dari `Auto` menjadi `omp`.
+  - Berikan instruksi coding: `"Buat file scratch/calc.ts yang mengekspor fungsi tambah dan kurang dengan TypeScript strict."`
+  - Tekan Kirim. Tugas durabel dibuat (`kind: 'coding_runtime'`).
+  - Panel samping Aktivitas (*Activity Panel*) otomatis menampilkan kartu tugas dengan langkah-langkah live streaming (`task.tool_call`, `file_edit` diff preview).
+- [ ] **6. Persetujuan Aksi HIGH Risk (*Risk Approvals*)**:
+  - Jika tugas meminta perintah PowerShell atau tool berskala sistem (`powershell_execute` atau akses file di luar workspace), status tugas beralih ke `waiting_approval`.
+  - Notifikasi toast peringatan muncul di desktop.
+  - Di panel Aktivitas, kartu persetujuan menampilkan tingkat risiko (oranye/merah), deskripsi aksi, dan konsekuensi.
+  - Klik **Setujui**. Dialog konfirmasi modal sekunder muncul meminta penegasan. Konfirmasi persetujuan; tugas langsung melanjutkan eksekusi dari checkpoint terakhir.
+- [ ] **7. Peninjauan Artefak (*Artifact Preview*)**:
+  - Setelah tugas selesai (`completed` 100%), periksa tab **Artefak** di panel samping.
+  - Buka artefak file yang dihasilkan. Verifikasi bahwa isi file, ukuran byte, dan checksum SHA-256 ditampilkan dengan rapi.
+- [ ] **8. Memori Usulan (*Proposed Memories*)**:
+  - Buka layar **Memori** (ikon otak di navigasi).
+  - Bagian **Usulan Memori Baru** menampilkan fakta atau preferensi yang diekstraksi dari sesi obrolan/tugas sebelumnya (misal: preferensi bahasa atau proyek).
+  - Klik **Setujui** untuk memindahkan memori usulan menjadi memori aktif (tier 30d/permanen), atau **Tolak** untuk menghapusnya.
+- [ ] **9. Manajemen Skill & MCP**:
+  - Buka layar **Skill & MCP**.
+  - Lihat manifes dari 3 skill bawaan (`plan-before-act`, `verify-with-evidence`, `security-review`).
+  - Uji tombol toggle per-proyek untuk mengaktifkan/menonaktifkan skill.
+  - Tinjau daftar server MCP yang terdaftar (misal: `echo` server) beserta alat-alat yang diekspos di baliknya.
+- [ ] **10. Logout dan Login Ulang (*Session Persistence*)**:
+  - Di footer sidebar, klik menu akun → **Keluar Akun**. Token lokal dihapus.
+  - Tutup aplikasi dan buka kembali. Aplikasi menampilkan layar login bersih.
+  - Masuk kembali menggunakan akun yang sama. Riwayat percakapan sebelumnya termuat kembali dengan benar.
+- [ ] **11. Simulasi Restart API di Tengah Task (*Fault-Tolerance*)**:
+  - Mulai tugas baru yang berjalan agak panjang (misal: riset multi-langkah).
+  - Saat tugas berada dalam status `running`, hentikan atau restart kontainer API backend di VPS / terminal:
+    ```bash
+    docker compose restart api
+    ```
+  - Amati indikator koneksi di Windows: dot beralih kuning (koneksi terputus/mencoba menyambung kembali), lalu kembali hijau dalam waktu <30 detik.
+  - Tugas di panel Aktivitas tidak gagal atau hilang; aliran event tersambung kembali dan melanjutkan pembaruan progress menggunakan checkpoint terakhir.
+
+---
+
+### B. Checklist Verifikasi Android Client (`Personal AI OS Mobile`)
+
+- [ ] **1. Instalasi Bersih APK**:
+  - Salin `personal-ai-os.apk` ke perangkat fisik Android atau Android Emulator (API 34/35).
+  - Izinkan instalasi dari sumber tidak dikenal (*Install unknown apps*) dan pasang APK.
+- [ ] **2. Login Google PKCE & Server URL**:
+  - Buka aplikasi **Personal AI OS**. Layar onboarding gelap bertema Tailwind/Slate muncul dengan tombol hero **Masuk dengan Google**.
+  - *(Opsional)* Jika menggunakan server backend lokal, buka *Pengaturan Lanjutan (Server)* dan masukkan IP VPS/PC (`http://10.0.2.2:3000` di emulator atau `https://ai.ojixx.my.id`).
+  - Ketuk **Masuk dengan Google**. Browser Android (Chrome/Custom Tab) terbuka, lakukan sign-in, dan aplikasi secara otomatis menerima callback melalui deep link `personal-ai://auth`.
+- [ ] **3. Tab Navigasi & Chat Interaktif**:
+  - Pastikan 3 bottom tabs tampil di bagian bawah: **Chat**, **Aktivitas**, dan **Lainnya**.
+  - Pada tab **Chat**, ketuk salah satu dari 4 kartu contoh instruksi berbahasa Indonesia pada state kosong.
+  - Pesan terkirim secara instan; asisten membalas dengan streaming respons yang rapi dalam MarkdownView.
+- [ ] **4. Pemilih Model & Chip Mode**:
+  - Di atas komposer pesan, ketuk chip Model. Bottom sheet terbuka menampilkan daftar model yang dikelompokkan berdasarkan provider.
+  - Pilih model dan ubah mode (misal: *Coding* atau *Riset*). Kirim pesan baru dan pastikan mode aktif diterapkan.
+- [ ] **5. Peluncuran Task & Pemantauan Live di Tab Aktivitas**:
+  - Minta tugas riset: `"Lakukan riset komprehensif tentang algoritma pencarian hybrid PostgreSQL pgvector."`
+  - Navigasi ke tab **Aktivitas**. Badge notifikasi angka menampilkan jumlah tugas aktif.
+  - Ketuk kartu tugas untuk membuka *TaskDetailScreen*. Perhatikan timeline tahapan, log perkiraan, dan sumber referensi yang dikutip.
+- [ ] **6. Persetujuan Risiko (HIGH Risk Approval Bottom Sheet)**:
+  - Saat agen memerlukan akses tool berisiko, kartu persetujuan muncul di tab Aktivitas dan Chat.
+  - Ketuk **Tinjau Persetujuan**. Bottom sheet muncul menampilkan tingkat risiko, target aksi, dan penjelasan bahasa Indonesia.
+  - Ketuk **Setujui**. Dialog konfirmasi peringatan risiko muncul. Ketuk **Ya, Lanjutkan**.
+- [ ] **7. Tab Lainnya (Memori, Skill, & Pengaturan Sistem)**:
+  - Buka tab **Lainnya**.
+  - Ketuk **Kelola Memori**: tinjau daftar memori aktif dan daftar usulan memori (*proposed*). Uji fitur setujui/tolak usulan.
+  - Ketuk **Skill & MCP**: tinjau skill aktif dan status server MCP eksternal.
+  - Ubah tema tampilan di bagian *Tampilan* (Sistem / Gelap / Terang) dan pastikan UI bertransisi mulus tanpa kedip.
+- [ ] **8. Pengujian Deep Link & Notifikasi**:
+  - Simulasikan pembukaan deep link melalui ADB:
+    ```bash
+    adb shell am start -W -a android.intent.action.VIEW -d "personal-ai://tasks/<task-id>" com.personalai.os
+    ```
+  - Aplikasi langsung mengarahkan pengguna ke layar detail tugas yang bersangkutan.
+- [ ] **9. Logout & Login Ulang**:
+  - Pada tab **Lainnya**, ketuk **Keluar Akun**. Konfirmasi logout.
+  - Masuk kembali menggunakan email/password atau Google untuk memastikan sesi SecureStore dibersihkan dan dipulihkan dengan benar.
+

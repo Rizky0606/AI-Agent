@@ -1,6 +1,6 @@
 [package]
 name = "personal-ai-os-windows"
-version = "0.1.0"
+version = "0.3.0"
 description = "Personal AI OS Windows Agent Tauri 2 application"
 edition = "2021"
 

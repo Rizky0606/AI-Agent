@@ -250,9 +250,12 @@ Jika rilis mengalami error fatal (500 internal errors, crash loop, atau OOM):
    docker compose ps
    ```
 
-## 8. Hardening yang Sudah Diterapkan (2026-10-11)
+## 8. Hardening yang Sudah Diterapkan (2026-10-16, Versi 0.3.0)
 
-- Worker production memakai `SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo })` (commit `7fe8246`): aksi HIGH (`git:push`, `deploy:*`, `external:send`) wajib `waiting_approval` + approve/deny via `/v1/approvals`.
+- Worker production memakai `SecuredCapabilityGuard(new PermissionEngine(), { approvalValidator: approvalRepo })`: aksi HIGH (`git:push`, `deploy:*`, `external:send`, `powershell_execute`) wajib `waiting_approval` + approve/deny via `/v1/approvals`.
 - Migrasi one-shot `migrate` idempoten (`schema_migrations`), `api/worker/scheduler` `depends_on: migrate service_completed_successfully`.
-- Backup: `sh /scripts/backup-postgres.sh`, retensi `RETENTION_DAYS` (default 14), tanpa `|| echo` penutup kegagalan.
+- Backup lokal & offsite: `sh /scripts/backup-postgres.sh` (retensi 14 hari) dan `scripts/backup-offsite.sh` (AES-256 terenkripsi ke S3/Oracle Object Storage dengan uji restore dan verifikasi baris tabel).
+- Observabilitas & Alerting: `VpsAlertChecker` memantau `/ready`, BullMQ, disk, TLS, dan backup dengan peringatan otomatis ke Telegram via `TelegramAlertTransport`. Tracing OpenTelemetry dengan W3C `traceparent` dan redaksi data sensitif.
 - Migrasi 0013 (`0013_model_capabilities_and_preferences.sql`): Idempoten, menambahkan kolom preferensi pengguna (`default_model`, `default_mode`), metadata kapabilitas model terverifikasi (`capability_details`, `is_recommended`, `is_default`, `availability_status`, `last_latency_ms`, `last_verified_at`), dan tabel `model_routing_policies`. Konfigurasi mode Auto didukung lewat env (`AUTO_MODEL_FAST`, `AUTO_MODEL_CODING`, `AUTO_MODEL_COMPLEX`, `AUTO_MODEL_RESEARCH`, `AUTO_MODEL_DEFAULT`) atau tabel tanpa hardcode nama model di kode sumber.
+- Rilis Klien 0.3.0: Alur Actions `.github/workflows/release-installers.yml` menghasilkan installer Windows NSIS (`Personal AI OS - Windows Agent_0.3.0_x64-setup.exe`) dan Android APK (`personal-ai-os.apk`).
+
