@@ -1,7 +1,7 @@
 # ADR 0017: Usulan Sistem Pembaruan Otomatis Windows Menggunakan Tauri Updater dan Kunci Terpisah
 
 ## Status
-Diusulkan (Proposed) — *Menunggu persetujuan eksplisit dari Pengguna sebelum implementasi kode.*
+Diterima (Accepted) — *Disetujui pengguna pada Sesi 15.*
 
 ## Konteks
 Aplikasi agen Windows (`Personal AI OS Windows Agent`) bertindak sebagai worker eksekusi lokal dan antarmuka tray yang berjalan terus-menerus di latar belakang.

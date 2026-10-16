@@ -28,5 +28,13 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IFBlcnNvbmFsIEFJIE9TIENJIFJlbGVhc2UgS2V5ClJXVGF5T1NQVUNxL3RBMlJ4dXZwNTRsQ0wzMVpxVzFXN09hUXd4TXFpRHV2cGF3WjhhQ2lVUkJvCg==",
+      "endpoints": [
+        "https://github.com/Rizky0606/AI-Agent/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

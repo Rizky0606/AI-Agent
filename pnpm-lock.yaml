@@ -264,6 +264,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.12.3
         version: 2.12.3
+      '@tauri-apps/plugin-updater':
+        specifier: ^2.14.0
+        version: 2.14.0
       lucide-react:
         specifier: ^1.57.0
         version: 1.57.0(@types/react@18.3.31)(react@18.3.1)
@@ -2117,6 +2120,9 @@ packages:
     resolution: {integrity: sha512-PMSppzAnlT+BvZtRKuidxjRSm2r5t8kDpJ/czmmQUa0AtDNTwrjLE8vApK3phCWGg7isfnYL46Dl1jB4ArI0hA==}
     engines: {node: '>= 10'}
     hasBin: true
+
+  '@tauri-apps/plugin-updater@2.14.0':
+    resolution: {integrity: sha512-gdylJ9tger4hkyOn24QZd6MNOKVo2Eh53iw5th2Qj1vKTR/+u4PIwJWuiis5hohYvobn6iOvlnALfrqIPSzh7Q==}
 
   '@turbo/darwin-64@2.11.7':
     resolution: {integrity: sha512-Z2LFOxwbiJueD1miByXJS/BrW21vv6YaQXZustty5jEX4vQYw6zyh101Sz1QO7WG0mqBzKagZ/DoAeeujI0/Sw==}
@@ -7278,6 +7284,10 @@ snapshots:
       '@tauri-apps/cli-win32-arm64-msvc': 2.12.2
       '@tauri-apps/cli-win32-ia32-msvc': 2.12.2
       '@tauri-apps/cli-win32-x64-msvc': 2.12.2
+
+  '@tauri-apps/plugin-updater@2.14.0':
+    dependencies:
+      '@tauri-apps/api': 2.12.3
 
   '@turbo/darwin-64@2.11.7':
     optional: true
