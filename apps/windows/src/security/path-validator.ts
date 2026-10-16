@@ -66,11 +66,11 @@ export class PathValidator {
       throw new SecurityError('INVALID_PATH', 'Path must be a non-empty string');
     }
 
-    // 1. Reject Device namespaces (\\.\ or \\?\)
-    if (candidatePath.startsWith('\\\\.\\') || candidatePath.startsWith('\\\\?\\')) {
+    // 1. Reject Device namespaces (\\.\ or \\?\) and UNC paths (\\server\share)
+    if (candidatePath.startsWith('\\\\')) {
       throw new SecurityError(
         'DEVICE_PATH_FORBIDDEN',
-        `Device namespaces are strictly forbidden: "${candidatePath}"`,
+        `Device namespaces and UNC paths are strictly forbidden: "${candidatePath}"`,
       );
     }
 
@@ -87,6 +87,15 @@ export class PathValidator {
     // 3. Reject null bytes
     if (candidatePath.includes('\0')) {
       throw new SecurityError('NULL_BYTE_DETECTED', 'Null bytes in path are strictly forbidden');
+    }
+
+    // 4. Reject encoded traversal and trailing dot/space
+    const lowered = candidatePath.toLowerCase();
+    if (lowered.includes('%2e')) {
+      throw new SecurityError('PATH_TRAVERSAL_DETECTED', 'Encoded traversal components are forbidden');
+    }
+    if (candidatePath.endsWith('.') || candidatePath.endsWith(' ')) {
+      throw new SecurityError('INVALID_PATH_FORMAT', 'Trailing dots and spaces are forbidden in path');
     }
   }
 

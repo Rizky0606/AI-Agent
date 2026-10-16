@@ -6,6 +6,7 @@ import { SecurityError } from './path-validator.ts';
  */
 export type CommandRejectionReason =
   | 'EMPTY_COMMAND'
+  | 'NULL_BYTE_DETECTED'
   | 'ENCODED_COMMAND'
   | 'DYNAMIC_EXECUTION'
   | 'SUBSHELL'
@@ -83,6 +84,17 @@ const PATH_LIKE = /^(?:[a-zA-Z]:[\\/]|\\\\|\.{1,2}[\\/])|\.(?:exe|cmd|bat|com|ps
 
 const CHAIN_SEPARATOR = /(?:&&|\|\||[;|\r\n])/;
 
+function unquote(token: string): string {
+  const trimmed = token.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
 /**
  * Parses the program(s) a PowerShell command text invokes and refuses anything that is not on
  * `allowedCommands`. Conservative by construction: strings are not parsed, so a metacharacter
@@ -96,6 +108,10 @@ export function assertCommandAllowed(
   const text = commandText.trim();
   if (text.length === 0) {
     throw new CommandNotAllowedError('<empty>', 'EMPTY_COMMAND');
+  }
+
+  if (text.includes('\0')) {
+    throw new CommandNotAllowedError('<null_byte>', 'NULL_BYTE_DETECTED');
   }
 
   // Forms that hide the real program from any per-segment check, so they are refused outright.
@@ -113,7 +129,7 @@ export function assertCommandAllowed(
   // it; shorter ones (`-e`, `-en`) are ambiguous and PowerShell refuses them itself, while `-ea`
   // is `-ErrorAction` and must keep working.
   const encodedFlag = tokens.find((token) => {
-    const lowered = token.toLowerCase();
+    const lowered = unquote(token).toLowerCase();
     return lowered.startsWith('-enc') && '-encodedcommand'.startsWith(lowered);
   });
   if (encodedFlag) {
@@ -122,7 +138,8 @@ export function assertCommandAllowed(
 
   // Anything anywhere in the text that re-enters a program.
   for (const token of tokens) {
-    const lowered = token.toLowerCase();
+    const unquotedToken = unquote(token);
+    const lowered = unquotedToken.toLowerCase();
     if (DYNAMIC_EXECUTION_TOKENS[lowered]) {
       throw new CommandNotAllowedError(token, 'DYNAMIC_EXECUTION');
     }
@@ -131,10 +148,39 @@ export function assertCommandAllowed(
     }
   }
 
-  // A chain is only as safe as its worst segment, so every segment's program is checked.
   const allowed = new Set(allowedCommands.map((name) => name.toLowerCase()));
+
+  // Inspect scriptblock { ... } bodies for nested command execution
+  const startBrace = text.indexOf('{');
+  const endBrace = text.lastIndexOf('}');
+  if (startBrace !== -1 && endBrace > startBrace) {
+    const inner = text.slice(startBrace + 1, endBrace);
+    for (const innerSeg of inner.split(CHAIN_SEPARATOR)) {
+      const trimmed = innerSeg.trim();
+      if (!trimmed) continue;
+      const rawHead = trimmed.split(/\s+/)[0] ?? '';
+      const head = unquote(rawHead);
+      if (!head || head.startsWith('"') || head.startsWith("'") || head.startsWith('$') || DATA_EXPRESSION.test(head)) {
+        continue;
+      }
+      const lowered = head.toLowerCase();
+      if (PATH_LIKE.test(head)) {
+        throw new CommandNotAllowedError(head, 'PATH_QUALIFIED_COMMAND');
+      }
+      if (SHELL_WRAPPERS[lowered]) {
+        throw new CommandNotAllowedError(head, 'SHELL_WRAPPER');
+      }
+      if (!allowed.has(lowered)) {
+        throw new CommandNotAllowedError(head, 'COMMAND_NOT_ALLOWED');
+      }
+    }
+  }
+
+  // A chain is only as safe as its worst segment, so every segment's program is checked.
   for (const segment of text.split(CHAIN_SEPARATOR)) {
-    const head = segment.trim().split(/\s+/)[0];
+    const rawHead = segment.trim().split(/\s+/)[0];
+    if (!rawHead) continue;
+    const head = unquote(rawHead);
     if (!head || DATA_EXPRESSION.test(head)) {
       continue;
     }

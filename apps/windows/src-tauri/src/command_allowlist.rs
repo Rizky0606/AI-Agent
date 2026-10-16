@@ -61,6 +61,17 @@ fn is_path_like(token: &str) -> bool {
         .any(|ext| lowered.ends_with(ext))
 }
 
+fn unquote(token: &str) -> &str {
+    let trimmed = token.trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+    {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    }
+}
+
 /// Parses the program(s) a PowerShell command text invokes and refuses anything that is not on
 /// `allowed_commands`. Conservative by construction: strings are not parsed, so a metacharacter
 /// inside a literal is treated as real syntax — that can refuse a legitimate command, never a
@@ -74,6 +85,13 @@ pub fn assert_command_allowed(
         return Err(SecurityError::CommandNotAllowed(
             "<empty>".to_string(),
             "EMPTY_COMMAND",
+        ));
+    }
+
+    if text.contains('\0') {
+        return Err(SecurityError::CommandNotAllowed(
+            "<null_byte>".to_string(),
+            "NULL_BYTE_DETECTED",
         ));
     }
 
@@ -115,7 +133,8 @@ pub fn assert_command_allowed(
     }
 
     for token in &tokens {
-        let lowered = token.to_ascii_lowercase();
+        let unquoted_token = unquote(token);
+        let lowered = unquoted_token.to_ascii_lowercase();
         if DYNAMIC_EXECUTION_TOKENS.contains(&lowered.as_str()) {
             return Err(SecurityError::CommandNotAllowed(
                 token.to_string(),
@@ -130,12 +149,60 @@ pub fn assert_command_allowed(
         }
     }
 
+    // Inspect scriptblock { ... } bodies for nested command execution
+    if let Some(start_brace) = text.find('{') {
+        if let Some(end_brace) = text.rfind('}') {
+            if end_brace > start_brace {
+                let inner = &text[start_brace + 1..end_brace];
+                for inner_segment in inner.split([';', '|', '&', '\r', '\n']) {
+                    let trimmed_seg = inner_segment.trim();
+                    if trimmed_seg.is_empty() {
+                        continue;
+                    }
+                    let raw_head = trimmed_seg.split_whitespace().next().unwrap_or("");
+                    let head = unquote(raw_head);
+                    if head.is_empty()
+                        || head.starts_with('"')
+                        || head.starts_with('\'')
+                        || head.starts_with('$')
+                        || is_data_expression(head)
+                    {
+                        continue;
+                    }
+                    let lowered = head.to_ascii_lowercase();
+                    if is_path_like(head) {
+                        return Err(SecurityError::CommandNotAllowed(
+                            head.to_string(),
+                            "PATH_QUALIFIED_COMMAND",
+                        ));
+                    }
+                    if SHELL_WRAPPERS.contains(&lowered.as_str()) {
+                        return Err(SecurityError::CommandNotAllowed(
+                            head.to_string(),
+                            "SHELL_WRAPPER",
+                        ));
+                    }
+                    if !allowed_commands
+                        .iter()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(head))
+                    {
+                        return Err(SecurityError::CommandNotAllowed(
+                            head.to_string(),
+                            "COMMAND_NOT_ALLOWED",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     // A chain is only as safe as its worst segment, so every segment's program is checked.
     for segment in text.split([';', '|', '&', '\r', '\n']) {
-        let Some(head) = segment.split_whitespace().next() else {
+        let Some(raw_head) = segment.split_whitespace().next() else {
             continue;
         };
-        if is_data_expression(head) {
+        let head = unquote(raw_head);
+        if head.is_empty() || is_data_expression(head) {
             continue;
         }
         let lowered = head.to_ascii_lowercase();
@@ -238,6 +305,12 @@ mod tests {
             ("\\\\attacker\\share\\evil.exe", "PATH_QUALIFIED_COMMAND"),
             ("& hostname", "CALL_OPERATOR"),
             ("hostname & Remove-Item C:\\", "CALL_OPERATOR"),
+            ("1..10 | ForEach-Object { Remove-Item C:\\ }", "COMMAND_NOT_ALLOWED"),
+            ("1..10 | ForEach-Object { whoami }", "COMMAND_NOT_ALLOWED"),
+            ("\"Remove-Item\" C:\\", "COMMAND_NOT_ALLOWED"),
+            ("'Remove-Item' C:\\", "COMMAND_NOT_ALLOWED"),
+            ("\"cmd.exe\" /c hostname", "SHELL_WRAPPER"),
+            ("hostname\0; whoami", "NULL_BYTE_DETECTED"),
         ] {
             let err = assert_command_allowed(command, &allowed).expect_err(command);
             assert_eq!(err.code(), "COMMAND_NOT_ALLOWED", "{command}");

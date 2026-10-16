@@ -47,8 +47,8 @@ impl Default for CapabilityRegistry {
             Capability::Powershell,
             CapabilityConfig {
                 enabled: false,
-                description: "Execute scoped PowerShell commands".into(),
-                requires_explicit_opt_in: false,
+                description: "Execute scoped PowerShell commands (requires explicit opt-in)".into(),
+                requires_explicit_opt_in: true,
                 allowed_commands: DEFAULT_ALLOWED_COMMANDS
                     .iter()
                     .map(|name| (*name).to_string())

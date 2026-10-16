@@ -122,6 +122,27 @@ test('Command allowlist: executable paths are rejected, bare names are not', () 
   assert.doesNotThrow(() => assertCommandAllowed('hostname', defaultAllowlist));
 });
 
+test('Command allowlist: script block injection and nested commands are checked', () => {
+  expectRejection('1..10 | ForEach-Object { Remove-Item C:\\ }', 'COMMAND_NOT_ALLOWED');
+  expectRejection('1..10 | ForEach-Object { whoami }', 'COMMAND_NOT_ALLOWED');
+  expectRejection('1..10 | ForEach-Object { C:\\evil.exe }', 'PATH_QUALIFIED_COMMAND');
+  expectRejection('1..10 | ForEach-Object { cmd /c dir }', 'SHELL_WRAPPER');
+  // Safe scriptblock with data strings remains allowed
+  assert.doesNotThrow(() =>
+    assertCommandAllowed('1..50 | ForEach-Object { "Line number $_ output text" }', defaultAllowlist),
+  );
+});
+
+test('Command allowlist: quoted binary names and null bytes are handled safely', () => {
+  expectRejection('"Remove-Item" C:\\', 'COMMAND_NOT_ALLOWED');
+  expectRejection("'Remove-Item' C:\\", 'COMMAND_NOT_ALLOWED');
+  expectRejection('"cmd.exe" /c dir', 'SHELL_WRAPPER');
+  expectRejection('hostname\0; whoami', 'NULL_BYTE_DETECTED');
+  // Quoted allowlisted commands pass
+  assert.doesNotThrow(() => assertCommandAllowed('"hostname"', defaultAllowlist));
+  assert.doesNotThrow(() => assertCommandAllowed("'dir'", defaultAllowlist));
+});
+
 test('Command allowlist: allowlist is configurable through the capability registry', () => {
   const registry = new CapabilityRegistry();
   // The built-in default keeps the supported workflows working.

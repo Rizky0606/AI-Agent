@@ -46,8 +46,8 @@ export class CapabilityRegistry {
 
     this.rules.set('powershell', {
       enabled: false,
-      description: 'Execute PowerShell terminal commands within allowlist',
-      requiresExplicitOptIn: false,
+      description: 'Execute PowerShell terminal commands within allowlist (requires explicit opt-in)',
+      requiresExplicitOptIn: true,
       allowedActions: ['exec', 'script'],
       allowedCommands: [...DEFAULT_ALLOWED_COMMANDS],
     });

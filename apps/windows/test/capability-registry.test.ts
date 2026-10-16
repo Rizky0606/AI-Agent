@@ -71,18 +71,26 @@ test('CapabilityRegistry: Toggling capability ON permits execution within allowe
   );
 });
 
-test('CapabilityRegistry: VS Code and Docker require explicit opt-in', () => {
+test('CapabilityRegistry: Powershell, VS Code, and Docker require explicit opt-in', () => {
   const registry = new CapabilityRegistry();
   const allRules = registry.getAllRules();
 
+  assert.equal(allRules.powershell.requiresExplicitOptIn, true);
   assert.equal(allRules.vscode.requiresExplicitOptIn, true);
   assert.equal(allRules.docker.requiresExplicitOptIn, true);
 
-  // Both start OFF
+  // All start OFF
+  assert.equal(registry.isEnabled('powershell'), false);
   assert.equal(registry.isEnabled('vscode'), false);
   assert.equal(registry.isEnabled('docker'), false);
 
   // Explicit opt-in enables them
+  registry.setCapability('powershell', true);
+  assert.equal(registry.isEnabled('powershell'), true);
+  assert.doesNotThrow(() => {
+    registry.assertCapabilityAllowed('powershell', 'exec');
+  });
+
   registry.setCapability('docker', true);
   assert.equal(registry.isEnabled('docker'), true);
   assert.doesNotThrow(() => {
