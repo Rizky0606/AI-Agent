@@ -1,5 +1,5 @@
 version: 1
-updated: 2026-10-17
+updated: 2026-10-18
 capabilities:
   control_plane:
     status: implemented
@@ -199,7 +199,13 @@ capabilities:
         4. Windows: `ToolStepCard` integrated into `TaskCard` (Aktivitas panel) and `ChatMessages` (chat view) with collapsible timeline, colored diffs, running/completed/failed status, runtime badges, and bottom-guarded auto-scroll (`isAtBottom`).
         5. Android: `TaskDetailScreen` timeline updated with `DiffBlock` (monospace font, 140dp height limit, "Lihat semua" / "Tutup diff" toggle), status pills, and runtime badges.
         6. Resilience & Replay: Duplicate suppression and sequence sorting (`sortRuntimeEvents`) across reconnects using `last_event_id`.
-      - Remaining gaps: Marked as Partial because interactive visual rendering on Windows/Android physical displays requires manual verification on real hardware ("Belum diverifikasi di perangkat fisik"), and daemon HTTP prompt execution on Hermes VPS port 9119 remains unauthenticated (TIDAK TERVERIFIKASI).
+      - Sesi 29 Enhancements (2026-10-18, ADR 0030):
+        1. Empirical VPS Probe & Verification (`docs/verification/omp-hermes-capabilities-2026-10.md`): Verified OMP v18.6.1 and Hermes v0.20.5 on live Ubuntu 24.04 ARM64 VPS. Verified OMP JSONL event stream (`assistantMessageEvent`, `text_delta`, tool results). Verified that Hermes CLI command `hermes run` DOES NOT EXIST (fails with invalid choice); verified non-interactive mode is `hermes -z <prompt> --no-restore-cwd --safe-mode`. Verified Hermes daemon (port 9119) returns `{"ok":true,"version":"0.20.5"}` on `/api/health`, and OpenAPI inspection confirmed port 9119 is a management/dashboard REST API with NO prompt execution endpoint.
+        2. Plan Mode & Sub-agent Step UI: Extended `RuntimeStepEvent` and `AggregatedRuntimeStep` with types `'plan'` and `'subagent'`, `planItems`, `isSubagent`, and `subagentTask`. Updated `apps/runtime-bridge` and `@personal-ai-os/shared` (`normalizeOmpEvent`, `aggregateRuntimeSteps`) to classify `task` tool as subagent and `todo`/`plan` tools as plan. Windows `ToolStepCard.tsx` renders structured Plan Mode card with `ListTodo` icon, title, and formatted checklist items, and sub-agent progress badge with `GitFork` icon.
+        3. Honest Steer & One-Shot Notice: Steer intervention remains disabled for CLI one-shot execution because runtimes run via `child_process.spawn` with `stdio: ['ignore', 'pipe', 'pipe']`. Windows UI explicitly displays a subtle Indonesian notice explaining that one-shot batch execution does not support interactive mid-run steering.
+        4. Proposed 3rd Runtime (ADR 0030): Evaluated and proposed `pi.dev` (`@earendil-works/pi-coding-agent`, MIT license, RPC mode stdio) for future interactive coding without installing dependencies or modifying VPS prior to explicit user approval.
+        5. Proof: `packages/shared/test/runtime-step-event.test.ts` (30/30 tests), `apps/runtime-bridge/test/index.test.ts` (9/9 tests), `apps/windows/test/tool-step-card.test.ts` (88/88 tests), `pnpm check:tokens` (0 violations).
+      - Remaining gaps: Marked as Partial because interactive visual rendering on Windows/Android physical displays requires manual verification on real hardware ("Belum diverifikasi di perangkat fisik"), and daemon HTTP prompt execution on Hermes VPS port 9119 remains unauthenticated / non-existent for LLM prompts.
   skills_and_mcp_manager:
     status: implemented
     code: packages/agent-core/src/skills; packages/mcp; apps/api/src/routes/skills.ts; apps/api/src/routes/skill-proposals.ts; apps/api/src/routes/mcp.ts; apps/api/src/db/skill-repository.ts; apps/api/src/db/skill-proposal-repository.ts; apps/api/src/db/mcp-repository.ts; apps/api/src/services/sensitive-data-filter.ts; apps/windows/src/ui/skills; apps/android/src/screens/SettingsScreen.tsx; docs/adr/0015-skill-dan-mcp-manager.md; docs/adr/0029-tugas-terjadwal-dan-usulan-skill.md; docs/skills/writing-skills.md
