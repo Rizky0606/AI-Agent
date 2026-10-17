@@ -54,11 +54,24 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       )}
 
       {task.checkpoint && (
-        <div className="card-meta-row">
-          <span>{idID.activity.tasks.checkpointLabel}</span>
-          <span className="card-title-text">
-            {task.checkpoint.lastExecutedAction} ({task.checkpoint.stepIndex}/{task.checkpoint.totalSteps})
-          </span>
+        <div className="task-checkpoint-block">
+          <div className="task-checkpoint-header">
+            <span className="task-checkpoint-label">{idID.activity.tasks.checkpointLabel}</span>
+            <span className="task-checkpoint-steps">
+              {task.checkpoint.stepIndex}/{task.checkpoint.totalSteps}
+            </span>
+          </div>
+          <div className="task-checkpoint-action-title">
+            {task.checkpoint.lastExecutedAction || 'Menjalankan langkah...'}
+          </div>
+          <div className="task-checkpoint-progress-track">
+            <div
+              className="task-checkpoint-progress-fill"
+              style={{
+                width: `${Math.min(100, Math.round(((task.checkpoint.stepIndex || 1) / (task.checkpoint.totalSteps || 1)) * 100))}%`,
+              }}
+            />
+          </div>
         </div>
       )}
 

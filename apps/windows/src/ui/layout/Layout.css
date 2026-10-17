@@ -1070,7 +1070,27 @@
 
 .activity-card.high-risk {
   border-color: var(--accent-rose);
-  background-color: rgba(239, 68, 68, 0.04);
+  background-color: var(--color-risk-high-subtle);
+}
+
+.activity-card.approval-card--critical {
+  border-color: var(--color-risk-critical);
+  background-color: var(--color-risk-critical-subtle);
+  border-width: 1.5px;
+}
+
+.activity-card.approval-card--high {
+  border-color: var(--color-risk-high);
+  background-color: var(--color-risk-high-subtle);
+}
+
+.activity-card.approval-card--medium {
+  border-color: var(--color-risk-medium);
+  background-color: var(--color-risk-medium-subtle);
+}
+
+.activity-card.approval-card--low {
+  border-color: var(--color-border);
 }
 
 .card-header-row {
@@ -1078,6 +1098,23 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.card-header-right-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.approval-waiting-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
 }
 
 .card-title-text {
@@ -1105,23 +1142,92 @@
   text-transform: uppercase;
 }
 
-.risk-pill.critical,
+.risk-pill.critical {
+  background-color: var(--color-risk-critical-subtle);
+  color: var(--color-risk-critical);
+  border: 1px solid var(--color-risk-critical);
+}
+
 .risk-pill.high {
-  background-color: rgba(239, 68, 68, 0.15);
-  color: var(--accent-rose);
-  border: 1px solid var(--accent-rose);
+  background-color: var(--color-risk-high-subtle);
+  color: var(--color-risk-high);
+  border: 1px solid var(--color-risk-high);
 }
 
 .risk-pill.medium {
-  background-color: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-  border: 1px solid #f59e0b;
+  background-color: var(--color-risk-medium-subtle);
+  color: var(--color-risk-medium);
+  border: 1px solid var(--color-risk-medium);
 }
 
 .risk-pill.low {
-  background-color: rgba(16, 185, 129, 0.15);
-  color: var(--accent-emerald);
-  border: 1px solid var(--accent-emerald);
+  background-color: var(--color-risk-low-subtle);
+  color: var(--color-risk-low);
+  border: 1px solid var(--color-risk-low);
+}
+
+.task-checkpoint-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-top: 4px;
+}
+
+.task-checkpoint-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.task-checkpoint-label {
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.task-checkpoint-steps {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.task-checkpoint-action-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-checkpoint-progress-track {
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-border-subtle);
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.task-checkpoint-progress-fill {
+  height: 100%;
+  background-color: var(--color-accent);
+  border-radius: var(--radius-full);
+  transition: width var(--transition-normal);
+}
+
+.artifact-size-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
 }
 
 .status-pill {
