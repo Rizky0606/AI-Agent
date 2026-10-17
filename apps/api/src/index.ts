@@ -35,6 +35,7 @@ import { SqlScheduleRepository } from './db/schedule-repository.ts';
 import { SqlNotificationRepository } from './db/notification-repository.ts';
 import { SqlCompareRepository } from './db/compare-repository.ts';
 import { SqlPromptTemplateRepository } from './db/prompt-template-repository.ts';
+import { SqlSkillProposalRepository } from './db/skill-proposal-repository.ts';
 import { DeviceConnectionManager } from './services/device-connection-manager.ts';
 import { ModelRouter } from './services/model-router.ts';
 import { BullMqTaskQueue } from './services/task-queue.ts';
@@ -105,6 +106,7 @@ const auditRepository = new SqlAuditRepository(db);
 const mcpRepository = new SqlMcpRepository(db);
 const compareRepository = new SqlCompareRepository(db);
 const promptTemplateRepository = new SqlPromptTemplateRepository(db);
+const skillProposalRepository = new SqlSkillProposalRepository(db);
 const toolRegistry = createDefaultToolRegistry({
   guard: new SecuredCapabilityGuard(new PermissionEngine(), { auditLogger: auditRepository }),
 });
@@ -307,6 +309,10 @@ const app = await buildApp({
   },
   promptTemplates: {
     promptTemplateRepo: promptTemplateRepository,
+  },
+  skillProposals: {
+    proposalRepo: skillProposalRepository,
+    skillRepo: skillRepository,
   },
 });
 

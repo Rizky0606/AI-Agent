@@ -72,7 +72,7 @@ test('SchedulerEngine: pause and resume functionality', async () => {
     userId: 'user-1',
     name: 'Recurring Sync',
     type: 'recurring',
-    cronExpression: '*/10 * * * *', // every 10 mins
+    cronExpression: '*/15 * * * *', // every 15 mins
     timezone: 'UTC',
     taskPayload: { kind: 'sync', input: {} },
   });

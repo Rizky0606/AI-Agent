@@ -43,6 +43,8 @@ import type { CompareRepository } from './db/compare-repository.ts';
 import { registerCompareRoutes } from './routes/compare.ts';
 import type { PromptTemplateRepository } from './db/prompt-template-repository.ts';
 import { registerPromptTemplateRoutes } from './routes/prompt-templates.ts';
+import type { SkillProposalRepository } from './db/skill-proposal-repository.ts';
+import { registerSkillProposalsRoutes } from './routes/skill-proposals.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
@@ -190,6 +192,12 @@ export type AppDependencies = {
   promptTemplates?:
     | {
         promptTemplateRepo: PromptTemplateRepository;
+      }
+    | undefined;
+  skillProposals?:
+    | {
+        proposalRepo: SkillProposalRepository;
+        skillRepo?: SkillRepository | undefined;
       }
     | undefined;
 };
@@ -780,6 +788,15 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     registerPromptTemplateRoutes(app, {
       auth: dependencies.auth,
       promptTemplateRepo: dependencies.promptTemplates.promptTemplateRepo,
+    });
+  }
+
+  if (dependencies.skillProposals && (dependencies.skillProposals.skillRepo || dependencies.skills?.skillRepo)) {
+    registerSkillProposalsRoutes(app, {
+      auth: dependencies.auth,
+      proposalRepo: dependencies.skillProposals.proposalRepo,
+      skillRepo: dependencies.skillProposals.skillRepo ?? dependencies.skills!.skillRepo,
+      auditRepo: dependencies.approval?.auditRepo,
     });
   }
 

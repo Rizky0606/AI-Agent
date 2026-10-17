@@ -178,4 +178,23 @@ export class CronParser {
       `No upcoming execution found within 5 years for cron expression: "${expression}"`,
     );
   }
+
+  /**
+   * Memvalidasi bahwa interval antara dua eksekusi cron berturut-turut
+   * tidak lebih cepat dari minMinutes (default: 15 menit).
+   */
+  static validateMinimumInterval(expression: string, minMinutes = 15, timezone = 'UTC'): void {
+    const now = new Date();
+    const first = this.getNextRun(expression, now, timezone);
+    const second = this.getNextRun(expression, first, timezone);
+    const diffMs = second.getTime() - first.getTime();
+    const minMs = minMinutes * 60 * 1000;
+    if (diffMs < minMs) {
+      const diffMinutes = Math.round(diffMs / 60000);
+      throw new SchedulerError(
+        `Frekuensi jadwal (${diffMinutes} menit) terlalu sering. Batas minimum adalah ${minMinutes} menit untuk menghemat sumber daya sistem.`,
+      );
+    }
+  }
 }
+

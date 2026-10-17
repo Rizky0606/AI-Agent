@@ -9,6 +9,8 @@ import {
   type ScheduleType,
   SchedulerError,
   type TaskPayload,
+  MAX_ACTIVE_SCHEDULES_PER_USER,
+  MIN_RECURRING_INTERVAL_MINUTES,
 } from './types.ts';
 
 export type TaskDispatcher = (execution: ScheduledRunExecution) => Promise<void>;
@@ -57,8 +59,16 @@ export class SchedulerEngine {
   registerSchedule(input: RegisterScheduleInput): ScheduleJob {
     const id = input.id ?? randomUUID();
     const now = new Date();
-    const timezone = input.timezone ?? 'UTC';
+    const timezone = input.timezone ?? 'Asia/Jakarta';
     const missedRunPolicy = input.missedRunPolicy ?? 'skip';
+
+    // 1. Batasi jumlah jadwal aktif per pengguna
+    const activeJobs = this.listJobs({ userId: input.userId, status: 'active' });
+    if (activeJobs.length >= MAX_ACTIVE_SCHEDULES_PER_USER) {
+      throw new SchedulerError(
+        `Batas kuota maksimal ${MAX_ACTIVE_SCHEDULES_PER_USER} jadwal aktif telah tercapai untuk pengguna ini.`,
+      );
+    }
 
     if (input.type === 'one_off') {
       if (!input.runAt) {
@@ -72,8 +82,13 @@ export class SchedulerEngine {
       if (!input.cronExpression) {
         throw new SchedulerError('Recurring schedule requires cronExpression');
       }
-      // Validate cron expression
+      // Validate cron expression structure and minimum interval
       CronParser.parse(input.cronExpression);
+      CronParser.validateMinimumInterval(
+        input.cronExpression,
+        MIN_RECURRING_INTERVAL_MINUTES,
+        timezone,
+      );
     }
 
     let nextRunAt: string | undefined;
@@ -168,6 +183,19 @@ export class SchedulerEngine {
       throw new SchedulerError(`Schedule with id "${id}" not found`);
     }
     job.status = 'cancelled';
+    job.updatedAt = new Date().toISOString();
+    if (this.storage) {
+      void this.storage.updateJob(job).catch(() => {});
+    }
+    return job;
+  }
+
+  updateLastBrief(id: string, brief: string): ScheduleJob {
+    const job = this.jobs.get(id);
+    if (!job) {
+      throw new SchedulerError(`Schedule with id "${id}" not found`);
+    }
+    job.lastBrief = brief;
     job.updatedAt = new Date().toISOString();
     if (this.storage) {
       void this.storage.updateJob(job).catch(() => {});

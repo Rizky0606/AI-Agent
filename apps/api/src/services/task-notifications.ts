@@ -32,7 +32,56 @@ const bodyFromEvent = (event: TaskEventEnvelope): string => {
 export interface TaskNotificationDeps {
   notificationEngine: NotificationEngine;
   onError: (err: unknown, event: TaskEventEnvelope) => void;
+  onScheduleBrief?: ((scheduleId: string, brief: string) => Promise<void>) | undefined;
 }
+
+const buildNotificationData = (
+  event: TaskEventEnvelope,
+  type: NotificationType,
+): { title: string; body: string; deepLink: string } => {
+  const isScheduled = Boolean(event.payload['isScheduled'] || event.payload['scheduleId']);
+  const scheduleName = event.payload['scheduleName'] ? String(event.payload['scheduleName']) : 'Tugas Terjadwal';
+
+  if (isScheduled) {
+    if (event.eventType === 'task.completed') {
+      const brief = String(event.payload['brief'] ?? event.payload['result'] ?? 'Tugas terjadwal selesai.');
+      return {
+        title: `[Jadwal] ${scheduleName}: Ringkasan Tersedia`,
+        body: brief,
+        deepLink: `/activity?tab=tasks&taskId=${event.taskId}`,
+      };
+    }
+    if (event.eventType === 'task.waiting_approval') {
+      const action = String(event.payload['action'] ?? 'aksi sensitif');
+      return {
+        title: `[Jadwal] ${scheduleName}: Menunggu Persetujuan`,
+        body: `Eksekusi terjadwal ditangguhkan pada aksi "${action}". Ringkasan mencatat status tertunda.`,
+        deepLink: `/activity?tab=approvals&approvalId=${String(event.payload['approvalId'] ?? '')}`,
+      };
+    }
+    if (event.eventType === 'task.failed') {
+      const errorMsg = String(event.payload['error'] ?? 'Terjadi kesalahan.');
+      return {
+        title: `[Jadwal] ${scheduleName}: Gagal`,
+        body: `Tugas terjadwal gagal dieksekusi: ${errorMsg}`,
+        deepLink: `/activity?tab=tasks&taskId=${event.taskId}`,
+      };
+    }
+  }
+
+  // Non-scheduled task notifications
+  const approvalId = event.payload['approvalId'];
+  const deepLink =
+    type === 'approval_required' && approvalId
+      ? `personal-ai://approvals/${String(approvalId)}`
+      : `personal-ai://tasks/${event.taskId}`;
+
+  return {
+    title: TITLE_BY_NOTIFICATION_TYPE[type],
+    body: bodyFromEvent(event),
+    deepLink,
+  };
+};
 
 /**
  * Menerjemahkan event task yang dipublikasikan ke Redis menjadi baris notifikasi durable.
@@ -46,15 +95,27 @@ export const createTaskNotificationListener = (
     if (!type) return;
 
     const approvalId = event.payload['approvalId'];
+    const notification = buildNotificationData(event, type);
+
+    // Jika ini tugas terjadwal dan ada brief, perbarui riwayat brief jadwal
+    const scheduleId = event.payload['scheduleId'];
+    if (scheduleId && typeof scheduleId === 'string' && deps.onScheduleBrief) {
+      const briefContent = String(
+        event.payload['brief'] ?? event.payload['result'] ?? notification.body,
+      );
+      void deps.onScheduleBrief(scheduleId, briefContent).catch(() => {});
+    }
+
     void deps.notificationEngine
       .dispatchNotification({
         userId: event.userId,
         type,
-        title: TITLE_BY_NOTIFICATION_TYPE[type],
-        body: bodyFromEvent(event),
+        title: notification.title,
+        body: notification.body,
         data: {
           taskId: event.taskId,
           approvalId: typeof approvalId === 'string' ? approvalId : undefined,
+          deepLink: notification.deepLink,
         },
       })
       .catch((err: unknown) => {

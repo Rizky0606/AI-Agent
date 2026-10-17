@@ -24,9 +24,13 @@ export interface ScheduleJob {
   taskPayload: TaskPayload;
   lastRunAt?: string | undefined;
   nextRunAt?: string | undefined;
+  lastBrief?: string | undefined;
   createdAt: string;
   updatedAt: string;
 }
+
+export const MAX_ACTIVE_SCHEDULES_PER_USER = 10;
+export const MIN_RECURRING_INTERVAL_MINUTES = 15;
 
 export interface ScheduledRunExecution {
   idempotencyKey: string;
