@@ -65,7 +65,6 @@
   color: var(--color-text-main);
   background: var(--color-bg-surface);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 /* Risk Education Banner */
@@ -75,15 +74,15 @@
   gap: var(--space-3);
   padding: var(--space-4);
   border-radius: var(--radius-md);
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: var(--color-info-subtle);
+  border: 1px solid var(--color-border);
 }
 
 .risk-card-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--color-primary, #3b82f6);
+  color: var(--color-accent);
   font-weight: 600;
   font-size: 0.95rem;
 }
@@ -112,27 +111,27 @@
 }
 
 .risk-pill.low {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: var(--color-risk-low-subtle);
+  color: var(--color-risk-low);
+  border: 1px solid var(--color-risk-low);
 }
 
 .risk-pill.medium {
-  background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: var(--color-risk-medium-subtle);
+  color: var(--color-risk-medium);
+  border: 1px solid var(--color-risk-medium);
 }
 
 .risk-pill.high {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: var(--color-risk-high-subtle);
+  color: var(--color-risk-high);
+  border: 1px solid var(--color-risk-high);
 }
 
 .risk-pill.critical {
-  background: rgba(185, 28, 28, 0.25);
-  color: #f87171;
-  border: 1px solid #ef4444;
+  background: var(--color-risk-critical-subtle);
+  color: var(--color-risk-critical);
+  border: 1px solid var(--color-risk-critical);
 }
 
 /* Skills Grid */
@@ -176,12 +175,11 @@
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
 .skill-card:hover {
-  border-color: var(--color-border-hover, #4b5563);
+  border-color: var(--color-border-subtle);
 }
 
 .skill-card-top {
@@ -271,13 +269,13 @@
 }
 
 .outcome-badge.success {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  background: var(--color-success-subtle);
+  color: var(--color-success);
 }
 
 .outcome-badge.failure {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .outcome-badge.never {
@@ -323,7 +321,6 @@
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .mcp-card-header {
@@ -344,8 +341,8 @@
 }
 
 .mcp-status-pill.connected {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  background: var(--color-success-subtle);
+  color: var(--color-success);
 }
 
 .mcp-status-pill.disconnected {
@@ -354,8 +351,8 @@
 }
 
 .mcp-status-pill.error {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .mcp-tools-list {
@@ -407,8 +404,8 @@
 
 /* Manifest JSON Viewer Modal */
 .manifest-code-box {
-  background: #0f172a;
-  color: #f8fafc;
+  background: var(--color-surface);
+  color: var(--color-text);
   padding: var(--space-4);
   border-radius: var(--radius-sm);
   font-family: monospace;
@@ -444,7 +441,7 @@
 
 .skill-source-badge {
   font-size: 0.7rem;
-  color: var(--color-primary, #3b82f6);
+  color: var(--color-accent);
 }
 
 .skill-override-badge {
@@ -550,7 +547,7 @@
 }
 
 .mcp-log-status-error {
-  color: var(--color-danger, #ef4444);
+  color: var(--color-danger);
 }
 
 .mcp-manifest-body {
