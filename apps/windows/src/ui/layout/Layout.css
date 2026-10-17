@@ -451,6 +451,32 @@
   color: var(--text-sub);
 }
 
+/* Offline & Reconnecting Banner */
+.connection-offline-banner {
+  background-color: var(--color-warning-subtle);
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 12px;
+  color: var(--color-warning);
+  z-index: 30;
+}
+
+.connection-banner-content {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.connection-banner-retry-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  min-height: 26px;
+}
+
 /* Chat Layout & Viewport */
 .chat-viewport {
   flex: 1;
@@ -507,7 +533,7 @@
 
 .chat-message-bubble.user {
   background-color: var(--accent-blue);
-  color: #ffffff;
+  color: var(--color-text-inverse);
   border-bottom-right-radius: 4px;
 }
 
@@ -853,7 +879,7 @@
 .tool-step-diff-box {
   margin-bottom: var(--space-2);
   padding: var(--space-2);
-  background-color: rgba(0, 0, 0, 0.2);
+  background-color: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -944,7 +970,7 @@
   right: 16px;
   padding: 10px 14px;
   border-radius: var(--radius-md);
-  background-color: rgba(239, 68, 68, 0.12);
+  background-color: var(--color-danger-subtle);
   border: 1px solid var(--accent-rose);
   display: flex;
   align-items: center;
@@ -1024,7 +1050,7 @@
 
 .activity-badge {
   background-color: var(--accent-rose);
-  color: #ffffff;
+  color: var(--color-text-inverse);
   font-size: 10px;
   font-weight: 700;
   padding: 1px 6px;
@@ -1239,25 +1265,25 @@
 }
 
 .status-pill.completed {
-  background-color: rgba(16, 185, 129, 0.15);
+  background-color: var(--color-success-subtle);
   color: var(--accent-emerald);
 }
 
 .status-pill.running {
-  background-color: rgba(14, 165, 233, 0.15);
+  background-color: var(--color-accent-subtle);
   color: var(--accent-cyan);
 }
 
 .status-pill.failed,
 .status-pill.cancelled {
-  background-color: rgba(239, 68, 68, 0.15);
+  background-color: var(--color-danger-subtle);
   color: var(--accent-rose);
 }
 
 .status-pill.paused,
 .status-pill.waiting_approval {
-  background-color: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
+  background-color: var(--color-warning-subtle);
+  color: var(--color-warning);
 }
 
 .task-runtime-pill {
@@ -1271,7 +1297,7 @@
   margin-bottom: var(--space-2);
   padding: 6px 10px;
   background-color: var(--color-warning-subtle);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  border: 1px solid var(--color-warning);
   border-radius: var(--radius-sm);
   color: var(--color-warning);
   font-size: 12px;
@@ -1283,7 +1309,7 @@
   margin-bottom: var(--space-2);
   padding: 6px 10px;
   background-color: var(--color-danger-subtle);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  border: 1px solid var(--color-danger);
   border-radius: var(--radius-sm);
   color: var(--color-danger);
   font-size: 12px;
@@ -1304,7 +1330,7 @@
 .task-event-card {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
-  background-color: rgba(0, 0, 0, 0.2);
+  background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   font-size: 12px;
 }
@@ -1330,7 +1356,7 @@
 .task-event-diff-box {
   margin-top: var(--space-1);
   padding: 6px;
-  background-color: rgba(0, 0, 0, 0.3);
+  background-color: var(--color-surface-raised);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1917,17 +1943,17 @@
 
 .settings-log-level.info {
   color: var(--accent-blue);
-  background-color: rgba(59, 130, 246, 0.1);
+  background-color: var(--color-accent-subtle);
 }
 
 .settings-log-level.warn {
-  color: #f59e0b;
-  background-color: rgba(245, 158, 11, 0.1);
+  color: var(--color-warning);
+  background-color: var(--color-warning-subtle);
 }
 
 .settings-log-level.error {
   color: var(--accent-rose);
-  background-color: rgba(239, 68, 68, 0.1);
+  background-color: var(--color-danger-subtle);
 }
 
 .settings-log-msg {
@@ -1943,14 +1969,14 @@
 }
 
 .composer-chip.interactive:hover {
-  background-color: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background-color: var(--bg-hover);
   border-color: var(--accent-blue);
 }
 
 .composer-chip.disabled {
   opacity: 0.6;
   cursor: not-allowed;
-  border-color: var(--accent-amber, #f59e0b);
+  border-color: var(--color-warning);
 }
 
 .composer-chip-text {
@@ -1970,7 +1996,7 @@
   background-color: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   z-index: 100;
@@ -2026,8 +2052,8 @@
 
 .model-popover-alert {
   padding: 8px 12px;
-  background-color: rgba(245, 158, 11, 0.12);
-  border-bottom: 1px solid rgba(245, 158, 11, 0.3);
+  background-color: var(--color-warning-subtle);
+  border-bottom: 1px solid var(--color-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2036,13 +2062,13 @@
 
 .model-alert-text {
   font-size: 11px;
-  color: #f59e0b;
+  color: var(--color-warning);
 }
 
 .model-alert-retry {
   background: transparent;
-  border: 1px solid #f59e0b;
-  color: #f59e0b;
+  border: 1px solid var(--color-warning);
+  color: var(--color-warning);
   font-size: 10px;
   font-weight: 600;
   border-radius: var(--radius-sm);
@@ -2071,16 +2097,16 @@
 
 .model-popover-item:hover,
 .model-popover-item:focus-visible {
-  background-color: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  background-color: var(--bg-hover);
 }
 
 .model-popover-item.selected {
-  background-color: rgba(59, 130, 246, 0.08);
+  background-color: var(--color-accent-subtle);
   border-left-color: var(--accent-blue);
 }
 
 .model-popover-item.auto-entry {
-  background-color: rgba(6, 182, 212, 0.05);
+  background-color: var(--color-accent-subtle);
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 4px;
 }
@@ -2113,7 +2139,7 @@
   text-transform: uppercase;
   padding: 1px 5px;
   border-radius: var(--radius-full);
-  background-color: rgba(6, 182, 212, 0.15);
+  background-color: var(--color-accent-subtle);
   color: var(--accent-cyan);
 }
 
@@ -2122,7 +2148,7 @@
   font-weight: 600;
   padding: 1px 5px;
   border-radius: var(--radius-sm);
-  background-color: rgba(59, 130, 246, 0.15);
+  background-color: var(--color-accent-subtle);
   color: var(--accent-blue);
 }
 
@@ -2151,22 +2177,22 @@
 }
 
 .model-cap-badge.verified {
-  background-color: rgba(16, 185, 129, 0.12);
+  background-color: var(--color-success-subtle);
   color: var(--accent-emerald);
 }
 
 .model-cap-badge.unknown {
-  background-color: rgba(156, 163, 175, 0.12);
+  background-color: var(--color-surface-raised);
   color: var(--text-sub);
 }
 
 .model-cap-badge.context {
-  background-color: rgba(168, 85, 247, 0.12);
-  color: #a855f7;
+  background-color: var(--color-accent-subtle);
+  color: var(--color-accent);
 }
 
 .model-cap-badge.latency {
-  background-color: rgba(59, 130, 246, 0.12);
+  background-color: var(--color-accent-subtle);
   color: var(--accent-blue);
 }
 

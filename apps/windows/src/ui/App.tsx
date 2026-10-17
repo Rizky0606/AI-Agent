@@ -11,6 +11,7 @@ import { MemoryView } from './memory/MemoryView.tsx';
 import { SkillMcpView } from './skills/SkillMcpView.tsx';
 import { SettingsView } from './settings/SettingsView.tsx';
 import { ActivityPanel } from './activity/ActivityPanel.tsx';
+import { StatusDot, type StatusDotKind } from './components/StatusDot.tsx';
 import { idID } from './locales/id-ID.ts';
 
 import './Theme.css';
@@ -29,6 +30,8 @@ const AppShell: React.FC = () => {
     approvals,
     newConversation,
     setActiveConversation,
+    connectionStatus,
+    connectToServer,
   } = useAgentStore();
 
   const { warning } = useToast();
@@ -141,6 +144,27 @@ const AppShell: React.FC = () => {
           onToggleActivity={() => setIsActivityOpen((prev) => !prev)}
           pendingApprovalsCount={pendingCount}
         />
+
+        {/* Offline & Reconnecting Global Banner */}
+        {(connectionStatus === 'disconnected' || connectionStatus === 'reconnecting') && (
+          <div className="connection-offline-banner" role="status">
+            <div className="connection-banner-content">
+              <StatusDot status={connectionStatus as StatusDotKind} pulse />
+              <span>
+                {connectionStatus === 'reconnecting'
+                  ? 'Koneksi terputus. Mencoba menghubungkan kembali ke server...'
+                  : 'Terputus dari server WSS. Fitur real-time dinonaktifkan sementara.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="ui-btn ui-btn-secondary ui-btn-sm connection-banner-retry-btn"
+              onClick={() => void connectToServer()}
+            >
+              Hubungkan Kembali
+            </button>
+          </div>
+        )}
 
         {activeView === 'chat' && <ChatView />}
         {activeView === 'project' && <ProjectView />}

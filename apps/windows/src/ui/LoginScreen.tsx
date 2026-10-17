@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Laptop, AlertTriangle } from 'lucide-react';
 import { useAgentStore } from './context.ts';
 import { Button, Spinner, ThemeSwitcher } from './components/index.ts';
 import './Theme.css';
@@ -58,7 +59,7 @@ export const LoginScreen: React.FC = () => {
         {/* Logo and Brand Header */}
         <div className="login-header">
           <div className="login-logo-icon">
-            🪟
+            <Laptop size={26} />
           </div>
           <h1 className="login-title">
             Personal AI OS
@@ -99,7 +100,7 @@ export const LoginScreen: React.FC = () => {
         {loginStep === 'error' && loginError && (
           <div className="login-error-card" role="alert">
             <div className="login-error-content">
-              <span className="login-error-icon">⚠️</span>
+              <AlertTriangle size={18} className="login-error-alert-icon" />
               <div className="login-error-msg">
                 <strong>Gagal Masuk:</strong> {loginError}
               </div>
