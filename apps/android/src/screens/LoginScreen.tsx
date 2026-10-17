@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -87,10 +88,14 @@ export const LoginScreen: React.FC = () => {
             <Text
               style={[styles.title, { color: theme.colors.textPrimary }]}
               accessibilityRole="header"
+              allowFontScaling
             >
               {idID.auth.appTitle}
             </Text>
-            <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[styles.subtitle, { color: theme.colors.textSecondary }]}
+              allowFontScaling
+            >
               {idID.auth.appSubtitle}
             </Text>
           </View>
@@ -106,14 +111,18 @@ export const LoginScreen: React.FC = () => {
                 },
               ]}
             >
-              <Text style={[styles.errorText, { color: theme.colors.danger }]}>
+              <Text
+                style={[styles.errorText, { color: theme.colors.danger }]}
+                allowFontScaling
+              >
                 {error}
               </Text>
             </View>
           ) : null}
 
           {/* Primary Action: Google Login */}
-          <TouchableOpacity
+          <Pressable
+            android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
             accessibilityRole="button"
             accessibilityLabel={idID.auth.loginGoogle}
             disabled={isLoading}
@@ -128,14 +137,21 @@ export const LoginScreen: React.FC = () => {
             onPress={handleGoogleLogin}
           >
             {isLoading ? (
-              <ActivityIndicator color="#fff" />
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <ActivityIndicator color="#fff" />
+                <Text style={styles.googleButtonText} allowFontScaling>
+                  Menghubungkan ke sesi Anda...
+                </Text>
+              </View>
             ) : (
               <>
                 <LogIn size={20} color="#fff" />
-                <Text style={styles.googleButtonText}>{idID.auth.loginGoogle}</Text>
+                <Text style={styles.googleButtonText} allowFontScaling>
+                  {idID.auth.loginGoogle}
+                </Text>
               </>
             )}
-          </TouchableOpacity>
+          </Pressable>
 
           {/* Secondary Collapsible: Email & Password */}
           <View style={styles.accordionSection}>
@@ -219,7 +235,8 @@ export const LoginScreen: React.FC = () => {
                   />
                 </View>
 
-                <TouchableOpacity
+                <Pressable
+                  android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
                   accessibilityRole="button"
                   accessibilityLabel={
                     isRegisterMode ? idID.auth.registerButton : idID.auth.loginButton
@@ -233,13 +250,18 @@ export const LoginScreen: React.FC = () => {
                   onPress={handleEmailSubmit}
                 >
                   {isLoading ? (
-                    <ActivityIndicator color="#fff" />
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <ActivityIndicator color="#fff" />
+                      <Text style={styles.submitButtonText} allowFontScaling>
+                        Memproses...
+                      </Text>
+                    </View>
                   ) : (
-                    <Text style={styles.submitButtonText}>
+                    <Text style={styles.submitButtonText} allowFontScaling>
                       {isRegisterMode ? idID.auth.registerButton : idID.auth.loginButton}
                     </Text>
                   )}
-                </TouchableOpacity>
+                </Pressable>
 
                 <TouchableOpacity
                   accessibilityRole="button"

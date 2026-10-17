@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { ChevronRight, ShieldAlert } from 'lucide-react-native';
 import type { ApprovalRequest } from '../api/types.ts';
 import { idID } from '../locales/id-ID.ts';
@@ -15,28 +15,55 @@ export interface ApprovalCardProps {
 export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onPress }) => {
   const theme = useAppTheme();
   const isPending = approval.status === 'pending';
-  const isHighRisk = approval.riskLevel === 'HIGH' || approval.riskLevel === 'CRITICAL';
+  const isCritical = approval.riskLevel === 'CRITICAL';
+  const isHigh = approval.riskLevel === 'HIGH';
+  const isHighRisk = isCritical || isHigh;
+
+  const cardBorderColor = isPending
+    ? isCritical
+      ? theme.colors.riskCritical
+      : isHigh
+        ? theme.colors.riskHigh
+        : theme.colors.surfaceBorder
+    : theme.colors.surfaceBorder;
+
+  const cardBgColor = isPending
+    ? isCritical
+      ? theme.colors.riskCriticalBg
+      : isHigh
+        ? theme.colors.riskHighBg
+        : theme.colors.surface
+    : theme.colors.surface;
+
+  const rippleColor =
+    theme.scheme === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
 
   return (
-    <TouchableOpacity
+    <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${idID.approval.cardTitle} ${approval.action}, level ${approval.riskLevel}, status ${approval.status}`}
-      style={[
+      accessibilityHint="Buka lembar persetujuan untuk menyetujui atau menolak"
+      android_ripple={{ color: rippleColor }}
+      style={({ pressed }) => [
         styles.card,
         {
-          backgroundColor: theme.colors.surface,
-          borderColor: isPending && isHighRisk ? theme.colors.riskHigh : theme.colors.surfaceBorder,
+          backgroundColor: cardBgColor,
+          borderColor: cardBorderColor,
         },
+        pressed && Platform.OS !== 'android' ? styles.cardPressed : null,
       ]}
       onPress={() => onPress(approval)}
-      activeOpacity={0.7}
     >
       {/* Top row: Risk badge & status */}
       <View style={styles.topRow}>
         <View style={styles.riskBadgeContainer}>
           <RiskBadge level={approval.riskLevel} />
           {isHighRisk ? (
-            <ShieldAlert size={16} color={theme.colors.riskHigh} style={{ marginLeft: 6 }} />
+            <ShieldAlert
+              size={16}
+              color={isCritical ? theme.colors.riskCritical : theme.colors.riskHigh}
+              style={{ marginLeft: 6 }}
+            />
           ) : null}
         </View>
         <StatusPill status={approval.status} />
@@ -46,6 +73,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onPress })
       <Text
         style={[styles.actionText, { color: theme.colors.textPrimary }]}
         numberOfLines={1}
+        allowFontScaling
       >
         {approval.action}
       </Text>
@@ -54,6 +82,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onPress })
       <Text
         style={[styles.resourceText, { color: theme.colors.textSecondary }]}
         numberOfLines={1}
+        allowFontScaling
       >
         {approval.resource}
       </Text>
@@ -63,10 +92,15 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onPress })
         style={[
           styles.consequenceText,
           {
-            color: isHighRisk ? theme.colors.riskHigh : theme.colors.textMuted,
+            color: isCritical
+              ? theme.colors.riskCritical
+              : isHigh
+                ? theme.colors.riskHigh
+                : theme.colors.textMuted,
           },
         ]}
         numberOfLines={2}
+        allowFontScaling
       >
         {approval.consequence}
       </Text>
@@ -83,12 +117,13 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onPress })
             styles.footerPrompt,
             { color: isPending ? theme.colors.primary : theme.colors.textMuted },
           ]}
+          allowFontScaling
         >
           {isPending ? idID.approval.detailTitle : idID.common.details}
         </Text>
         <ChevronRight size={18} color={theme.colors.primary} />
       </View>
-    </TouchableOpacity>
+    </Pressable>
   );
 };
 
@@ -99,6 +134,9 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
     elevation: 2,
+  },
+  cardPressed: {
+    opacity: 0.8,
   },
   topRow: {
     flexDirection: 'row',

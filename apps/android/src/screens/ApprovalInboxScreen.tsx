@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -9,12 +10,18 @@ import {
   View,
 } from 'react-native';
 import { RiskBadge } from '../components/RiskBadge.tsx';
+import { ScreenHeader } from '../components/ScreenHeader.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
-import { theme } from '../components/Theme.ts';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useApprovals, useApproveRequest, useDenyRequest } from '../hooks/use-queries.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
-export const ApprovalInboxScreen: React.FC = () => {
+export interface ApprovalInboxScreenProps {
+  onBack?: () => void;
+}
+
+export const ApprovalInboxScreen: React.FC<ApprovalInboxScreenProps> = ({ onBack }) => {
+  const theme = useAppTheme();
   const { approvalStatusFilter, setApprovalStatusFilter, showToast } = useUiStore();
   const { data: approvals, isLoading, refetch } = useApprovals(approvalStatusFilter ?? undefined);
 
@@ -53,25 +60,69 @@ export const ApprovalInboxScreen: React.FC = () => {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Kotak Masuk Persetujuan</Text>
-        <View style={styles.filterRow}>
-          {['pending', 'approved', 'denied'].map((st) => {
-            const isSelected = approvalStatusFilter === st;
-            return (
-              <TouchableOpacity
-                key={st}
-                style={[styles.filterChip, isSelected && styles.filterChipActive]}
-                onPress={() => setApprovalStatusFilter(st)}
-              >
-                <Text style={[styles.filterChipText, isSelected && styles.filterChipTextActive]}>
-                  {st.toUpperCase()}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {onBack ? (
+        <ScreenHeader title="Kotak Masuk Persetujuan" onBack={onBack} />
+      ) : (
+        <View
+          style={[
+            styles.header,
+            {
+              backgroundColor: theme.colors.surface,
+              borderBottomColor: theme.colors.surfaceBorder,
+            },
+          ]}
+        >
+          <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} allowFontScaling>
+            Kotak Masuk Persetujuan
+          </Text>
         </View>
+      )}
+
+      {/* Filter Row */}
+      <View
+        style={[
+          styles.filterRow,
+          {
+            backgroundColor: theme.colors.surface,
+            borderBottomColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        {['pending', 'approved', 'denied'].map((st) => {
+          const isSelected = approvalStatusFilter === st;
+          return (
+            <Pressable
+              key={st}
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+              style={[
+                styles.filterChip,
+                {
+                  backgroundColor: isSelected
+                    ? theme.colors.primary
+                    : theme.colors.surfaceElevated,
+                  borderColor: isSelected ? theme.colors.primary : theme.colors.surfaceBorder,
+                },
+              ]}
+              onPress={() => setApprovalStatusFilter(st)}
+              accessibilityRole="button"
+              accessibilityLabel={`Filter ${st}`}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  {
+                    color: isSelected ? '#fff' : theme.colors.textSecondary,
+                    fontWeight: isSelected ? '700' : '600',
+                  },
+                ]}
+                allowFontScaling
+              >
+                {st.toUpperCase()}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       {isLoading ? (
@@ -80,8 +131,13 @@ export const ApprovalInboxScreen: React.FC = () => {
         </View>
       ) : approvals?.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyTitle}>Semua Bersih</Text>
-          <Text style={styles.emptySubtitle}>
+          <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]} allowFontScaling>
+            Semua Bersih
+          </Text>
+          <Text
+            style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+            allowFontScaling
+          >
             Tidak ada permohonan persetujuan yang menunggu saat ini.
           </Text>
         </View>
@@ -99,33 +155,111 @@ export const ApprovalInboxScreen: React.FC = () => {
             const showReason = activeReasonInputId === item.id;
 
             return (
-              <View style={styles.approvalCard}>
+              <View
+                style={[
+                  styles.approvalCard,
+                  {
+                    backgroundColor: theme.colors.surface,
+                    borderColor:
+                      item.riskLevel === 'CRITICAL'
+                        ? theme.colors.riskCritical
+                        : item.riskLevel === 'HIGH'
+                          ? theme.colors.riskHigh
+                          : theme.colors.surfaceBorder,
+                  },
+                ]}
+              >
                 <View style={styles.cardTopRow}>
                   <RiskBadge level={item.riskLevel} />
                   <StatusPill status={item.status} />
                 </View>
 
-                <Text style={styles.actionTitle}>{item.action}</Text>
+                <Text
+                  style={[styles.actionTitle, { color: theme.colors.textPrimary }]}
+                  allowFontScaling
+                >
+                  {item.action}
+                </Text>
 
                 <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Target / Resource:</Text>
-                  <Text style={styles.infoValue} numberOfLines={1}>
+                  <Text
+                    style={[styles.infoLabel, { color: theme.colors.textMuted }]}
+                    allowFontScaling
+                  >
+                    Target / Resource:
+                  </Text>
+                  <Text
+                    style={[styles.infoValue, { color: theme.colors.textSecondary }]}
+                    numberOfLines={1}
+                    allowFontScaling
+                  >
                     {item.resource}
                   </Text>
                 </View>
 
                 <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Scope Lingkup:</Text>
-                  <Text style={styles.infoValue}>{item.scope}</Text>
+                  <Text
+                    style={[styles.infoLabel, { color: theme.colors.textMuted }]}
+                    allowFontScaling
+                  >
+                    Scope Lingkup:
+                  </Text>
+                  <Text
+                    style={[styles.infoValue, { color: theme.colors.textSecondary }]}
+                    allowFontScaling
+                  >
+                    {item.scope}
+                  </Text>
                 </View>
 
-                <View style={styles.consequenceBox}>
-                  <Text style={styles.consequenceHeading}>Konsekuensi Aksi:</Text>
-                  <Text style={styles.consequenceText}>{item.consequence}</Text>
+                <View
+                  style={[
+                    styles.consequenceBox,
+                    {
+                      backgroundColor:
+                        item.riskLevel === 'CRITICAL'
+                          ? theme.colors.riskCriticalBg
+                          : item.riskLevel === 'HIGH'
+                            ? theme.colors.riskHighBg
+                            : theme.colors.surfaceElevated,
+                      borderColor:
+                        item.riskLevel === 'CRITICAL'
+                          ? theme.colors.riskCritical
+                          : item.riskLevel === 'HIGH'
+                            ? theme.colors.riskHigh
+                            : theme.colors.surfaceBorder,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.consequenceHeading,
+                      {
+                        color:
+                          item.riskLevel === 'CRITICAL'
+                            ? theme.colors.riskCritical
+                            : item.riskLevel === 'HIGH'
+                              ? theme.colors.riskHigh
+                              : theme.colors.textPrimary,
+                      },
+                    ]}
+                    allowFontScaling
+                  >
+                    Konsekuensi Aksi:
+                  </Text>
+                  <Text
+                    style={[styles.consequenceText, { color: theme.colors.textPrimary }]}
+                    allowFontScaling
+                  >
+                    {item.consequence}
+                  </Text>
                 </View>
 
                 <View style={styles.metaRow}>
-                  <Text style={styles.metaText}>
+                  <Text
+                    style={[styles.metaText, { color: theme.colors.textMuted }]}
+                    allowFontScaling
+                  >
                     Batas Waktu:{' '}
                     {isExpired
                       ? 'Sudah Kedaluwarsa'
@@ -134,39 +268,86 @@ export const ApprovalInboxScreen: React.FC = () => {
                 </View>
 
                 {isPending && !isExpired ? (
-                  <View style={styles.actionContainer}>
+                  <View
+                    style={[
+                      styles.actionContainer,
+                      { borderTopColor: theme.colors.surfaceBorder },
+                    ]}
+                  >
                     {showReason ? (
                       <TextInput
-                        style={styles.reasonInput}
+                        style={[
+                          styles.reasonInput,
+                          {
+                            backgroundColor: theme.colors.surfaceElevated,
+                            color: theme.colors.textPrimary,
+                            borderColor: theme.colors.surfaceBorder,
+                          },
+                        ]}
                         placeholder="Catatan / alasan (opsional)..."
                         placeholderTextColor={theme.colors.textMuted}
                         value={reasonText}
                         onChangeText={setReasonText}
+                        accessibilityLabel="Catatan alasan persetujuan"
                       />
                     ) : (
                       <TouchableOpacity
                         style={styles.toggleReasonBtn}
                         onPress={() => setActiveReasonInputId(item.id)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Tambah catatan alasan"
                       >
-                        <Text style={styles.toggleReasonText}>+ Tambah catatan / alasan</Text>
+                        <Text
+                          style={[styles.toggleReasonText, { color: theme.colors.primary }]}
+                          allowFontScaling
+                        >
+                          + Tambah catatan / alasan
+                        </Text>
                       </TouchableOpacity>
                     )}
 
                     <View style={styles.buttonsRow}>
-                      <TouchableOpacity
-                        style={[styles.btn, styles.denyBtn]}
+                      <Pressable
+                        android_ripple={{ color: 'rgba(239, 68, 68, 0.2)' }}
+                        style={[
+                          styles.btn,
+                          {
+                            backgroundColor: theme.colors.dangerBg,
+                            borderColor: theme.colors.danger,
+                          },
+                        ]}
                         disabled={denyMutation.isPending}
                         onPress={() => handleDeny(item.id)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Tolak permintaan persetujuan"
                       >
-                        <Text style={styles.btnText}>Tolak (Deny)</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.btn, styles.approveBtn]}
+                        <Text
+                          style={[styles.btnText, { color: theme.colors.danger }]}
+                          allowFontScaling
+                        >
+                          Tolak (Deny)
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+                        style={[
+                          styles.btn,
+                          {
+                            backgroundColor:
+                              item.riskLevel === 'CRITICAL'
+                                ? theme.colors.riskCritical
+                                : theme.colors.success,
+                          },
+                        ]}
                         disabled={approveMutation.isPending}
                         onPress={() => handleApprove(item.id)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Setujui permintaan persetujuan"
                       >
-                        <Text style={styles.btnText}>Setujui (Approve)</Text>
-                      </TouchableOpacity>
+                        <Text style={[styles.btnText, { color: '#fff' }]} allowFontScaling>
+                          Setujui (Approve)
+                        </Text>
+                      </Pressable>
                     </View>
                   </View>
                 ) : null}
@@ -182,167 +363,140 @@ export const ApprovalInboxScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
   },
   header: {
-    paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.md,
-    paddingBottom: theme.spacing.sm,
-    backgroundColor: theme.colors.surface,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceBorder,
   },
   headerTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: theme.spacing.sm,
   },
   filterRow: {
     flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    gap: 8,
   },
   filterChip: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 5,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.surfaceElevated,
-    marginRight: theme.spacing.xs,
-  },
-  filterChipActive: {
-    backgroundColor: theme.colors.primary,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   filterChipText: {
-    color: theme.colors.textSecondary,
     fontSize: 11,
-    fontWeight: '700',
-  },
-  filterChipTextActive: {
-    color: '#fff',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: theme.spacing.xl,
+    padding: 24,
   },
   emptyTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: theme.spacing.xs,
+    marginBottom: 6,
   },
   emptySubtitle: {
-    color: theme.colors.textSecondary,
     fontSize: 13,
     textAlign: 'center',
   },
   listContent: {
-    padding: theme.spacing.md,
+    padding: 16,
   },
   approvalCard: {
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
+    padding: 16,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    marginBottom: theme.spacing.md,
+    marginBottom: 14,
   },
   cardTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: theme.spacing.sm,
+    marginBottom: 8,
   },
   actionTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 16,
     fontWeight: '800',
-    marginBottom: theme.spacing.sm,
+    marginBottom: 8,
   },
   infoRow: {
     flexDirection: 'row',
     marginBottom: 4,
   },
   infoLabel: {
-    color: theme.colors.textMuted,
     fontSize: 12,
     width: 120,
   },
   infoValue: {
-    color: theme.colors.textSecondary,
     fontSize: 12,
     flex: 1,
   },
   consequenceBox: {
-    backgroundColor: theme.colors.surfaceElevated,
-    padding: theme.spacing.sm,
-    borderRadius: theme.borderRadius.sm,
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.xs,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 8,
+    marginBottom: 6,
   },
   consequenceHeading: {
-    color: theme.colors.textPrimary,
     fontSize: 11,
     fontWeight: '700',
     marginBottom: 2,
   },
   consequenceText: {
-    color: theme.colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
   },
   metaRow: {
-    marginTop: theme.spacing.xs,
-    marginBottom: theme.spacing.sm,
+    marginTop: 4,
+    marginBottom: 8,
   },
   metaText: {
-    color: theme.colors.textMuted,
     fontSize: 11,
   },
   actionContainer: {
     borderTopWidth: 1,
-    borderTopColor: theme.colors.surfaceBorder,
-    paddingTop: theme.spacing.sm,
-    marginTop: theme.spacing.xs,
+    paddingTop: 10,
+    marginTop: 6,
   },
   toggleReasonBtn: {
-    marginBottom: theme.spacing.sm,
+    marginBottom: 10,
+    minHeight: 40,
+    justifyContent: 'center',
   },
   toggleReasonText: {
-    color: theme.colors.primary,
     fontSize: 12,
   },
   reasonInput: {
-    backgroundColor: theme.colors.surfaceElevated,
-    color: theme.colors.textPrimary,
-    padding: 8,
-    borderRadius: theme.borderRadius.sm,
+    padding: 10,
+    borderRadius: 8,
     fontSize: 12,
-    marginBottom: theme.spacing.sm,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
+    minHeight: 44,
   },
   buttonsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 8,
   },
   btn: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: theme.borderRadius.sm,
+    minHeight: 48,
+    borderRadius: 8,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginHorizontal: 4,
-  },
-  denyBtn: {
-    backgroundColor: theme.colors.dangerBg,
     borderWidth: 1,
-    borderColor: theme.colors.danger,
-  },
-  approveBtn: {
-    backgroundColor: theme.colors.success,
   },
   btnText: {
-    color: '#fff',
     fontSize: 13,
     fontWeight: '700',
   },

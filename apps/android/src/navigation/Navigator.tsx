@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   SafeAreaView,
   StatusBar,
   StyleSheet,
@@ -56,6 +57,29 @@ export const AppNavigator: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [toastMessage, clearToast]);
+
+  // Handle Android hardware back press to dismiss sub-screens before exiting app
+  useEffect(() => {
+    const onBackPress = () => {
+      if (moreSubscreen !== null) {
+        setMoreSubscreen(null);
+        return true;
+      }
+      if (activeTaskId !== null) {
+        setActiveTaskId(null);
+        return true;
+      }
+      if (activeConversationId !== null) {
+        setActiveConversationId(null);
+        setActiveConversationTitle(undefined);
+        return true;
+      }
+      return false;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => subscription.remove();
+  }, [moreSubscreen, activeTaskId, activeConversationId]);
 
   const handleDeepLinkTarget = (target: DeepLinkTarget | null) => {
     if (!target) return;

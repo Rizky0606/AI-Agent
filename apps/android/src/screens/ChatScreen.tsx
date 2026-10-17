@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Clipboard,
@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,17 +14,22 @@ import {
   View,
 } from 'react-native';
 import {
-  ArrowLeft,
+  AlertTriangle,
+  Brain,
   Copy,
+  Cpu,
+  ListTodo,
   RotateCcw,
   Send,
   Sparkles,
   Square,
   X,
+  Zap,
 } from 'lucide-react-native';
 import type { ChatMessage, ChatMode, MessageAttachment } from '../api/types.ts';
 import { MarkdownView } from '../components/MarkdownView.tsx';
 import { ModelSelectorModal } from '../components/ModelSelectorModal.tsx';
+import { ScreenHeader } from '../components/ScreenHeader.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { useAppTheme } from '../hooks/use-theme.ts';
 import { useCreateTask, useMessages, useTasks } from '../hooks/use-queries.ts';
@@ -56,6 +62,134 @@ const RUNTIME_LABELS: Record<'auto' | 'omp' | 'hermes' | 'native', string> = {
   hermes: idID.chat.runtimeHermes,
   native: idID.chat.runtimeNative,
 };
+
+interface ChatMessageBubbleProps {
+  item: ChatMessage;
+  theme: ReturnType<typeof useAppTheme>;
+  onLongPress: (item: ChatMessage) => void;
+  onCopyNotice: (text: string) => void;
+}
+
+const ChatMessageBubble = React.memo<ChatMessageBubbleProps>(
+  ({ item, theme, onLongPress, onCopyNotice }) => {
+    const isUser = item.role === 'user';
+    return (
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onLongPress={() => onLongPress(item)}
+        accessibilityRole="button"
+        accessibilityLabel={`${isUser ? 'Pesan Anda' : 'Pesan Asisten'}: ${item.content}. Tekan lama untuk opsi salin atau ulangi.`}
+        style={[
+          styles.messageContainer,
+          isUser ? styles.userContainer : styles.assistantContainer,
+        ]}
+      >
+        {isUser ? (
+          // User Message: Smooth Bubble on Right
+          <View
+            style={[
+              styles.userBubble,
+              {
+                backgroundColor: theme.colors.primary,
+                borderColor: theme.colors.primary,
+              },
+            ]}
+          >
+            <Text style={styles.userMessageText} allowFontScaling>
+              {item.content}
+            </Text>
+            <Text style={styles.userTimestamp} allowFontScaling>
+              {new Date(item.createdAt).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </Text>
+          </View>
+        ) : (
+          // Assistant Message: Full width without heavy bubble
+          <View style={styles.assistantMessageWrapper}>
+            <View style={styles.assistantHeaderRow}>
+              <View style={styles.assistantSparkleBadge}>
+                <Sparkles size={14} color={theme.colors.primary} />
+              </View>
+              <Text
+                style={[
+                  styles.assistantNameText,
+                  { color: theme.colors.textSecondary },
+                ]}
+                allowFontScaling
+              >
+                Asisten
+              </Text>
+              {typeof item.metadata?.['resolvedModel'] === 'string' ? (
+                <Text
+                  style={[
+                    styles.modelAttributionText,
+                    {
+                      color:
+                        item.metadata['fallbackUsed'] === true
+                          ? theme.colors.warning
+                          : theme.colors.textMuted,
+                    },
+                  ]}
+                  allowFontScaling
+                >
+                  {idID.chat.answeredBy} {String(item.metadata['resolvedModel'])}
+                  {item.metadata['fallbackUsed'] === true
+                    ? ` ${idID.chat.fallbackUsed}`
+                    : ''}
+                </Text>
+              ) : null}
+            </View>
+
+            <View style={styles.assistantMarkdownBox}>
+              <MarkdownView
+                content={item.content || idID.chat.streamingThinking}
+                textColor={theme.colors.textPrimary}
+                onCopyNotice={onCopyNotice}
+              />
+            </View>
+
+            {item.attachments && item.attachments.length > 0 ? (
+              <View style={styles.attachmentList}>
+                {item.attachments.map((att: MessageAttachment, idx: number) => (
+                  <Text
+                    key={idx}
+                    style={[
+                      styles.attachmentPill,
+                      {
+                        backgroundColor: theme.colors.surfaceElevated,
+                        color: theme.colors.primary,
+                      },
+                    ]}
+                    allowFontScaling
+                  >
+                    📎 {att.name || att.type}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
+
+            <Text
+              style={[styles.assistantTimestamp, { color: theme.colors.textMuted }]}
+              allowFontScaling
+            >
+              {new Date(item.createdAt).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </Text>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  },
+  (prev, next) =>
+    prev.item.id === next.item.id &&
+    prev.item.content === next.item.content &&
+    prev.item.metadata === next.item.metadata &&
+    prev.theme === next.theme,
+);
 
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   conversationId,
@@ -189,39 +323,30 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setDraftText(msg.content);
   };
 
+  const renderMessageItem = useCallback(
+    ({ item }: { item: ChatMessage }) => (
+      <ChatMessageBubble
+        item={item}
+        theme={theme}
+        onLongPress={setSelectedMessageForAction}
+        onCopyNotice={(notice) => showToast(notice)}
+      />
+    ),
+    [theme, showToast],
+  );
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
     >
       {/* Header */}
-      <View
-        style={[
-          styles.header,
-          {
-            backgroundColor: theme.colors.surface,
-            borderBottomColor: theme.colors.surfaceBorder,
-          },
-        ]}
-      >
-        <TouchableOpacity
-          onPress={onBack}
-          style={styles.backButton}
-          accessibilityRole="button"
-          accessibilityLabel={idID.common.back}
-        >
-          <ArrowLeft size={22} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
-        <View style={styles.headerTitleContainer}>
-          <Text
-            style={[styles.headerTitle, { color: theme.colors.textPrimary }]}
-            numberOfLines={1}
-          >
-            {conversationTitle ?? idID.chat.headerTitle}
-          </Text>
-          <StatusPill status={connectionStatus} />
-        </View>
-      </View>
+      <ScreenHeader
+        title={conversationTitle ?? idID.chat.headerTitle}
+        onBack={onBack}
+        rightElement={<StatusPill status={connectionStatus} />}
+      />
 
       {/* Connection State Warning */}
       {connectionStatus !== 'connected' ? (
@@ -234,13 +359,42 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             },
           ]}
         >
-          <Text style={[styles.connBannerText, { color: theme.colors.warning }]}>
-            {connectionStatus === 'reconnecting'
-              ? idID.chat.connReconnecting
-              : connectionStatus === 'connecting'
-                ? idID.chat.connConnecting
-                : idID.chat.connDisconnected}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+            <AlertTriangle size={14} color={theme.colors.warning} />
+            <Text
+              style={[styles.connBannerText, { color: theme.colors.warning, flex: 1 }]}
+              allowFontScaling
+            >
+              {connectionStatus === 'reconnecting'
+                ? idID.chat.connReconnecting
+                : connectionStatus === 'connecting'
+                  ? idID.chat.connConnecting
+                  : idID.chat.connDisconnected}
+            </Text>
+          </View>
+          {connectionStatus !== 'connecting' ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={idID.common.retry}
+              style={{
+                minHeight: 48,
+                minWidth: 48,
+                justifyContent: 'center',
+                alignItems: 'center',
+                paddingHorizontal: 8,
+              }}
+              onPress={() => {
+                wsClientRef.current?.connect();
+              }}
+            >
+              <Text
+                style={{ fontSize: 12, fontWeight: '700', color: theme.colors.primary }}
+                allowFontScaling
+              >
+                Hubungkan
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : null}
 
@@ -287,113 +441,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           ref={flatListRef}
           data={messages}
           keyExtractor={(item) => item.id}
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          windowSize={9}
+          removeClippedSubviews={Platform.OS === 'android'}
           contentContainerStyle={styles.messageList}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          renderItem={({ item }) => {
-            const isUser = item.role === 'user';
-            return (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onLongPress={() => setSelectedMessageForAction(item)}
-                accessibilityRole="button"
-                accessibilityLabel={`${isUser ? 'Pesan Anda' : 'Pesan Asisten'}: ${item.content}. Tekan lama untuk opsi salin atau ulangi.`}
-                style={[
-                  styles.messageContainer,
-                  isUser ? styles.userContainer : styles.assistantContainer,
-                ]}
-              >
-                {isUser ? (
-                  // User Message: Smooth Bubble on Right
-                  <View
-                    style={[
-                      styles.userBubble,
-                      {
-                        backgroundColor: theme.colors.primary,
-                        borderColor: theme.colors.primary,
-                      },
-                    ]}
-                  >
-                    <Text style={styles.userMessageText}>{item.content}</Text>
-                    <Text style={styles.userTimestamp}>
-                      {new Date(item.createdAt).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </Text>
-                  </View>
-                ) : (
-                  // Assistant Message: Full width without heavy bubble
-                  <View style={styles.assistantMessageWrapper}>
-                    <View style={styles.assistantHeaderRow}>
-                      <View style={styles.assistantSparkleBadge}>
-                        <Sparkles size={14} color={theme.colors.primary} />
-                      </View>
-                      <Text
-                        style={[
-                          styles.assistantNameText,
-                          { color: theme.colors.textSecondary },
-                        ]}
-                      >
-                        Asisten
-                      </Text>
-                      {typeof item.metadata?.['resolvedModel'] === 'string' ? (
-                        <Text
-                          style={[
-                            styles.modelAttributionText,
-                            {
-                              color:
-                                item.metadata['fallbackUsed'] === true
-                                  ? theme.colors.warning
-                                  : theme.colors.textMuted,
-                            },
-                          ]}
-                        >
-                          {idID.chat.answeredBy} {String(item.metadata['resolvedModel'])}
-                          {item.metadata['fallbackUsed'] === true
-                            ? ` ${idID.chat.fallbackUsed}`
-                            : ''}
-                        </Text>
-                      ) : null}
-                    </View>
-
-                    <View style={styles.assistantMarkdownBox}>
-                      <MarkdownView
-                        content={item.content || idID.chat.streamingThinking}
-                        textColor={theme.colors.textPrimary}
-                        onCopyNotice={(notice) => showToast(notice)}
-                      />
-                    </View>
-
-                    {item.attachments && item.attachments.length > 0 ? (
-                      <View style={styles.attachmentList}>
-                        {item.attachments.map((att: MessageAttachment, idx: number) => (
-                          <Text
-                            key={idx}
-                            style={[
-                              styles.attachmentPill,
-                              {
-                                backgroundColor: theme.colors.surfaceElevated,
-                                color: theme.colors.primary,
-                              },
-                            ]}
-                          >
-                            📎 {att.name || att.type}
-                          </Text>
-                        ))}
-                      </View>
-                    ) : null}
-
-                    <Text style={[styles.assistantTimestamp, { color: theme.colors.textMuted }]}>
-                      {new Date(item.createdAt).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          }}
+          renderItem={renderMessageItem}
           ListEmptyComponent={
             !isStreaming ? (
               <View style={styles.emptyState}>
@@ -496,8 +550,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               },
             ]}
           >
-            <Text style={[styles.noticeText, { color: theme.colors.riskHigh }]}>
-              ⚠️ {modelNotice}
+            <AlertTriangle size={15} color={theme.colors.riskHigh} style={{ marginRight: 6 }} />
+            <Text
+              style={[styles.noticeText, { color: theme.colors.riskHigh }]}
+              allowFontScaling
+            >
+              {modelNotice}
             </Text>
             <TouchableOpacity
               accessibilityRole="button"
@@ -521,7 +579,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               },
             ]}
           >
-            <Text style={[styles.offlineBannerText, { color: theme.colors.warning }]}>
+            <Text
+              style={[styles.offlineBannerText, { color: theme.colors.warning }]}
+              allowFontScaling
+            >
               {idID.chat.catalogOffline}
             </Text>
             <TouchableOpacity
@@ -530,7 +591,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               style={styles.offlineRetryBtn}
               onPress={() => void loadCatalog()}
             >
-              <Text style={[styles.offlineRetryText, { color: theme.colors.primary }]}>
+              <Text
+                style={[styles.offlineRetryText, { color: theme.colors.primary }]}
+                allowFontScaling
+              >
                 {idID.common.retry}
               </Text>
             </TouchableOpacity>
@@ -538,7 +602,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         ) : null}
 
         {/* Chips Row: Mode & Model */}
-        <View style={styles.chipsRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          nestedScrollEnabled
+          contentContainerStyle={styles.chipsRow}
+        >
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel={`Ubah mode, saat ini ${MODE_LABELS[selectedMode]}`}
@@ -554,11 +623,15 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               void setConversationMode(MODES[nextIndex]!);
             }}
           >
-            <Text
-              style={[styles.chipButtonText, { color: theme.colors.textPrimary }]}
-            >
-              ⚡ {MODE_LABELS[selectedMode]}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Zap size={14} color={theme.colors.primary} />
+              <Text
+                style={[styles.chipButtonText, { color: theme.colors.textPrimary }]}
+                allowFontScaling
+              >
+                {MODE_LABELS[selectedMode]}
+              </Text>
+            </View>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -576,11 +649,15 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               setSelectedRuntime(RUNTIMES[nextIndex]!);
             }}
           >
-            <Text
-              style={[styles.chipButtonText, { color: theme.colors.textPrimary }]}
-            >
-              ⚙️ {RUNTIME_LABELS[selectedRuntime]}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Cpu size={14} color={theme.colors.textSecondary} />
+              <Text
+                style={[styles.chipButtonText, { color: theme.colors.textPrimary }]}
+                allowFontScaling
+              >
+                {RUNTIME_LABELS[selectedRuntime]}
+              </Text>
+            </View>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -599,21 +676,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             ]}
             onPress={() => setIsModelModalOpen(true)}
           >
-            <Text
-              style={[
-                styles.chipButtonText,
-                { color: theme.colors.textPrimary },
-                modelCatalogUnavailable && { color: theme.colors.textMuted },
-              ]}
-              numberOfLines={1}
-            >
-              🧠{' '}
-              {modelCatalogUnavailable
-                ? 'Auto (Katalog offline)'
-                : selectedModel === 'auto'
-                  ? 'Auto (Disarankan)'
-                  : selectedModel}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Brain size={14} color={theme.colors.primary} />
+              <Text
+                style={[
+                  styles.chipButtonText,
+                  { color: theme.colors.textPrimary },
+                  modelCatalogUnavailable && { color: theme.colors.textMuted },
+                ]}
+                numberOfLines={1}
+                allowFontScaling
+              >
+                {modelCatalogUnavailable
+                  ? 'Auto (Katalog offline)'
+                  : selectedModel === 'auto'
+                    ? 'Auto (Disarankan)'
+                    : selectedModel}
+              </Text>
+            </View>
           </TouchableOpacity>
 
           {/* Run as Task CTA */}
@@ -631,12 +711,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               ]}
               onPress={() => void handleRunAsTask()}
             >
-              <Text style={[styles.chipButtonText, { color: theme.colors.primary }]}>
-                📋 {createTask.isPending ? idID.chat.runAsTaskRunning : idID.chat.runAsTask}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <ListTodo size={14} color={theme.colors.primary} />
+                <Text
+                  style={[styles.chipButtonText, { color: theme.colors.primary }]}
+                  allowFontScaling
+                >
+                  {createTask.isPending ? idID.chat.runAsTaskRunning : idID.chat.runAsTask}
+                </Text>
+              </View>
             </TouchableOpacity>
           ) : null}
-        </View>
+        </ScrollView>
 
         {/* Text Input Row with Send / Stop buttons */}
         <View style={styles.inputControlsRow}>

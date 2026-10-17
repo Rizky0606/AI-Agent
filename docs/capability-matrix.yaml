@@ -80,17 +80,17 @@ capabilities:
     clients: android
     proof: pnpm --filter @personal-ai-os/android test
     limitation: |
-      Android UI Redesign & Navigation Architecture implemented (2026-10-15, Sesi 7, ADR 0009):
-      - Replaced manual bottom tab with genuine React Navigation (@react-navigation/bottom-tabs, @react-navigation/native) using lucide-react-native icons (MessageSquare, Activity, MoreHorizontal). 3 primary tabs: Chat, Aktivitas (unified Tasks & Approvals with live pending count badge), and Lainnya.
-      - Deep linking supports custom scheme `personal-ai://` and universal URLs, routing seamlessly to Chat, ApprovalDetail, TaskDetail, and ProjectDetail.
-      - Chat Experience: Full-width assistant messages without heavy bubbles, smooth right-aligned user bubble, custom zero-dependency MarkdownView supporting copyable code blocks with language badge and copy action, inline formatting, long-press menu for Salin and Ulangi, streaming thinking indicator, empty state with 4 Indonesian sample prompt cards, composer integrated with Mode and Model chips (Sesi 6), and safe area/keyboard handling.
-      - Approvals & Risk Management: Inline approval card in Chat and Aktivitas, bottom sheet detail showing risk level, action, target resource, and consequences. Mandatory secondary confirmation dialog for HIGH and CRITICAL risks explicitly stating consequences. All interactive buttons meet or exceed 48 dp minTouchTarget.
-      - Onboarding & Login: Google Sign-in as primary hero action, email/password collapsed under "Opsi Masuk Lainnya", server URL hidden by default under "Pengaturan Lanjutan".
-      - Lainnya Tab: Clean consumer view with 7 sections: Akun (with Logout), Model default, Notifikasi (push switch), Tampilan (Sistem/Terang/Gelap via dynamic useAppTheme synchronized with ui-store and OS appearance), Memori (scaffold Sesi 10), Skill & MCP (Sesi 14 implemented: per-project toggle, manifest viewer, and MCP server/tool status & logs), and collapsible Lanjutan (Server endpoint, Device ID, User ID, PostgreSQL/Redis/API health status, Artifacts, Projects).
-      - Centralized Indonesian localization in `src/locales/id-ID.ts` with 100% consistent Indonesian copy.
-      - Client Model Selector integrated (Sesi 6, ADR 0008): Model chip bottom sheet with provider grouping, capability verification badges, catalog 503 resilience, and per-conversation model/mode persistence.
-      - Sesi 17 QA & Release: All 56 test files passing in CI. Expo export bundles cleanly (3.7 MB JS, 17 assets). APK generation pipeline verified in `.github/workflows/release-installers.yml` with release version 0.3.0. Manual verification on real device remains necessary for physical rendering.
-      - Remaining gaps: attachment upload unavailable; physical Android device visual rendering requires manual verification.
+      Android UI Redesign & Native UX Overhaul implemented (2026-10-17, Sesi 23, ADR 0024):
+      - Zero new dependencies: Evaluated and rejected react-native-reanimated; used React Native's built-in Animated API with useNativeDriver: true for maximum stability and compatibility without native linking.
+      - Hardware BackHandler integration in Navigator.tsx: Android hardware back button gracefully dismisses active sub-screens (chat conversation, task detail, more subscreens) before exiting the app.
+      - Standard ScreenHeader component: Enforces consistent top bar across all secondary screens with 48dp touch target, ArrowLeft Lucide icon, and dynamic theme colors.
+      - Stream Throttling & List Performance: Created StreamThrottler utility to batch rapid WebSocket token deltas (default 80ms) and memoized ChatMessageBubble with React.memo, preventing expensive whole-list re-renders during high-speed LLM generation.
+      - Dynamic Theme Architecture: Purged static Theme.ts imports across all screens (TaskDetailScreen, TaskListScreen, ActivityScreen, ApprovalInboxScreen, MemoryScreen, ProjectsScreen, ArtifactsScreen, ConversationListScreen), migrating to dynamic useAppTheme() hook with instant runtime light/dark mode adaptation.
+      - Approval & Risk Accents: Explicit visual differentiation between CRITICAL (riskCritical, riskCriticalBg) and HIGH (riskHigh, riskHighBg) in cards, bottom sheets, and secondary confirmation dialogs.
+      - Touch Targets & Native Feedback: All interactive pressables strictly satisfy Android Material >= 48dp minTouchTarget with android_ripple native feedback.
+      - Copyable Diagnostics & No Emojis: Replaced emoji AI clichés with clean Lucide icons (Zap, Wrench, Eye, Cpu, AlertTriangle). Added one-tap clipboard copy buttons with toast feedback for Server Endpoint, Device ID, and User ID in Settings.
+      - Proof: All 47 Android unit tests passing (`pnpm --filter @personal-ai-os/android test:unit`). Lint passing with 0 warnings (`pnpm --filter @personal-ai-os/android lint`). Typecheck passing with strict TypeScript (`tsc --noEmit`). Production bundle compiles cleanly via Expo (`expo export --platform android`, 3.72 MB JS, 17 assets).
+      - Visual physical device rendering status: BELUM DIVERIFIKASI VISUAL (requires manual physical Android device testing).
   windows:
     status: partial
     code: apps/windows/src/ui; apps/windows/src/api; apps/windows/src/connection; apps/windows/src/security; apps/windows/src-tauri

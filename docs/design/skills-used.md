@@ -86,3 +86,21 @@ Seluruh skill di bawah ini dijadikan panduan perancangan dan refaktorisasi antar
 | `pbakaus/harden` | 2026-10-17 | Pencegahan overflow teks dengan ellipsis pada breadcrumb dan path direktori, batas tinggi maksimal pada textarea komposer. |
 | `pbakaus/polish` | 2026-10-17 | Transisi fungsional halus (150–200ms ease-out), peniadaan animasi dekoratif tanpa henti, penyelarasan radius sudut (sm: 8px, md: 12px, lg: 16px). |
 
+---
+
+## 4. Skill Yang Diterapkan pada Sesi 23 (Rombak UI/UX Android)
+
+Seluruh skill di bawah ini dijadikan panduan perancangan dan refaktorisasi antarmuka Android (React Native + Expo). Prinsip diterapkan murni pada komponen mobile native tanpa salinan CSS web.
+
+| Skill | Tanggal Akses | Peran & Penerapan di Sesi 23 |
+|---|---|---|
+| `kemiljk/android-native-ui` | 2026-10-17 | Konvensi Android: insets safe-area (status bar & nav bar), target sentuh $\ge 48\text{dp}$, riak sentuh `android_ripple` pada `Pressable`, gesture back perangkat keras (`BackHandler`), bottom sheet untuk aksi sekunder. |
+| `callstackincubator/react-native-best-practices` | 2026-10-17 | FlatList virtualisasi (`initialNumToRender`, `maxToRenderPerBatch`, `windowSize`, `removeClippedSubviews`), item pesan dimemoisasi (`React.memo`), tidak ada fungsi inline di `renderItem`, pembatasan laju update streaming (*stream throttling*). |
+| `emilkowalski/animate-expo` | 2026-10-17 | Prinsip animasi halus; diimplementasikan menggunakan API `Animated` bawaan React Native dengan `useNativeDriver: true` tanpa dependensi `react-native-reanimated` (ADR 0024); menghormati `AccessibilityInfo.isReduceMotionEnabled`. |
+| `pbakaus/adapt` | 2026-10-17 | Dukungan penskalaan ukuran font sistem hingga 200% (`allowFontScaling={true}`) dengan kontainer fleksibel, offset dinamis keyboard `KeyboardAvoidingView` agar composer dan chip tidak tertutup. |
+| `pbakaus/harden` | 2026-10-17 | Scroll horizontal blok kode dengan `nestedScrollEnabled={true}` untuk mencegah konflik gesture vertikal, pemotongan diff 32 KB dan teks 16 KB, penanganan status offline dengan banner non-blocking. |
+| `pbakaus/polish` | 2026-10-17 | Standarisasi komponen header terpadu `ScreenHeader`, feedback visual "Tersalin!", pulse badge lembut pada tab Aktivitas saat ada approval tertunda. |
+| `jakubkrehel/better-accessibility` | 2026-10-17 | Pelabelan lengkap TalkBack (`accessibilityLabel`, `accessibilityRole`, `accessibilityHint`), urutan fokus logis, tombol aksi persetujuan yang tegas. |
+| `ibelick/fixing-accessibility` | 2026-10-17 | Rasio kontras teks WCAG AA (>4.5:1 untuk teks normal, >7:1 untuk teks utama pada tema gelap dan terang), transisi tanpa kedipan pada pergantian tema dinamis. |
+
+

@@ -1,24 +1,44 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { defaultApiClient } from '../api/client.ts';
 import type { ArtifactItem } from '../api/types.ts';
-import { theme } from '../components/Theme.ts';
+import { ScreenHeader } from '../components/ScreenHeader.tsx';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
 const previewable = (artifact: ArtifactItem): boolean =>
-  artifact.mimeType.startsWith('text/') || /json|javascript|typescript|xml|yaml|markdown/.test(artifact.mimeType);
+  artifact.mimeType.startsWith('text/') ||
+  /json|javascript|typescript|xml|yaml|markdown/.test(artifact.mimeType);
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 export interface ArtifactsScreenProps {
   onBack?: () => void;
 }
 
 export const ArtifactsScreen: React.FC<ArtifactsScreenProps> = ({ onBack }) => {
+  const theme = useAppTheme();
   const { showToast } = useUiStore();
   const [filterType, setFilterType] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ id: string; content: string; truncated: boolean } | null>(null);
+  const [preview, setPreview] = useState<{ id: string; content: string; truncated: boolean } | null>(
+    null,
+  );
 
   const loadArtifacts = async () => {
     setLoading(true);
@@ -32,13 +52,16 @@ export const ArtifactsScreen: React.FC<ArtifactsScreenProps> = ({ onBack }) => {
     }
   };
 
-  useEffect(() => { void loadArtifacts(); }, []);
+  useEffect(() => {
+    void loadArtifacts();
+  }, []);
 
   const filtered = useMemo(() => {
     if (!filterType) return artifacts;
     return artifacts.filter((artifact) => {
       if (filterType === 'markdown') return artifact.mimeType.includes('markdown');
-      if (filterType === 'code') return /javascript|typescript|json|sql|python|shell/.test(artifact.mimeType);
+      if (filterType === 'code')
+        return /javascript|typescript|json|sql|python|shell/.test(artifact.mimeType);
       if (filterType === 'report') return artifact.mimeType.includes('pdf');
       return true;
     });
@@ -58,63 +81,306 @@ export const ArtifactsScreen: React.FC<ArtifactsScreenProps> = ({ onBack }) => {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        {onBack ? (
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Kembali"
-            style={{ width: 48, height: 48, justifyContent: 'center', alignItems: 'center', marginRight: 4 }}
-            onPress={onBack}
-          >
-            <Text style={{ color: theme.colors.primary, fontSize: 24, fontWeight: '700' }}>‹</Text>
-          </TouchableOpacity>
-        ) : null}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Manajer Artefak</Text>
-          <Text style={styles.headerSubtitle}>Metadata dan pratinjau file hasil tugas AI</Text>
-        </View>
-      </View>
-      <View style={styles.filterRow}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <ScreenHeader
+        title="Manajer Artefak"
+        subtitle="Metadata dan pratinjau file hasil tugas AI"
+        onBack={onBack}
+      />
+
+      <View
+        style={[
+          styles.filterRow,
+          {
+            backgroundColor: theme.colors.surface,
+            borderBottomColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
         {['Semua', 'markdown', 'code', 'report'].map((filter) => {
           const selected = filter === 'Semua' ? !filterType : filterType === filter;
-          return <TouchableOpacity key={filter} style={[styles.chip, selected && styles.chipActive]} onPress={() => setFilterType(filter === 'Semua' ? null : filter)}><Text style={[styles.chipText, selected && styles.chipTextActive]}>{filter.toUpperCase()}</Text></TouchableOpacity>;
+          return (
+            <Pressable
+              key={filter}
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+              style={[
+                styles.chip,
+                {
+                  backgroundColor: selected
+                    ? theme.colors.primary
+                    : theme.colors.surfaceElevated,
+                  borderColor: selected ? theme.colors.primary : theme.colors.surfaceBorder,
+                },
+              ]}
+              onPress={() => setFilterType(filter === 'Semua' ? null : filter)}
+              accessibilityRole="button"
+              accessibilityLabel={`Filter ${filter}`}
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  {
+                    color: selected ? '#fff' : theme.colors.textSecondary,
+                    fontWeight: selected ? '700' : '600',
+                  },
+                ]}
+                allowFontScaling
+              >
+                {filter.toUpperCase()}
+              </Text>
+            </Pressable>
+          );
         })}
       </View>
-      {loading ? <ActivityIndicator style={styles.state} color={theme.colors.primary} /> : error ? <View style={styles.state}><Text style={styles.error}>{error}</Text><TouchableOpacity onPress={() => void loadArtifacts()}><Text style={styles.retry}>Coba lagi</Text></TouchableOpacity></View> : <FlatList data={filtered} keyExtractor={(item) => item.id} contentContainerStyle={styles.listContent} ListEmptyComponent={<Text style={styles.empty}>Belum ada artefak.</Text>} renderItem={({ item }) => {
-        const showingPreview = preview?.id === item.id;
-        return <View style={styles.artifactCard}>
-          <Text style={styles.artifactName}>{item.filename}</Text>
-          <Text style={styles.artifactSize}>{item.mimeType} • {Math.ceil(item.size / 1024)} KB • {new Date(item.createdAt).toLocaleString()}</Text>
-          {showingPreview && <View style={styles.preview}><Text style={styles.previewText}>{preview.content}{preview.truncated ? '\n… (pratinjau dipotong)' : ''}</Text></View>}
-          <View style={styles.actionsRow}><TouchableOpacity style={styles.openBtn} onPress={() => void openArtifact(item)}><Text style={styles.openBtnText}>{showingPreview ? 'Tutup' : 'Pratinjau'}</Text></TouchableOpacity></View>
-        </View>;
-      }} />}
+
+      {loading ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator color={theme.colors.primary} size="large" />
+        </View>
+      ) : error ? (
+        <View style={styles.centerContainer}>
+          <Text style={[styles.error, { color: theme.colors.danger }]} allowFontScaling>
+            {error}
+          </Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => void loadArtifacts()}
+            accessibilityRole="button"
+            accessibilityLabel="Coba lagi"
+          >
+            <Text style={[styles.retry, { color: theme.colors.primary }]} allowFontScaling>
+              Coba lagi
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <View style={styles.centerContainer}>
+              <Text style={[styles.empty, { color: theme.colors.textMuted }]} allowFontScaling>
+                Belum ada artefak.
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const showingPreview = preview?.id === item.id;
+            return (
+              <View
+                style={[
+                  styles.artifactCard,
+                  {
+                    backgroundColor: theme.colors.surface,
+                    borderColor: theme.colors.surfaceBorder,
+                  },
+                ]}
+              >
+                <View style={styles.cardHeader}>
+                  <Text
+                    style={[styles.artifactName, { color: theme.colors.textPrimary }]}
+                    numberOfLines={1}
+                    allowFontScaling
+                  >
+                    {item.filename}
+                  </Text>
+                  <View
+                    style={[
+                      styles.mimePill,
+                      {
+                        backgroundColor: theme.colors.surfaceElevated,
+                        borderColor: theme.colors.surfaceBorder,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[styles.mimePillText, { color: theme.colors.primary }]}
+                      allowFontScaling
+                    >
+                      {item.mimeType.split('/').pop()?.toUpperCase() ?? 'FILE'}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text
+                  style={[styles.artifactSize, { color: theme.colors.textMuted }]}
+                  allowFontScaling
+                >
+                  {formatFileSize(item.size)} • {new Date(item.createdAt).toLocaleString('id-ID')}
+                </Text>
+
+                {showingPreview ? (
+                  <View
+                    style={[
+                      styles.preview,
+                      {
+                        backgroundColor: theme.colors.surfaceElevated,
+                        borderColor: theme.colors.surfaceBorder,
+                      },
+                    ]}
+                  >
+                    <ScrollView nestedScrollEnabled style={{ maxHeight: 200 }}>
+                      <Text
+                        selectable
+                        style={[styles.previewText, { color: theme.colors.textPrimary }]}
+                        allowFontScaling
+                      >
+                        {preview.content}
+                        {preview.truncated ? '\n… (pratinjau dipotong)' : ''}
+                      </Text>
+                    </ScrollView>
+                  </View>
+                ) : null}
+
+                <View style={styles.actionsRow}>
+                  <Pressable
+                    android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                    style={[
+                      styles.openBtn,
+                      {
+                        backgroundColor: showingPreview
+                          ? theme.colors.surfaceElevated
+                          : theme.colors.primary,
+                      },
+                    ]}
+                    onPress={() => {
+                      if (showingPreview) {
+                        setPreview(null);
+                      } else {
+                        void openArtifact(item);
+                      }
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={showingPreview ? 'Tutup pratinjau' : 'Buka pratinjau'}
+                  >
+                    <Text
+                      style={[
+                        styles.openBtnText,
+                        { color: showingPreview ? theme.colors.textPrimary : '#fff' },
+                      ]}
+                      allowFontScaling
+                    >
+                      {showingPreview ? 'Tutup' : 'Pratinjau'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          }}
+        />
+      )}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  header: { paddingHorizontal: theme.spacing.lg, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.sm, backgroundColor: theme.colors.surface },
-  headerTitle: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700' },
-  headerSubtitle: { color: theme.colors.textSecondary, fontSize: 12, marginTop: 2 },
-  filterRow: { flexDirection: 'row', paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.surfaceBorder },
-  chip: { paddingHorizontal: theme.spacing.md, paddingVertical: 4, borderRadius: theme.borderRadius.full, backgroundColor: theme.colors.surfaceElevated, marginRight: theme.spacing.xs },
-  chipActive: { backgroundColor: theme.colors.primary },
-  chipText: { color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700' },
-  chipTextActive: { color: '#fff' },
-  listContent: { padding: theme.spacing.md },
-  artifactCard: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, borderRadius: theme.borderRadius.md, borderWidth: 1, borderColor: theme.colors.surfaceBorder, marginBottom: theme.spacing.md },
-  artifactName: { color: theme.colors.textPrimary, fontSize: 15, fontWeight: '700' },
-  artifactSize: { color: theme.colors.textMuted, fontSize: 11, marginTop: 4 },
-  actionsRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: theme.spacing.md },
-  openBtn: { backgroundColor: theme.colors.surfaceElevated, paddingHorizontal: theme.spacing.md, paddingVertical: 8, borderRadius: theme.borderRadius.sm, marginRight: theme.spacing.xs },
-  error: { color: theme.colors.danger, textAlign: 'center' },
-  openBtnText: { color: theme.colors.primary, fontSize: 12, fontWeight: '700' },
-  preview: { backgroundColor: theme.colors.background, borderRadius: theme.borderRadius.sm, padding: theme.spacing.sm, marginTop: theme.spacing.sm, maxHeight: 220 },
-  previewText: { color: theme.colors.textPrimary, fontSize: 11, fontFamily: 'monospace' },
-  state: { margin: theme.spacing.lg, alignItems: 'center' },
-  retry: { color: theme.colors.primary, fontWeight: '700', marginTop: theme.spacing.sm },
-  empty: { color: theme.colors.textMuted, textAlign: 'center', marginTop: theme.spacing.lg },
+  container: {
+    flex: 1,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    gap: 8,
+  },
+  chip: {
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  chipText: {
+    fontSize: 11,
+  },
+  listContent: {
+    padding: 16,
+  },
+  artifactCard: {
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 14,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  artifactName: {
+    fontSize: 15,
+    fontWeight: '700',
+    flex: 1,
+    marginRight: 8,
+  },
+  mimePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  mimePillText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  artifactSize: {
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 6,
+  },
+  openBtn: {
+    minHeight: 44,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  openBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  preview: {
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 12,
+    marginVertical: 10,
+  },
+  previewText: {
+    fontSize: 11,
+    fontFamily: 'monospace',
+    lineHeight: 16,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  error: {
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  retryBtn: {
+    minHeight: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginTop: 10,
+  },
+  retry: {
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  empty: {
+    textAlign: 'center',
+    fontSize: 13,
+  },
 });

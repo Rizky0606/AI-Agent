@@ -2,12 +2,13 @@ import React from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Pressable,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { theme } from '../components/Theme.ts';
+import { Plus } from 'lucide-react-native';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useConversations, useCreateConversation, useProjects } from '../hooks/use-queries.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
@@ -18,6 +19,7 @@ export interface ConversationListScreenProps {
 export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
   onSelectConversation,
 }) => {
+  const theme = useAppTheme();
   const { activeProjectId, setActiveProjectId } = useUiStore();
   const { data: projects } = useProjects();
   const {
@@ -42,10 +44,23 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Workspace filter header */}
-      <View style={styles.filterSection}>
-        <Text style={styles.sectionTitle}>Workspace:</Text>
+      <View
+        style={[
+          styles.filterSection,
+          {
+            backgroundColor: theme.colors.surface,
+            borderBottomColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        <Text
+          style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}
+          allowFontScaling
+        >
+          Workspace:
+        </Text>
         <FlatList
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -54,15 +69,35 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
           renderItem={({ item }) => {
             const isSelected = activeProjectId === item.id;
             return (
-              <TouchableOpacity
+              <Pressable
+                android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
                 accessibilityRole="button"
                 accessibilityState={{ selected: isSelected }}
                 accessibilityLabel={`Workspace ${item.name}`}
-                style={[styles.projectChip, isSelected && styles.projectChipSelected]}
+                style={[
+                  styles.projectChip,
+                  {
+                    backgroundColor: isSelected
+                      ? theme.colors.primary
+                      : theme.colors.surfaceElevated,
+                    borderColor: isSelected ? theme.colors.primary : theme.colors.surfaceBorder,
+                  },
+                ]}
                 onPress={() => setActiveProjectId(item.id)}
               >
-                <Text style={[styles.projectChipText, isSelected && styles.projectChipTextSelected]}>{item.name}</Text>
-              </TouchableOpacity>
+                <Text
+                  style={[
+                    styles.projectChipText,
+                    {
+                      color: isSelected ? '#fff' : theme.colors.textSecondary,
+                      fontWeight: isSelected ? '700' : '600',
+                    },
+                  ]}
+                  allowFontScaling
+                >
+                  {item.name}
+                </Text>
+              </Pressable>
             );
           }}
         />
@@ -72,20 +107,63 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
       {isLoading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator color={theme.colors.primary} size="large" />
-          <Text style={styles.stateText}>Memuat percakapan…</Text>
+          <Text
+            style={[styles.stateText, { color: theme.colors.textSecondary }]}
+            allowFontScaling
+          >
+            Memuat percakapan…
+          </Text>
         </View>
       ) : isError ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyTitle}>Percakapan gagal dimuat</Text>
-          <Text style={styles.emptySubtitle}>Periksa koneksi, lalu coba lagi.</Text>
-          <TouchableOpacity accessibilityRole="button" style={styles.createButton} onPress={() => void refetch()}><Text style={styles.createButtonText}>Coba lagi</Text></TouchableOpacity>
+          <Text
+            style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}
+            allowFontScaling
+          >
+            Percakapan gagal dimuat
+          </Text>
+          <Text
+            style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+            allowFontScaling
+          >
+            Periksa koneksi, lalu coba lagi.
+          </Text>
+          <Pressable
+            android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+            accessibilityRole="button"
+            style={[styles.createButton, { backgroundColor: theme.colors.primary }]}
+            onPress={() => void refetch()}
+          >
+            <Text style={styles.createButtonText} allowFontScaling>
+              Coba lagi
+            </Text>
+          </Pressable>
         </View>
       ) : conversations?.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyMark}>✦</Text>
-          <Text style={styles.emptyTitle}>Belum ada percakapan</Text>
-          <Text style={styles.emptySubtitle}>Mulai percakapan baru. Riwayat tersedia lintas perangkat.</Text>
-          <TouchableOpacity accessibilityRole="button" style={styles.createButton} onPress={handleCreate} disabled={createConversation.isPending}><Text style={styles.createButtonText}>{createConversation.isPending ? 'Membuat…' : '+ Percakapan baru'}</Text></TouchableOpacity>
+          <Text
+            style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}
+            allowFontScaling
+          >
+            Belum ada percakapan
+          </Text>
+          <Text
+            style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+            allowFontScaling
+          >
+            Mulai percakapan baru. Riwayat tersedia lintas perangkat.
+          </Text>
+          <Pressable
+            android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+            accessibilityRole="button"
+            style={[styles.createButton, { backgroundColor: theme.colors.primary }]}
+            onPress={handleCreate}
+            disabled={createConversation.isPending}
+          >
+            <Text style={styles.createButtonText} allowFontScaling>
+              {createConversation.isPending ? 'Membuat…' : '+ Percakapan baru'}
+            </Text>
+          </Pressable>
         </View>
       ) : (
         <FlatList
@@ -95,20 +173,58 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
           refreshing={isLoading}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => (
-            <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Buka ${item.title || 'percakapan tanpa judul'}`} style={styles.convCard} onPress={() => onSelectConversation(item.id, item.title ?? undefined)}>
-              <View style={styles.convHeader}><Text style={styles.convTitle} numberOfLines={1}>{item.title || 'Percakapan Tanpa Judul'}</Text><Text style={styles.convDate}>{new Date(item.updatedAt).toLocaleDateString('id-ID')}</Text></View>
-              <Text style={styles.convPreview} numberOfLines={1}>Ketuk untuk membuka obrolan streaming…</Text>
-            </TouchableOpacity>
+            <Pressable
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.15)' }}
+              accessibilityRole="button"
+              accessibilityLabel={`Buka ${item.title || 'percakapan tanpa judul'}`}
+              style={[
+                styles.convCard,
+                {
+                  backgroundColor: theme.colors.surface,
+                  borderColor: theme.colors.surfaceBorder,
+                },
+              ]}
+              onPress={() => onSelectConversation(item.id, item.title ?? undefined)}
+            >
+              <View style={styles.convHeader}>
+                <Text
+                  style={[styles.convTitle, { color: theme.colors.textPrimary }]}
+                  numberOfLines={1}
+                  allowFontScaling
+                >
+                  {item.title || 'Percakapan Tanpa Judul'}
+                </Text>
+                <Text
+                  style={[styles.convDate, { color: theme.colors.textMuted }]}
+                  allowFontScaling
+                >
+                  {new Date(item.updatedAt).toLocaleDateString('id-ID')}
+                </Text>
+              </View>
+              <Text
+                style={[styles.convPreview, { color: theme.colors.textSecondary }]}
+                numberOfLines={1}
+                allowFontScaling
+              >
+                Ketuk untuk membuka obrolan streaming…
+              </Text>
+            </Pressable>
           )}
         />
       )}
 
       {conversations && conversations.length > 0 ? (
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Buat percakapan baru" style={styles.fab} onPress={handleCreate} disabled={createConversation.isPending}>
-          <Text style={styles.fabText}>+</Text>
-        </TouchableOpacity>
+        <Pressable
+          android_ripple={{ color: 'rgba(255, 255, 255, 0.3)', borderless: true }}
+          accessibilityRole="button"
+          accessibilityLabel="Buat percakapan baru"
+          style={[styles.fab, { backgroundColor: theme.colors.primary }]}
+          onPress={handleCreate}
+          disabled={createConversation.isPending}
+        >
+          <Plus size={24} color="#fff" />
+        </Pressable>
       ) : null}
-
     </View>
   );
 };
@@ -116,122 +232,102 @@ export const ConversationListScreen: React.FC<ConversationListScreenProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
   },
   filterSection: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    backgroundColor: theme.colors.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceBorder,
     flexDirection: 'row',
     alignItems: 'center',
   },
   sectionTitle: {
-    color: theme.colors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
-    marginRight: theme.spacing.sm,
+    marginRight: 10,
   },
   projectChip: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 5,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.surfaceElevated,
-    marginRight: theme.spacing.xs,
-  },
-  projectChipSelected: {
-    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 14,
+    minHeight: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
   },
   projectChipText: {
-    color: theme.colors.textSecondary,
     fontSize: 12,
-    fontWeight: '600',
-  },
-  projectChipTextSelected: {
-    color: '#fff',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: theme.spacing.xl,
+    padding: 24,
   },
-  stateText: { color: theme.colors.textSecondary, ...theme.typography.body, marginTop: theme.spacing.sm },
-  emptyMark: { color: theme.colors.primary, fontSize: 32, marginBottom: theme.spacing.sm },
+  stateText: {
+    marginTop: 10,
+    fontSize: 13,
+  },
   emptyTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: theme.spacing.xs,
+    marginBottom: 6,
   },
   emptySubtitle: {
-    color: theme.colors.textSecondary,
     fontSize: 14,
     textAlign: 'center',
-    marginBottom: theme.spacing.lg,
+    marginBottom: 16,
+    lineHeight: 20,
   },
   createButton: {
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: 10,
-    borderRadius: theme.borderRadius.sm,
+    minHeight: 48,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   createButtonText: {
     color: '#fff',
     fontWeight: '700',
+    fontSize: 14,
   },
   listContent: {
-    padding: theme.spacing.md,
+    padding: 16,
+    paddingBottom: 80,
   },
   convCard: {
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
+    padding: 16,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    marginBottom: theme.spacing.sm,
+    marginBottom: 10,
   },
   convHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: theme.spacing.xs,
+    alignItems: 'center',
+    marginBottom: 6,
   },
   convTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 15,
     fontWeight: '700',
     flex: 1,
-    marginRight: theme.spacing.sm,
+    marginRight: 8,
   },
   convDate: {
-    color: theme.colors.textMuted,
     fontSize: 11,
   },
   convPreview: {
-    color: theme.colors.textSecondary,
     fontSize: 13,
+    lineHeight: 18,
   },
   fab: {
     position: 'absolute',
-    bottom: theme.spacing.xl,
-    right: theme.spacing.xl,
-    width: theme.controls.minTouchTarget,
-    height: theme.controls.minTouchTarget,
-    borderRadius: theme.controls.minTouchTarget / 2,
-    backgroundColor: theme.colors.primary,
+    bottom: 24,
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-  },
-  fabText: {
-    color: '#fff',
-    fontSize: 28,
-    fontWeight: '400',
-    marginTop: -2,
+    elevation: 6,
   },
 });

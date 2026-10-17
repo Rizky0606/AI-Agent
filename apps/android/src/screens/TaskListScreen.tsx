@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   FlatList,
   Modal,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -11,7 +12,7 @@ import {
 } from 'react-native';
 import { ProgressBar } from '../components/ProgressBar.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
-import { theme } from '../components/Theme.ts';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useCreateTask, useTasks } from '../hooks/use-queries.ts';
 import { createRuntimeTaskRequest } from '../runtime-task.ts';
 import { useUiStore } from '../state/ui-store.ts';
@@ -23,6 +24,7 @@ export interface TaskListScreenProps {
 const STATUS_FILTERS = ['Semua', 'running', 'waiting_approval', 'completed', 'failed'];
 
 export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) => {
+  const theme = useAppTheme();
   const { activeProjectId, taskStatusFilter, setTaskStatusFilter } = useUiStore();
 
   const activeFilter = taskStatusFilter ?? undefined;
@@ -42,11 +44,22 @@ export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) 
 
   const submitRuntimeTask = async () => {
     const instruction = prompt.trim();
-    if (!activeProjectId) { setSubmitError('Pilih project terlebih dahulu.'); return; }
-    if (!instruction) { setSubmitError('Masukkan instruksi tugas.'); return; }
+    if (!activeProjectId) {
+      setSubmitError('Pilih project terlebih dahulu.');
+      return;
+    }
+    if (!instruction) {
+      setSubmitError('Masukkan instruksi tugas.');
+      return;
+    }
     setSubmitError(null);
     try {
-      const request = createRuntimeTaskRequest(activeProjectId, instruction, runtime, `${activeProjectId}/${Date.now()}`);
+      const request = createRuntimeTaskRequest(
+        activeProjectId,
+        instruction,
+        runtime,
+        `${activeProjectId}/${Date.now()}`,
+      );
       const { task } = await createTask.mutateAsync(request);
       setPrompt('');
       setCreateVisible(false);
@@ -57,36 +70,186 @@ export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) 
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.headerActions}>
-        <Text style={styles.headerTitle}>Daftar Tugas (Tasks)</Text>
-        <TouchableOpacity style={styles.createButton} onPress={() => { setSubmitError(null); setCreateVisible(true); }}>
-          <Text style={styles.createButtonText}>+ Tugas Runtime</Text>
-        </TouchableOpacity>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View
+        style={[
+          styles.headerActions,
+          {
+            backgroundColor: theme.colors.surface,
+            borderBottomColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} allowFontScaling>
+          Daftar Tugas (Tasks)
+        </Text>
+        <Pressable
+          android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+          style={[styles.createButton, { backgroundColor: theme.colors.primary }]}
+          onPress={() => {
+            setSubmitError(null);
+            setCreateVisible(true);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Buat tugas runtime baru"
+        >
+          <Text style={styles.createButtonText} allowFontScaling>
+            + Tugas Runtime
+          </Text>
+        </Pressable>
       </View>
-      <FlatList horizontal showsHorizontalScrollIndicator={false} data={STATUS_FILTERS} keyExtractor={(item) => item} style={styles.filterList} renderItem={({ item }) => {
-        const selected = item === 'Semua' ? !taskStatusFilter : taskStatusFilter === item;
-        return <TouchableOpacity style={[styles.filterChip, selected && styles.filterChipActive]} onPress={() => setTaskStatusFilter(item === 'Semua' ? null : item)}><Text style={[styles.filterText, selected && styles.filterTextActive]}>{item === 'Semua' ? item : item.replace('_', ' ').toUpperCase()}</Text></TouchableOpacity>;
-      }} />
-      <Modal visible={createVisible} transparent animationType="slide" onRequestClose={() => setCreateVisible(false)}>
+
+      <FlatList
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        data={STATUS_FILTERS}
+        keyExtractor={(item) => item}
+        style={styles.filterList}
+        contentContainerStyle={styles.filterContainer}
+        renderItem={({ item }) => {
+          const selected = item === 'Semua' ? !taskStatusFilter : taskStatusFilter === item;
+          return (
+            <Pressable
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+              style={[
+                styles.filterChip,
+                {
+                  backgroundColor: selected ? theme.colors.primary : theme.colors.surfaceElevated,
+                  borderColor: selected ? theme.colors.primary : theme.colors.surfaceBorder,
+                },
+              ]}
+              onPress={() => setTaskStatusFilter(item === 'Semua' ? null : item)}
+              accessibilityRole="button"
+              accessibilityLabel={`Filter ${item}`}
+            >
+              <Text
+                style={[
+                  styles.filterText,
+                  {
+                    color: selected ? '#fff' : theme.colors.textSecondary,
+                    fontWeight: selected ? '700' : '600',
+                  },
+                ]}
+                allowFontScaling
+              >
+                {item === 'Semua' ? item : item.replace('_', ' ').toUpperCase()}
+              </Text>
+            </Pressable>
+          );
+        }}
+      />
+
+      <Modal
+        visible={createVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCreateVisible(false)}
+      >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Tugas coding baru</Text>
-            <Text style={styles.modalHint}>{activeProjectId ? `Project: ${activeProjectId}` : 'Pilih project di tab Projects terlebih dahulu.'}</Text>
+          <View
+            style={[
+              styles.modalCard,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
+            <Text
+              style={[styles.modalTitle, { color: theme.colors.textPrimary }]}
+              allowFontScaling
+            >
+              Tugas coding baru
+            </Text>
+            <Text
+              style={[styles.modalHint, { color: theme.colors.textSecondary }]}
+              allowFontScaling
+            >
+              {activeProjectId
+                ? `Project: ${activeProjectId}`
+                : 'Pilih project di tab Projects terlebih dahulu.'}
+            </Text>
             <View style={styles.runtimeChoices}>
               {(['omp', 'hermes'] as const).map((id) => (
-                <TouchableOpacity key={id} style={[styles.runtimeChoice, runtime === id && styles.runtimeChoiceSelected]} onPress={() => setRuntime(id)}>
-                  <Text style={[styles.runtimeChoiceText, runtime === id && styles.runtimeChoiceTextSelected]}>{id.toUpperCase()}</Text>
-                </TouchableOpacity>
+                <Pressable
+                  key={id}
+                  android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                  style={[
+                    styles.runtimeChoice,
+                    {
+                      backgroundColor:
+                        runtime === id ? theme.colors.primary : theme.colors.surfaceElevated,
+                      borderColor:
+                        runtime === id ? theme.colors.primary : theme.colors.surfaceBorder,
+                    },
+                  ]}
+                  onPress={() => setRuntime(id)}
+                >
+                  <Text
+                    style={[
+                      styles.runtimeChoiceText,
+                      { color: runtime === id ? '#fff' : theme.colors.textPrimary },
+                    ]}
+                    allowFontScaling
+                  >
+                    {id.toUpperCase()}
+                  </Text>
+                </Pressable>
               ))}
             </View>
-            <TextInput style={styles.promptInput} value={prompt} onChangeText={setPrompt} placeholder="Instruksi untuk runtime..." multiline textAlignVertical="top" accessibilityLabel="Instruksi tugas runtime" />
-            {submitError ? <Text style={styles.errorText}>{submitError}</Text> : null}
+            <TextInput
+              style={[
+                styles.promptInput,
+                {
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderColor: theme.colors.surfaceBorder,
+                  color: theme.colors.textPrimary,
+                },
+              ]}
+              value={prompt}
+              onChangeText={setPrompt}
+              placeholder="Instruksi untuk runtime..."
+              placeholderTextColor={theme.colors.textMuted}
+              multiline
+              textAlignVertical="top"
+              accessibilityLabel="Instruksi tugas runtime"
+            />
+            {submitError ? (
+              <Text style={[styles.errorText, { color: theme.colors.danger }]} allowFontScaling>
+                {submitError}
+              </Text>
+            ) : null}
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.cancelButton} onPress={() => setCreateVisible(false)}><Text style={styles.cancelButtonText}>Batal</Text></TouchableOpacity>
-              <TouchableOpacity style={[styles.submitButton, (!activeProjectId || !prompt.trim() || createTask.isPending) && styles.submitDisabled]} disabled={!activeProjectId || !prompt.trim() || createTask.isPending} onPress={() => void submitRuntimeTask()}>
-                <Text style={styles.submitButtonText}>{createTask.isPending ? 'Mengirim…' : 'Buat tugas'}</Text>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => setCreateVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Batal"
+              >
+                <Text
+                  style={[styles.cancelButtonText, { color: theme.colors.textSecondary }]}
+                  allowFontScaling
+                >
+                  Batal
+                </Text>
               </TouchableOpacity>
+              <Pressable
+                android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+                style={[
+                  styles.submitButton,
+                  { backgroundColor: theme.colors.primary },
+                  (!activeProjectId || !prompt.trim() || createTask.isPending) &&
+                    styles.submitDisabled,
+                ]}
+                disabled={!activeProjectId || !prompt.trim() || createTask.isPending}
+                onPress={() => void submitRuntimeTask()}
+                accessibilityRole="button"
+                accessibilityLabel="Buat tugas"
+              >
+                <Text style={styles.submitButtonText} allowFontScaling>
+                  {createTask.isPending ? 'Mengirim…' : 'Buat tugas'}
+                </Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -98,8 +261,16 @@ export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) 
         </View>
       ) : tasks?.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyTitle}>Tidak Ada Tugas</Text>
-          <Text style={styles.emptySubtitle}>
+          <Text
+            style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}
+            allowFontScaling
+          >
+            Tidak Ada Tugas
+          </Text>
+          <Text
+            style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+            allowFontScaling
+          >
             Tugas yang dieksekusi oleh asisten AI akan tampil di sini
           </Text>
         </View>
@@ -111,9 +282,25 @@ export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) 
           refreshing={isLoading}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => (
-            <TouchableOpacity style={styles.taskCard} onPress={() => onSelectTask(item.id)}>
+            <Pressable
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.15)' }}
+              style={[
+                styles.taskCard,
+                {
+                  backgroundColor: theme.colors.surface,
+                  borderColor: theme.colors.surfaceBorder,
+                },
+              ]}
+              onPress={() => onSelectTask(item.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`Tugas ${item.kind}, status ${item.status}`}
+            >
               <View style={styles.cardHeader}>
-                <Text style={styles.taskKind} numberOfLines={1}>
+                <Text
+                  style={[styles.taskKind, { color: theme.colors.textPrimary }]}
+                  numberOfLines={1}
+                  allowFontScaling
+                >
                   {item.kind.replace('_', ' ').toUpperCase()}
                 </Text>
                 <StatusPill status={item.status} />
@@ -121,21 +308,37 @@ export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) 
 
               <View style={styles.progressSection}>
                 <View style={styles.progressLabelRow}>
-                  <Text style={styles.progressLabel}>Progres</Text>
-                  <Text style={styles.progressPercent}>{item.progress}%</Text>
+                  <Text
+                    style={[styles.progressLabel, { color: theme.colors.textSecondary }]}
+                    allowFontScaling
+                  >
+                    Progres
+                  </Text>
+                  <Text
+                    style={[styles.progressPercent, { color: theme.colors.textPrimary }]}
+                    allowFontScaling
+                  >
+                    {item.progress}%
+                  </Text>
                 </View>
                 <ProgressBar progress={item.progress} />
               </View>
 
               <View style={styles.cardFooter}>
-                <Text style={styles.dateText}>
+                <Text
+                  style={[styles.dateText, { color: theme.colors.textMuted }]}
+                  allowFontScaling
+                >
                   Percobaan ke-{item.attempt}/{item.maxAttempts}
                 </Text>
-                <Text style={styles.dateText}>
+                <Text
+                  style={[styles.dateText, { color: theme.colors.textMuted }]}
+                  allowFontScaling
+                >
                   {new Date(item.updatedAt).toLocaleDateString('id-ID')}
                 </Text>
               </View>
-            </TouchableOpacity>
+            </Pressable>
           )}
         />
       )}
@@ -146,106 +349,165 @@ export const TaskListScreen: React.FC<TaskListScreenProps> = ({ onSelectTask }) 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
   },
-  headerActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: theme.spacing.md, paddingTop: theme.spacing.md, backgroundColor: theme.colors.surface },
-  createButton: { backgroundColor: theme.colors.primary, borderRadius: theme.borderRadius.md, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
-  createButtonText: { color: '#fff', fontWeight: '700' },
-  modalBackdrop: { flex: 1, justifyContent: 'center', padding: theme.spacing.lg, backgroundColor: 'rgba(0,0,0,0.65)' },
-  modalCard: { backgroundColor: theme.colors.surface, padding: theme.spacing.lg, borderRadius: theme.borderRadius.lg, gap: theme.spacing.md },
-  modalTitle: { color: theme.colors.textPrimary, fontSize: 20, fontWeight: '700' },
-  modalHint: { color: theme.colors.textSecondary, fontSize: 13 },
-  runtimeChoices: { flexDirection: 'row', gap: theme.spacing.sm },
-  runtimeChoice: { paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.md, backgroundColor: theme.colors.surfaceElevated },
-  runtimeChoiceSelected: { backgroundColor: theme.colors.primary },
-  runtimeChoiceText: { color: theme.colors.textSecondary, fontWeight: '700' },
-  runtimeChoiceTextSelected: { color: '#fff' },
-  promptInput: { minHeight: 120, borderWidth: 1, borderColor: theme.colors.surfaceBorder, borderRadius: theme.borderRadius.md, padding: theme.spacing.md, color: theme.colors.textPrimary },
-  errorText: { color: theme.colors.danger, fontSize: 13 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: theme.spacing.sm },
-  cancelButton: { paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
-  cancelButtonText: { color: theme.colors.textSecondary },
-  submitButton: { backgroundColor: theme.colors.primary, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderRadius: theme.borderRadius.md },
-  submitDisabled: { opacity: 0.5 },
-  submitButtonText: { color: '#fff', fontWeight: '700' },
-  header: {
-    paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.md,
-    paddingBottom: theme.spacing.sm,
-    backgroundColor: theme.colors.surface,
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceBorder,
   },
   headerTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: theme.spacing.sm,
+  },
+  createButton: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  createButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
   },
   filterList: {
-    marginTop: theme.spacing.xs,
+    maxHeight: 56,
+  },
+  filterContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
   },
   filterChip: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 5,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.surfaceElevated,
-    marginRight: theme.spacing.xs,
-  },
-  filterChipActive: {
-    backgroundColor: theme.colors.primary,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   filterText: {
-    color: theme.colors.textSecondary,
-    fontSize: 11,
+    fontSize: 12,
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+  },
+  modalCard: {
+    padding: 20,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  modalHint: {
+    fontSize: 13,
+  },
+  runtimeChoices: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  runtimeChoice: {
+    flex: 1,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  runtimeChoiceText: {
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  promptInput: {
+    minHeight: 100,
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 13,
+  },
+  errorText: {
+    fontSize: 12,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+  cancelButton: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 13,
     fontWeight: '600',
   },
-  filterTextActive: {
+  submitButton: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  submitDisabled: {
+    opacity: 0.5,
+  },
+  submitButtonText: {
     color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: theme.spacing.xl,
+    padding: 24,
   },
   emptyTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 16,
     fontWeight: '700',
-    marginBottom: theme.spacing.xs,
+    marginBottom: 6,
   },
   emptySubtitle: {
-    color: theme.colors.textSecondary,
     fontSize: 13,
     textAlign: 'center',
   },
   listContent: {
-    padding: theme.spacing.md,
+    padding: 16,
+    paddingBottom: 32,
   },
   taskCard: {
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
+    padding: 14,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    marginBottom: theme.spacing.md,
+    marginBottom: 12,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: theme.spacing.sm,
+    marginBottom: 8,
   },
   taskKind: {
-    color: theme.colors.textPrimary,
     fontSize: 15,
     fontWeight: '700',
     flex: 1,
-    marginRight: theme.spacing.sm,
+    marginRight: 8,
   },
   progressSection: {
-    marginVertical: theme.spacing.xs,
+    marginVertical: 4,
   },
   progressLabelRow: {
     flexDirection: 'row',
@@ -253,21 +515,18 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   progressLabel: {
-    color: theme.colors.textSecondary,
     fontSize: 11,
   },
   progressPercent: {
-    color: theme.colors.textPrimary,
     fontSize: 11,
     fontWeight: '700',
   },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: theme.spacing.sm,
+    marginTop: 8,
   },
   dateText: {
-    color: theme.colors.textMuted,
     fontSize: 11,
   },
 });

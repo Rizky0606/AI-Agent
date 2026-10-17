@@ -4,6 +4,7 @@ import {
   Alert,
   FlatList,
   Modal,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -11,7 +12,6 @@ import {
   View,
 } from 'react-native';
 import {
-  ArrowLeft,
   Brain,
   CheckCircle2,
   Edit2,
@@ -25,7 +25,8 @@ import {
 } from 'lucide-react-native';
 import { defaultApiClient } from '../api/client.ts';
 import type { MemoryItem, MemorySearchResult } from '../api/types.ts';
-import { theme } from '../components/Theme.ts';
+import { ScreenHeader } from '../components/ScreenHeader.tsx';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
 export interface MemoryScreenProps {
@@ -33,6 +34,7 @@ export interface MemoryScreenProps {
 }
 
 export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
+  const theme = useAppTheme();
   const { showToast } = useUiStore();
 
   const [activeTab, setActiveTab] = useState<'active' | 'proposals'>('active');
@@ -167,72 +169,139 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
   }, [memories, searchResults, searchQuery, scopeFilter]);
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          {onBack && (
-            <TouchableOpacity onPress={onBack} style={styles.backButton}>
-              <ArrowLeft size={22} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-          )}
-          <View>
-            <Text style={styles.title}>Pusat Memori</Text>
-            <Text style={styles.subtitle}>Kontrol privasi & data jangka panjang AI</Text>
-          </View>
-        </View>
-
-        <TouchableOpacity onPress={() => void loadData()} style={styles.iconButton}>
-          <RefreshCw size={20} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Standard Screen Header */}
+      <ScreenHeader
+        title="Pusat Memori"
+        subtitle="Kontrol privasi & data jangka panjang AI"
+        onBack={onBack}
+        rightElement={
+          <Pressable
+            android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+            onPress={() => void loadData()}
+            style={styles.iconButton}
+            accessibilityRole="button"
+            accessibilityLabel="Muat ulang memori"
+          >
+            <RefreshCw size={20} color={theme.colors.textSecondary} />
+          </Pressable>
+        }
+      />
 
       {/* Tabs */}
-      <View style={styles.tabContainer}>
-        <TouchableOpacity
-          style={[styles.tabButton, activeTab === 'active' && styles.tabButtonActive]}
+      <View
+        style={[
+          styles.tabContainer,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        <Pressable
+          android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+          style={[
+            styles.tabButton,
+            activeTab === 'active' && { backgroundColor: theme.colors.surfaceElevated },
+          ]}
           onPress={() => setActiveTab('active')}
+          accessibilityRole="tab"
+          accessibilityLabel={`Memori Aktif (${memories.length})`}
         >
-          <Brain size={16} color={activeTab === 'active' ? theme.colors.primary : theme.colors.textSecondary} />
-          <Text style={[styles.tabText, activeTab === 'active' && styles.tabTextActive]}>
+          <Brain
+            size={16}
+            color={activeTab === 'active' ? theme.colors.primary : theme.colors.textSecondary}
+          />
+          <Text
+            style={[
+              styles.tabText,
+              {
+                color: activeTab === 'active' ? theme.colors.primary : theme.colors.textSecondary,
+                fontWeight: activeTab === 'active' ? '700' : '600',
+              },
+            ]}
+            allowFontScaling
+          >
             Memori Aktif ({memories.length})
           </Text>
-        </TouchableOpacity>
+        </Pressable>
 
-        <TouchableOpacity
-          style={[styles.tabButton, activeTab === 'proposals' && styles.tabButtonActive]}
+        <Pressable
+          android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+          style={[
+            styles.tabButton,
+            activeTab === 'proposals' && { backgroundColor: theme.colors.surfaceElevated },
+          ]}
           onPress={() => setActiveTab('proposals')}
+          accessibilityRole="tab"
+          accessibilityLabel={`Usulan AI (${proposals.length})`}
         >
-          <ShieldCheck size={16} color={activeTab === 'proposals' ? theme.colors.primary : theme.colors.textSecondary} />
-          <Text style={[styles.tabText, activeTab === 'proposals' && styles.tabTextActive]}>
+          <ShieldCheck
+            size={16}
+            color={activeTab === 'proposals' ? theme.colors.primary : theme.colors.textSecondary}
+          />
+          <Text
+            style={[
+              styles.tabText,
+              {
+                color: activeTab === 'proposals' ? theme.colors.primary : theme.colors.textSecondary,
+                fontWeight: activeTab === 'proposals' ? '700' : '600',
+              },
+            ]}
+            allowFontScaling
+          >
             Usulan AI ({proposals.length})
           </Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
 
       {activeTab === 'active' ? (
         <>
           {/* Search Bar */}
-          <View style={styles.searchBox}>
+          <View
+            style={[
+              styles.searchBox,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
             <Search size={18} color={theme.colors.textSecondary} />
             <TextInput
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: theme.colors.textPrimary }]}
               placeholder="Cari memori (pencarian teks)..."
-              placeholderTextColor={theme.colors.textSecondary}
+              placeholderTextColor={theme.colors.textMuted}
               value={searchQuery}
               onChangeText={(text) => void handleSearch(text)}
+              accessibilityLabel="Cari memori"
             />
             {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => void handleSearch('')}>
+              <Pressable
+                onPress={() => void handleSearch('')}
+                accessibilityRole="button"
+                accessibilityLabel="Bersihkan pencarian"
+              >
                 <X size={18} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
+              </Pressable>
             )}
           </View>
 
           {/* Honest Search Notice */}
           {searchQuery.trim().length > 0 && (
-            <View style={styles.noticeBanner}>
-              <Text style={styles.noticeText}>
+            <View
+              style={[
+                styles.noticeBanner,
+                {
+                  backgroundColor: theme.colors.riskMediumBg,
+                  borderColor: theme.colors.riskMedium,
+                },
+              ]}
+            >
+              <Text
+                style={[styles.noticeText, { color: theme.colors.riskMedium }]}
+                allowFontScaling
+              >
                 Mode: Pencarian teks PostgreSQL (Non-Semantik). Provider embedding 9Router belum dikonfigurasi.
               </Text>
             </View>
@@ -240,25 +309,53 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
 
           {/* Scope Filter Chips */}
           <View style={styles.filterRow}>
-            {(['all', 'user', 'project'] as const).map((sc) => (
-              <TouchableOpacity
-                key={sc}
-                style={[styles.chip, scopeFilter === sc && styles.chipActive]}
-                onPress={() => setScopeFilter(sc)}
-              >
-                <Text style={[styles.chipText, scopeFilter === sc && styles.chipTextActive]}>
-                  {sc === 'all' ? 'Semua' : sc === 'user' ? 'Global' : 'Proyek'}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {(['all', 'user', 'project'] as const).map((sc) => {
+              const isSelected = scopeFilter === sc;
+              return (
+                <Pressable
+                  key={sc}
+                  android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                  style={[
+                    styles.chip,
+                    {
+                      backgroundColor: isSelected
+                        ? theme.colors.primary
+                        : theme.colors.surfaceElevated,
+                      borderColor: isSelected ? theme.colors.primary : theme.colors.surfaceBorder,
+                    },
+                  ]}
+                  onPress={() => setScopeFilter(sc)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Filter ${sc === 'all' ? 'Semua' : sc === 'user' ? 'Global' : 'Proyek'}`}
+                >
+                  <Text
+                    style={[
+                      styles.chipText,
+                      {
+                        color: isSelected ? '#fff' : theme.colors.textSecondary,
+                        fontWeight: isSelected ? '700' : '600',
+                      },
+                    ]}
+                    allowFontScaling
+                  >
+                    {sc === 'all' ? 'Semua' : sc === 'user' ? 'Global' : 'Proyek'}
+                  </Text>
+                </Pressable>
+              );
+            })}
 
-            <TouchableOpacity
-              style={styles.addMemoryButton}
+            <Pressable
+              android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+              style={[styles.addMemoryButton, { backgroundColor: theme.colors.primary }]}
               onPress={() => setIsAddModalOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Tambah catatan memori baru"
             >
               <Plus size={16} color="#fff" />
-              <Text style={styles.addMemoryText}>Tambah</Text>
-            </TouchableOpacity>
+              <Text style={styles.addMemoryText} allowFontScaling>
+                Tambah
+              </Text>
+            </Pressable>
           </View>
 
           {/* Memories List */}
@@ -272,50 +369,113 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
                   <Brain size={40} color={theme.colors.textSecondary} />
-                  <Text style={styles.emptyTitle}>Belum Ada Memori</Text>
-                  <Text style={styles.emptyText}>
+                  <Text
+                    style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}
+                    allowFontScaling
+                  >
+                    Belum Ada Memori
+                  </Text>
+                  <Text
+                    style={[styles.emptyText, { color: theme.colors.textSecondary }]}
+                    allowFontScaling
+                  >
                     Memori yang Anda simpan atau setujui dari usulan AI akan tercantum di sini.
                   </Text>
                 </View>
               }
               renderItem={({ item }) => (
-                <View style={styles.card}>
+                <View
+                  style={[
+                    styles.card,
+                    {
+                      backgroundColor: theme.colors.surface,
+                      borderColor: theme.colors.surfaceBorder,
+                    },
+                  ]}
+                >
                   <View style={styles.cardHeader}>
                     <View style={styles.tagGroup}>
-                      <View style={[styles.badge, { backgroundColor: item.type === 'preference' ? '#2563eb' : '#7c3aed' }]}>
-                        <Text style={styles.badgeText}>{item.type}</Text>
+                      <View
+                        style={[
+                          styles.badge,
+                          {
+                            backgroundColor:
+                              item.type === 'preference'
+                                ? theme.colors.primary
+                                : theme.colors.surfaceElevated,
+                          },
+                        ]}
+                      >
+                        <Text style={styles.badgeText} allowFontScaling>
+                          {item.type}
+                        </Text>
                       </View>
-                      <View style={styles.scopeBadge}>
-                        <Text style={styles.scopeBadgeText}>
+                      <View
+                        style={[
+                          styles.scopeBadge,
+                          {
+                            backgroundColor: theme.colors.surfaceElevated,
+                            borderColor: theme.colors.surfaceBorder,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[styles.scopeBadgeText, { color: theme.colors.textSecondary }]}
+                          allowFontScaling
+                        >
                           {item.scope === 'user' ? 'Global' : 'Proyek'}
                         </Text>
                       </View>
                     </View>
 
                     <View style={styles.cardActions}>
-                      <TouchableOpacity
+                      <Pressable
+                        android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
                         onPress={() => {
                           setEditingItem(item);
                           setEditContent(item.content);
                         }}
                         style={styles.cardActionBtn}
+                        accessibilityRole="button"
+                        accessibilityLabel="Koreksi memori"
                       >
                         <Edit2 size={16} color={theme.colors.textPrimary} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                      </Pressable>
+                      <Pressable
+                        android_ripple={{ color: 'rgba(239, 68, 68, 0.2)' }}
                         onPress={() => handleDelete(item.id)}
                         style={styles.cardActionBtn}
+                        accessibilityRole="button"
+                        accessibilityLabel="Hapus memori"
                       >
-                        <Trash2 size={16} color="#ef4444" />
-                      </TouchableOpacity>
+                        <Trash2 size={16} color={theme.colors.danger} />
+                      </Pressable>
                     </View>
                   </View>
 
-                  <Text style={styles.cardContent}>{item.content}</Text>
+                  <Text
+                    style={[styles.cardContent, { color: theme.colors.textPrimary }]}
+                    allowFontScaling
+                  >
+                    {item.content}
+                  </Text>
 
-                  <View style={styles.cardFooter}>
-                    <Text style={styles.footerText}>Sumber: {item.provenance}</Text>
-                    <Text style={styles.footerText}>
+                  <View
+                    style={[
+                      styles.cardFooter,
+                      { borderTopColor: theme.colors.surfaceBorder },
+                    ]}
+                  >
+                    <Text
+                      style={[styles.footerText, { color: theme.colors.textMuted }]}
+                      allowFontScaling
+                    >
+                      Sumber: {item.provenance}
+                    </Text>
+                    <Text
+                      style={[styles.footerText, { color: theme.colors.textMuted }]}
+                      allowFontScaling
+                    >
                       {new Date(item.createdAt).toLocaleDateString('id-ID')}
                     </Text>
                   </View>
@@ -327,8 +487,20 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
       ) : (
         /* Proposals Queue */
         <View style={styles.proposalsContainer}>
-          <View style={[styles.noticeBanner, { borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}>
-            <Text style={[styles.noticeText, { color: '#3b82f6' }]}>
+          <View
+            style={[
+              styles.noticeBanner,
+              {
+                borderColor: theme.colors.primary,
+                backgroundColor: theme.colors.surfaceElevated,
+                marginHorizontal: 16,
+              },
+            ]}
+          >
+            <Text
+              style={[styles.noticeText, { color: theme.colors.primary }]}
+              allowFontScaling
+            >
               Tidak ada penyimpanan diam-diam. AI mengajukan catatan penting sebagai usulan yang harus Anda setujui terlebih dahulu.
             </Text>
           </View>
@@ -342,50 +514,116 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
               contentContainerStyle={styles.listContent}
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
-                  <CheckCircle2 size={40} color="#10b981" />
-                  <Text style={styles.emptyTitle}>Antrean Usulan Kosong</Text>
-                  <Text style={styles.emptyText}>
+                  <CheckCircle2 size={40} color={theme.colors.success} />
+                  <Text
+                    style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}
+                    allowFontScaling
+                  >
+                    Antrean Usulan Kosong
+                  </Text>
+                  <Text
+                    style={[styles.emptyText, { color: theme.colors.textSecondary }]}
+                    allowFontScaling
+                  >
                     Saat AI mendeteksi preferensi atau keputusan penting, usulan akan muncul di sini.
                   </Text>
                 </View>
               }
               renderItem={({ item }) => (
-                <View style={[styles.card, { borderColor: '#3b82f6' }]}>
+                <View
+                  style={[
+                    styles.card,
+                    {
+                      backgroundColor: theme.colors.surface,
+                      borderColor: theme.colors.primary,
+                    },
+                  ]}
+                >
                   <View style={styles.cardHeader}>
                     <View style={styles.tagGroup}>
-                      <View style={[styles.badge, { backgroundColor: '#3b82f6' }]}>
-                        <Text style={styles.badgeText}>Usulan {item.type}</Text>
+                      <View
+                        style={[styles.badge, { backgroundColor: theme.colors.primary }]}
+                      >
+                        <Text style={styles.badgeText} allowFontScaling>
+                          Usulan {item.type}
+                        </Text>
                       </View>
-                      <View style={styles.scopeBadge}>
-                        <Text style={styles.scopeBadgeText}>
+                      <View
+                        style={[
+                          styles.scopeBadge,
+                          {
+                            backgroundColor: theme.colors.surfaceElevated,
+                            borderColor: theme.colors.surfaceBorder,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[styles.scopeBadgeText, { color: theme.colors.textSecondary }]}
+                          allowFontScaling
+                        >
                           {item.scope === 'user' ? 'Global' : 'Proyek'}
                         </Text>
                       </View>
                     </View>
                   </View>
 
-                  <Text style={styles.cardContent}>{item.content}</Text>
+                  <Text
+                    style={[styles.cardContent, { color: theme.colors.textPrimary }]}
+                    allowFontScaling
+                  >
+                    {item.content}
+                  </Text>
 
-                  <View style={styles.cardFooter}>
-                    <Text style={styles.footerText}>Asal: {item.provenance}</Text>
+                  <View
+                    style={[
+                      styles.cardFooter,
+                      { borderTopColor: theme.colors.surfaceBorder },
+                    ]}
+                  >
+                    <Text
+                      style={[styles.footerText, { color: theme.colors.textMuted }]}
+                      allowFontScaling
+                    >
+                      Asal: {item.provenance}
+                    </Text>
                   </View>
 
                   <View style={styles.proposalActions}>
-                    <TouchableOpacity
-                      style={[styles.proposalBtn, styles.approveBtn]}
+                    <Pressable
+                      android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+                      style={[styles.proposalBtn, { backgroundColor: theme.colors.success }]}
                       onPress={() => void handleApprove(item.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Setujui usulan memori"
                     >
                       <CheckCircle2 size={16} color="#fff" />
-                      <Text style={styles.proposalBtnText}>Setujui</Text>
-                    </TouchableOpacity>
+                      <Text style={[styles.proposalBtnText, { color: '#fff' }]} allowFontScaling>
+                        Setujui
+                      </Text>
+                    </Pressable>
 
-                    <TouchableOpacity
-                      style={[styles.proposalBtn, styles.rejectBtn]}
+                    <Pressable
+                      android_ripple={{ color: 'rgba(239, 68, 68, 0.2)' }}
+                      style={[
+                        styles.proposalBtn,
+                        {
+                          backgroundColor: theme.colors.dangerBg,
+                          borderColor: theme.colors.danger,
+                          borderWidth: 1,
+                        },
+                      ]}
                       onPress={() => void handleReject(item.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Tolak usulan memori"
                     >
-                      <XCircle size={16} color="#ef4444" />
-                      <Text style={[styles.proposalBtnText, { color: '#ef4444' }]}>Tolak</Text>
-                    </TouchableOpacity>
+                      <XCircle size={16} color={theme.colors.danger} />
+                      <Text
+                        style={[styles.proposalBtnText, { color: theme.colors.danger }]}
+                        allowFontScaling
+                      >
+                        Tolak
+                      </Text>
+                    </Pressable>
                   </View>
                 </View>
               )}
@@ -397,29 +635,74 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
       {/* Edit Correction Modal */}
       <Modal visible={Boolean(editingItem)} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Koreksi Memori</Text>
-            <Text style={styles.modalSubtitle}>Perbaiki konten memori pengguna:</Text>
+          <View
+            style={[
+              styles.modalCard,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
+            <Text
+              style={[styles.modalTitle, { color: theme.colors.textPrimary }]}
+              allowFontScaling
+            >
+              Koreksi Memori
+            </Text>
+            <Text
+              style={[styles.modalSubtitle, { color: theme.colors.textSecondary }]}
+              allowFontScaling
+            >
+              Perbaiki konten memori pengguna:
+            </Text>
             <TextInput
-              style={styles.modalInput}
+              style={[
+                styles.modalInput,
+                {
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderColor: theme.colors.surfaceBorder,
+                  color: theme.colors.textPrimary,
+                },
+              ]}
               multiline
               numberOfLines={4}
               value={editContent}
               onChangeText={setEditContent}
+              accessibilityLabel="Koreksi konten memori"
             />
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={[styles.modalBtn, styles.cancelBtn]}
+                style={[
+                  styles.modalBtn,
+                  {
+                    backgroundColor: theme.colors.surfaceElevated,
+                    borderColor: theme.colors.surfaceBorder,
+                    borderWidth: 1,
+                  },
+                ]}
                 onPress={() => setEditingItem(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Batal koreksi"
               >
-                <Text style={styles.modalBtnText}>Batal</Text>
+                <Text
+                  style={[styles.modalBtnText, { color: theme.colors.textPrimary }]}
+                  allowFontScaling
+                >
+                  Batal
+                </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.saveBtn]}
+              <Pressable
+                android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+                style={[styles.modalBtn, { backgroundColor: theme.colors.primary }]}
                 onPress={() => void handleSaveEdit()}
+                accessibilityRole="button"
+                accessibilityLabel="Simpan koreksi"
               >
-                <Text style={[styles.modalBtnText, { color: '#fff' }]}>Simpan</Text>
-              </TouchableOpacity>
+                <Text style={[styles.modalBtnText, { color: '#fff' }]} allowFontScaling>
+                  Simpan
+                </Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -428,62 +711,145 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
       {/* Add Memory Modal */}
       <Modal visible={isAddModalOpen} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Tambah Memori Baru</Text>
-            <Text style={styles.modalSubtitle}>
+          <View
+            style={[
+              styles.modalCard,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
+            <Text
+              style={[styles.modalTitle, { color: theme.colors.textPrimary }]}
+              allowFontScaling
+            >
+              Tambah Memori Baru
+            </Text>
+            <Text
+              style={[styles.modalSubtitle, { color: theme.colors.textSecondary }]}
+              allowFontScaling
+            >
               Tulis fakta atau preferensi (dilarang memasukkan kredensial/rahasia):
             </Text>
 
             <View style={styles.typeSelectorRow}>
               {(['preference', 'decision', 'knowledge'] as const).map((t) => (
-                <TouchableOpacity
+                <Pressable
                   key={t}
-                  style={[styles.chip, newType === t && styles.chipActive]}
+                  android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                  style={[
+                    styles.chip,
+                    {
+                      backgroundColor:
+                        newType === t ? theme.colors.primary : theme.colors.surfaceElevated,
+                      borderColor:
+                        newType === t ? theme.colors.primary : theme.colors.surfaceBorder,
+                    },
+                  ]}
                   onPress={() => setNewType(t)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Tipe ${t}`}
                 >
-                  <Text style={[styles.chipText, newType === t && styles.chipTextActive]}>
+                  <Text
+                    style={[
+                      styles.chipText,
+                      {
+                        color: newType === t ? '#fff' : theme.colors.textSecondary,
+                        fontWeight: newType === t ? '700' : '600',
+                      },
+                    ]}
+                    allowFontScaling
+                  >
                     {t}
                   </Text>
-                </TouchableOpacity>
+                </Pressable>
               ))}
             </View>
 
             <View style={styles.typeSelectorRow}>
               {(['user', 'project'] as const).map((sc) => (
-                <TouchableOpacity
+                <Pressable
                   key={sc}
-                  style={[styles.chip, newScope === sc && styles.chipActive]}
+                  android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                  style={[
+                    styles.chip,
+                    {
+                      backgroundColor:
+                        newScope === sc ? theme.colors.primary : theme.colors.surfaceElevated,
+                      borderColor:
+                        newScope === sc ? theme.colors.primary : theme.colors.surfaceBorder,
+                    },
+                  ]}
                   onPress={() => setNewScope(sc)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Lingkup ${sc === 'user' ? 'Global' : 'Proyek'}`}
                 >
-                  <Text style={[styles.chipText, newScope === sc && styles.chipTextActive]}>
+                  <Text
+                    style={[
+                      styles.chipText,
+                      {
+                        color: newScope === sc ? '#fff' : theme.colors.textSecondary,
+                        fontWeight: newScope === sc ? '700' : '600',
+                      },
+                    ]}
+                    allowFontScaling
+                  >
                     {sc === 'user' ? 'Global' : 'Proyek'}
                   </Text>
-                </TouchableOpacity>
+                </Pressable>
               ))}
             </View>
 
             <TextInput
-              style={styles.modalInput}
+              style={[
+                styles.modalInput,
+                {
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderColor: theme.colors.surfaceBorder,
+                  color: theme.colors.textPrimary,
+                },
+              ]}
               placeholder="Contoh: Selalu gunakan format ringkas dan Bahasa Indonesia."
-              placeholderTextColor={theme.colors.textSecondary}
+              placeholderTextColor={theme.colors.textMuted}
               multiline
               numberOfLines={4}
               value={newContent}
               onChangeText={setNewContent}
+              accessibilityLabel="Konten memori baru"
             />
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={[styles.modalBtn, styles.cancelBtn]}
+                style={[
+                  styles.modalBtn,
+                  {
+                    backgroundColor: theme.colors.surfaceElevated,
+                    borderColor: theme.colors.surfaceBorder,
+                    borderWidth: 1,
+                  },
+                ]}
                 onPress={() => setIsAddModalOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Batal"
               >
-                <Text style={styles.modalBtnText}>Batal</Text>
+                <Text
+                  style={[styles.modalBtnText, { color: theme.colors.textPrimary }]}
+                  allowFontScaling
+                >
+                  Batal
+                </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.saveBtn]}
+              <Pressable
+                android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+                style={[styles.modalBtn, { backgroundColor: theme.colors.primary }]}
                 onPress={() => void handleCreate()}
+                accessibilityRole="button"
+                accessibilityLabel="Simpan memori"
               >
-                <Text style={[styles.modalBtnText, { color: '#fff' }]}>Simpan</Text>
-              </TouchableOpacity>
+                <Text style={[styles.modalBtnText, { color: '#fff' }]} allowFontScaling>
+                  Simpan
+                </Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -495,64 +861,32 @@ export const MemoryScreen: React.FC<MemoryScreenProps> = ({ onBack }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  backButton: {
-    padding: 6,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
-  },
-  subtitle: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
   },
   iconButton: {
-    padding: 8,
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   tabContainer: {
     flexDirection: 'row',
     marginHorizontal: 16,
     marginVertical: 8,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 8,
+    borderRadius: 10,
+    borderWidth: 1,
     padding: 3,
   },
   tabButton: {
     flex: 1,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
     gap: 6,
-    borderRadius: 6,
-  },
-  tabButtonActive: {
-    backgroundColor: theme.colors.background,
+    borderRadius: 8,
   },
   tabText: {
     fontSize: 13,
-    color: theme.colors.textSecondary,
-    fontWeight: '500',
-  },
-  tabTextActive: {
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
   },
   searchBox: {
     flexDirection: 'row',
@@ -560,16 +894,13 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: 8,
     paddingHorizontal: 12,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    height: 42,
+    minHeight: 48,
     gap: 8,
   },
   searchInput: {
     flex: 1,
-    color: theme.colors.textPrimary,
     fontSize: 14,
   },
   noticeBanner: {
@@ -577,13 +908,10 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     padding: 10,
     borderRadius: 8,
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
   },
   noticeText: {
     fontSize: 12,
-    color: '#f59e0b',
     lineHeight: 16,
   },
   filterRow: {
@@ -594,39 +922,30 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: theme.colors.surface,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-  },
-  chipActive: {
-    backgroundColor: theme.colors.primary,
-    borderColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   chipText: {
     fontSize: 12,
-    color: theme.colors.textSecondary,
-  },
-  chipTextActive: {
-    color: '#fff',
-    fontWeight: '600',
   },
   addMemoryButton: {
     marginLeft: 'auto',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    justifyContent: 'center',
   },
   addMemoryText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   listContent: {
     paddingHorizontal: 16,
@@ -637,11 +956,9 @@ const styles = StyleSheet.create({
     marginTop: 32,
   },
   card: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 14,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
     gap: 8,
   },
   cardHeader: {
@@ -668,37 +985,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 4,
-    backgroundColor: theme.colors.background,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
   },
   scopeBadgeText: {
-    color: theme.colors.textSecondary,
     fontSize: 11,
   },
   cardActions: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
   },
   cardActionBtn: {
-    padding: 4,
+    minWidth: 44,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   cardContent: {
     fontSize: 14,
-    color: theme.colors.textPrimary,
     lineHeight: 20,
   },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     borderTopWidth: 1,
-    borderTopColor: theme.colors.surfaceBorder,
     paddingTop: 8,
     marginTop: 4,
   },
   footerText: {
     fontSize: 11,
-    color: theme.colors.textSecondary,
   },
   proposalsContainer: {
     flex: 1,
@@ -710,25 +1024,16 @@ const styles = StyleSheet.create({
   },
   proposalBtn: {
     flex: 1,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    paddingVertical: 8,
-    borderRadius: 6,
-  },
-  approveBtn: {
-    backgroundColor: '#10b981',
-  },
-  rejectBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#ef4444',
+    borderRadius: 8,
   },
   proposalBtnText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#fff',
+    fontWeight: '700',
   },
   emptyContainer: {
     alignItems: 'center',
@@ -738,12 +1043,10 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
+    fontWeight: '700',
   },
   emptyText: {
     fontSize: 13,
-    color: theme.colors.textSecondary,
     textAlign: 'center',
     paddingHorizontal: 24,
   },
@@ -754,27 +1057,22 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalCard: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 18,
+    borderWidth: 1,
     gap: 12,
   },
   modalTitle: {
     fontSize: 17,
     fontWeight: '700',
-    color: theme.colors.textPrimary,
   },
   modalSubtitle: {
     fontSize: 13,
-    color: theme.colors.textSecondary,
   },
   modalInput: {
-    backgroundColor: theme.colors.background,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
     padding: 10,
-    color: theme.colors.textPrimary,
     fontSize: 14,
     textAlignVertical: 'top',
     minHeight: 90,
@@ -786,20 +1084,15 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   modalBtn: {
+    minHeight: 48,
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 6,
-  },
-  cancelBtn: {
-    backgroundColor: theme.colors.background,
-  },
-  saveBtn: {
-    backgroundColor: theme.colors.primary,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalBtnText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
+    fontWeight: '700',
   },
   typeSelectorRow: {
     flexDirection: 'row',
