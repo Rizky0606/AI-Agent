@@ -149,6 +149,9 @@ export const messages = pgTable(
     conversationId: uuid('conversation_id')
       .notNull()
       .references(() => conversations.id, { onDelete: 'cascade' }),
+    parentMessageId: uuid('parent_message_id'),
+    isActiveBranch: boolean('is_active_branch').default(true).notNull(),
+    branchIndex: integer('branch_index').default(0).notNull(),
     role: varchar('role', { length: 32 }).notNull(),
     content: text('content').notNull(),
     metadata: jsonb('metadata'),
@@ -157,6 +160,8 @@ export const messages = pgTable(
   (table) => [
     index('messages_scope_idx').on(table.userId, table.conversationId),
     index('messages_created_idx').on(table.conversationId, table.createdAt),
+    index('messages_parent_idx').on(table.conversationId, table.parentMessageId),
+    index('messages_active_idx').on(table.conversationId, table.isActiveBranch),
   ],
 );
 
@@ -696,4 +701,27 @@ export const compareResults = pgTable(
 
 export type CompareRunRow = typeof compareRuns.$inferSelect;
 export type CompareResultRow = typeof compareResults.$inferSelect;
+
+export const promptTemplates = pgTable(
+  'prompt_templates',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 100 }).notNull(),
+    title: varchar('title', { length: 200 }).notNull(),
+    content: text('content').notNull(),
+    variables: jsonb('variables').$type<string[]>().default([]).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('prompt_templates_user_idx').on(table.userId),
+    uniqueIndex('prompt_templates_user_name_uq').on(table.userId, table.name),
+  ],
+);
+
+export type PromptTemplateRow = typeof promptTemplates.$inferSelect;
+export type NewPromptTemplateRow = typeof promptTemplates.$inferInsert;
 
