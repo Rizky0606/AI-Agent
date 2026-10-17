@@ -30,12 +30,19 @@ capabilities:
     limitation: the health file is refreshed only after a `select 1` on Postgres and a Redis `PING` both succeed (`refreshHealthFile`), so a disconnected worker goes stale and the container is reported unhealthy instead of healthy
   scheduler:
     status: implemented
-    code: apps/scheduler/src/index.ts; apps/scheduler/src/scheduler-engine.ts; apps/api/src/services/task-notifications.ts; apps/api/src/db/notification-repository.ts
+    code: apps/scheduler/src/index.ts; apps/scheduler/src/scheduler-engine.ts; apps/api/src/services/task-notifications.ts; apps/api/src/db/notification-repository.ts; apps/api/src/routes/schedules.ts; apps/windows/src/ui/activity/ActivityPanel.tsx; docs/adr/0029-tugas-terjadwal-dan-usulan-skill.md
     permission_boundary: PermissionEngine; schedule ownership
-    clients: android notifications
-    proof: apps/scheduler/test/scheduler.test.ts; apps/scheduler/test/notifications.test.ts; apps/scheduler/test/fcm-provider.test.ts; apps/api/test/task-notifications.test.ts
+    clients: android notifications; windows activity panel & schedule manager
+    proof: apps/scheduler/test/scheduler.test.ts; apps/scheduler/test/notifications.test.ts; apps/scheduler/test/fcm-provider.test.ts; apps/api/test/task-notifications.test.ts; apps/api/test/schedules-and-skill-proposals.test.ts; apps/windows/test/schedules-and-skill-proposals.test.ts
     limitation: |
-      The API registers schedules in `schedules` only; `tick()` runs solely in the `scheduler` container, which inserts the `tasks` row and enqueues BullMQ (the duplicate API dispatcher that enqueued without inserting was deleted 2026-10-14). Notification delivery is now durable and observed live: task completion, task failure, and a `task.waiting_approval` event on `personal-ai-os:events:all` each produced a `notifications` row with `delivery_state` and `deep_link`, and both rows and preferences survived an API restart. `NotificationEngine` uses `SqlNotificationRepository` and `createFcmProviderFromEnv()`. FCM uses a real OAuth2 access token from the service account (`ServiceAccountTokenSource`, RS256 JWT exchanged at `token_uri`); the hardcoded `dummy-env-token` is gone. Push tokens live in `devices.push_token` (migration `0009_device_push_token.sql`, partial unique index) and are registered per install through `POST /v1/devices/:deviceId/push-token`. Remaining: `FCM_SERVICE_ACCOUNT_JSON` is not provisioned, so the active provider is `DisabledFcmProvider` and no real Google send has been observed; a push that exhausts `maxAttempts` ends `failed` with no dead-letter queue; incoming events carry no signature verification and `registerRule` is never called in production.
+      The API registers schedules in `schedules` only; `tick()` runs solely in the `scheduler` container, which inserts the `tasks` row and enqueues BullMQ (the duplicate API dispatcher that enqueued without inserting was deleted 2026-10-14). Notification delivery is now durable and observed live: task completion, task failure, and a `task.waiting_approval` event on `personal-ai-os:events:all` each produced a `notifications` row with `delivery_state` and `deep_link`, and both rows and preferences survived an API restart. `NotificationEngine` uses `SqlNotificationRepository` and `createFcmProviderFromEnv()`. FCM uses a real OAuth2 access token from the service account (`ServiceAccountTokenSource`, RS256 JWT exchanged at `token_uri`); the hardcoded `dummy-env-token` is gone. Push tokens live in `devices.push_token` (migration `0009_device_push_token.sql`, partial unique index) and are registered per install through `POST /v1/devices/:deviceId/push-token`.
+      Sesi 28 Enhancements (ADR 0029, 2026-10-18):
+      - Windows UI Schedule Manager in `ActivityPanel.tsx` (subtab Jadwal): create schedule (preset once/one_off, daily 08:00 WIB, weekly Monday 08:00 WIB, or custom 5-field cron).
+      - Default timezone: Asia/Jakarta.
+      - Resource bounds: minimum recurring interval 15 minutes (`MIN_RECURRING_INTERVAL_MINUTES = 15`), maximum 10 active schedules per user quota (`MAX_ACTIVE_SCHEDULES_PER_USER = 10`).
+      - Task briefs: execution result summarized into `brief` stored in `tasks.payload.brief` and `schedules.lastBrief`, sent as notification with deep link `personal-ai://tasks/:id`, and rendered directly in Windows Activity Panel & TaskCard.
+      - Permission Engine: scheduled tasks execute through PermissionEngine; actions requiring HIGH/CRITICAL permissions halt at `waiting_approval` without failing or canceling brief generation (the brief explicitly notes the pending approval).
+      - Remaining: `FCM_SERVICE_ACCOUNT_JSON` is not provisioned, so the active push provider is `DisabledFcmProvider` and no real Google send has been observed; a push that exhausts `maxAttempts` ends `failed` with no dead-letter queue; incoming events carry no signature verification and `registerRule` is never called in production.
   universal_agent_execution:
     status: implemented
     code: apps/agent-worker/src/task-executor.ts; packages/agent-core/src/generic/generic-agent.ts; packages/agent-core/src/router/agent-router.ts
@@ -195,13 +202,12 @@ capabilities:
       - Remaining gaps: Marked as Partial because interactive visual rendering on Windows/Android physical displays requires manual verification on real hardware ("Belum diverifikasi di perangkat fisik"), and daemon HTTP prompt execution on Hermes VPS port 9119 remains unauthenticated (TIDAK TERVERIFIKASI).
   skills_and_mcp_manager:
     status: implemented
-    code: packages/agent-core/src/skills; packages/mcp; apps/api/src/routes/skills.ts; apps/api/src/routes/mcp.ts; apps/api/src/db/skill-repository.ts; apps/api/src/db/mcp-repository.ts; apps/windows/src/ui/skills; apps/android/src/screens/SettingsScreen.tsx; docs/adr/0015-skill-dan-mcp-manager.md; docs/skills/writing-skills.md
-    permission_boundary: ManifestValidator; PermissionEngine; MCP_COMMAND_ALLOWLIST validation; SSRF loopback/cloud-metadata blocking; admin/owner authorization check; audit_logs recording
-    clients: windows (full Skill & MCP Manager with plain risk explanations, manifest viewer, project overrides, admin add server dialog, call logs); android (view & toggle skills per project, manifest viewer, MCP server & tool inspection, plain risk guide)
-    proof: packages/agent-core/test/skills.test.ts; packages/mcp/test/remote-mcp-and-security.test.ts; apps/api/test/skills.test.ts; apps/api/test/mcp-routes.test.ts; apps/api/test/mcp-admin-security.test.ts; apps/api/test/schema-parity.test.ts; pnpm --filter @personal-ai-os/windows test; pnpm --filter @personal-ai-os/android test
+    code: packages/agent-core/src/skills; packages/mcp; apps/api/src/routes/skills.ts; apps/api/src/routes/skill-proposals.ts; apps/api/src/routes/mcp.ts; apps/api/src/db/skill-repository.ts; apps/api/src/db/skill-proposal-repository.ts; apps/api/src/db/mcp-repository.ts; apps/api/src/services/sensitive-data-filter.ts; apps/windows/src/ui/skills; apps/android/src/screens/SettingsScreen.tsx; docs/adr/0015-skill-dan-mcp-manager.md; docs/adr/0029-tugas-terjadwal-dan-usulan-skill.md; docs/skills/writing-skills.md
+    permission_boundary: ManifestValidator; PermissionEngine; MCP_COMMAND_ALLOWLIST validation; SSRF loopback/cloud-metadata blocking; admin/owner authorization check; sensitive data filter; audit_logs recording
+    clients: windows (full Skill & MCP Manager with plain risk explanations, manifest viewer, project overrides, admin add server dialog, call logs, skill proposals queue & unified diff review); android (view & toggle skills per project, manifest viewer, MCP server & tool inspection, plain risk guide)
+    proof: packages/agent-core/test/skills.test.ts; packages/mcp/test/remote-mcp-and-security.test.ts; apps/api/test/skills.test.ts; apps/api/test/mcp-routes.test.ts; apps/api/test/mcp-admin-security.test.ts; apps/api/test/schema-parity.test.ts; apps/api/test/schedules-and-skill-proposals.test.ts; apps/windows/test/schedules-and-skill-proposals.test.ts; pnpm --filter @personal-ai-os/windows test; pnpm --filter @personal-ai-os/android test
     limitation: |
       Sesi 19 Security Fix: `assertAdmin` and `getUser` in `apps/api/src/routes/mcp.ts` strictly fail closed when unauthenticated in `NODE_ENV=production`. If authentication is disabled or missing in production, registering MCP routes throws a fatal error and admin operations are rejected with HTTP 403 Forbidden. Verified by `apps/api/test/mcp-admin-security.test.ts`.
-    limitation: |
       Skill and MCP Manager implemented in Sesi 14 (ADR 0015, 2026-10-16):
       - 3 High-Value Skills with manifests, tests, and documentation:
         1. `plan-before-act`: Enforces structured step plan and concrete acceptance criteria before executing actions.
@@ -218,6 +224,13 @@ capabilities:
       - Audit Logging & Plain Indonesian Risk Guidance:
         - All skill executions, MCP server changes, and tool calls recorded in `audit_logs` and `mcp_call_logs`.
         - Windows and Android clients explain risk levels in plain Indonesian before enabling tools.
+      Sesi 28 Enhancements (ADR 0029, 2026-10-18):
+      - Skill Proposals Queue (`skill_proposals` table): automated extraction of successful patterns from completed evaluator-passed tasks.
+      - Inactive by default: approved proposed skills strictly start in `isEnabled: false` state and require manual user activation. Never activate automatically.
+      - Sensitive data filtering: `sensitive-data-filter.ts` sanitizes Bearer tokens, OpenAI/9Router sk-* keys, and credential strings before proposal persistence.
+      - Manifest validation: proposals validated against ManifestValidator schemas and minimal permission policy.
+      - Unified diff review: improvements to existing skills produce unified diffs reviewable in Windows UI before approval.
+      - Full audit trail: `skill.proposed`, `skill_proposal.approved`, `skill_proposal.rejected` recorded in `audit_logs`.
       - Remaining gaps: Visual rendering on live Android device and physical Windows system tray interaction require manual verification.
   deep_research_backend:
     status: implemented
