@@ -19,6 +19,7 @@ import {
   type User,
   type UserPreferences,
   type RuntimeDescriptor,
+  type PromptTemplate,
 } from './types.ts';
 import type {
   CompareRunDetail,
@@ -342,6 +343,76 @@ export class ApiClient {
 
   async listMessages(conversationId: string): Promise<{ messages: ChatMessage[] }> {
     return this.request<{ messages: ChatMessage[] }>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`);
+  }
+
+  // --- Session Tree & Templates (Sesi 27) ---
+  async switchMessageBranch(
+    conversationId: string,
+    messageId: string,
+  ): Promise<{ messages: ChatMessage[] }> {
+    return this.request<{ messages: ChatMessage[] }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/switch`,
+      { method: 'POST' },
+    );
+  }
+
+  async deleteMessageBranch(
+    conversationId: string,
+    messageId: string,
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async exportConversation(
+    conversationId: string,
+    format: 'markdown' | 'html',
+  ): Promise<{ format: string; filename: string; content: string }> {
+    return this.request<{ format: string; filename: string; content: string }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/export?format=${encodeURIComponent(format)}`,
+    );
+  }
+
+  async compactConversation(
+    conversationId: string,
+  ): Promise<{
+    compacted: boolean;
+    reason?: string;
+    compactedSummary?: string;
+    compactedMessageCount?: number;
+  }> {
+    return this.request<{
+      compacted: boolean;
+      reason?: string;
+      compactedSummary?: string;
+      compactedMessageCount?: number;
+    }>(`/v1/conversations/${encodeURIComponent(conversationId)}/compact`, {
+      method: 'POST',
+    });
+  }
+
+  async listPromptTemplates(): Promise<{ templates: PromptTemplate[] }> {
+    return this.request<{ templates: PromptTemplate[] }>('/v1/prompt-templates');
+  }
+
+  async createPromptTemplate(payload: {
+    name: string;
+    title?: string;
+    content: string;
+    description?: string;
+  }): Promise<{ template: PromptTemplate }> {
+    return this.request<{ template: PromptTemplate }>('/v1/prompt-templates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePromptTemplate(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/prompt-templates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
   }
 
   async refreshModels(): Promise<ModelCatalogResponse> {

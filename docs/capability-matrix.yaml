@@ -268,6 +268,37 @@ capabilities:
       - Persistence & Promotion: `compare_runs` and `compare_results` tables with migration `0016_compare_runs.sql`. Winning or selected answer can be promoted to a new or existing chat conversation.
       - Cross-platform UI: Windows side-by-side columns (`CompareView.tsx`); Android segmented tabs / horizontal view (`CompareScreen.tsx`).
       - Remaining gaps: Visual rendering on live physical Android device and live physical Windows desktop require manual verification. Real 9Router calls with live model keys require explicit user permission.
+  session_features_native:
+    status: implemented
+    code: apps/api/src/routes/chat.ts; apps/api/src/routes/prompt-templates.ts; apps/api/src/services/conversation-exporter.ts; apps/api/src/db/chat-repository.ts; apps/api/src/db/prompt-template-repository.ts; packages/memory/src/context/context-manager.ts; apps/windows/src/ui/chat; apps/android/src/api
+    permission_boundary: authenticated API routes; strict conversation & template user ownership; zero external sharing; standalone sanitized exports
+    clients: windows (tree branch navigator `< 1/2 >`, Markdown/HTML export, prompt template slash autocomplete, busy queue banner & buttons, context compaction accordion banner, model cycle shortcut Ctrl+M); android (tree & template API client & typed schemas)
+    proof: apps/api/test/session-tree-and-templates.test.ts; packages/memory/test/context-manager.test.ts; apps/windows/test/layout-and-components.test.ts; apps/android/test/client.test.ts
+    limitation: |
+      Native Pi-Style Session Features implemented in Sesi 27 (ADR 0028, 2026-10-17):
+      - Message Tree Branching:
+        - Messages store `parentMessageId`, `isActiveBranch`, and compute sibling index/count (`< 1/2 >`).
+        - Editing user messages or retrying assistant answers spawns a new branch instead of overwriting history.
+        - `switchBranch` and `deleteBranch` endpoints support clean linear and sub-branch navigation.
+        - Backfill migration (`0017_session_tree_and_templates.sql`) safely links existing linear messages without data loss.
+      - Sanitized Conversation Export:
+        - Standalone HTML (zero external CSS/JS/fonts, inline strict dark styling, full HTML entity escaping, meta CSP) and GitHub-flavored Markdown.
+        - Redaction engine strips auth tokens, bearer headers, 9Router credentials, and sensitive API keys.
+        - Third-party cloud sharing services deliberately not implemented to protect data privacy.
+      - Server-Side Prompt Templates:
+        - `prompt_templates` table supporting `name`, `title`, and `content` with simple variable substitution `{{var}}`.
+        - Triggered natively via `/name` slash command autocomplete popover in Windows chat composer.
+      - Agent Busy Message Queueing:
+        - Submitting a message while agent is busy or streaming changes action to 'Antre' (Queue Message).
+        - Queued messages are batched in order and sent sequentially as soon as the active stream finishes.
+        - 'Arahkan/Steer' mid-run intervention button DELIBERATELY OMITTED until runtime capabilities are probed in Sesi 29.
+      - Context Compaction:
+        - Automatic compaction triggered when estimated tokens approach model context limits (configurable threshold, default 80%).
+        - Retains 100% of system prompt instructions, core behavioral rules, and pinned memory items.
+        - Original messages remain preserved in database; client displays collapsible 'Konteks diringkas' banner with 'Lihat isi ringkasan'.
+      - Windows Favorite Model Cycle Shortcut:
+        - `Ctrl+M` / `Alt+M` shortcut cycles instantly through user's favorite models (defined in Sesi 6).
+      - Remaining gaps: Visual rendering on live physical Android device and live physical Windows desktop require manual verification.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

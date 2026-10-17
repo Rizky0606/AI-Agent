@@ -58,6 +58,7 @@ export interface Conversation {
   title: string | null;
   createdAt: string;
   updatedAt: string;
+  compactedSummary?: string | null | undefined;
 }
 
 export interface MessageAttachment {
@@ -75,6 +76,24 @@ export interface ChatMessage {
   attachments?: MessageAttachment[] | undefined;
   metadata?: Record<string, unknown> | undefined;
   createdAt: string;
+  cancelled?: boolean | undefined;
+  parentMessageId?: string | null | undefined;
+  isActiveBranch?: boolean | undefined;
+  branchIndex?: number | undefined;
+  branchCount?: number | undefined;
+  siblingMessageIds?: string[] | undefined;
+}
+
+export interface PromptTemplate {
+  id: string;
+  userId: string;
+  name: string;
+  title?: string | null | undefined;
+  content: string;
+  description?: string | null | undefined;
+  variables: string[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
