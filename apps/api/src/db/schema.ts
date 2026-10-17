@@ -6,6 +6,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -531,3 +532,104 @@ export type NotificationRow = typeof notifications.$inferSelect;
 export type NotificationPreferencesRow = typeof notificationPreferences.$inferSelect;
 export type ModelConfigRow = typeof modelConfigs.$inferSelect;
 export type ModelRoutingPolicyRow = typeof modelRoutingPolicies.$inferSelect;
+
+export const researchRuns = pgTable(
+  'research_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    query: text('query').notNull(),
+    scope: text('scope').default('general').notNull(),
+    language: varchar('language', { length: 16 }).default('id').notNull(),
+    depth: varchar('depth', { length: 32 }).default('standard').notNull(),
+    status: varchar('status', { length: 32 }).default('queued').notNull(),
+    budgetConfig: jsonb('budget_config').notNull(),
+    budgetUsed: jsonb('budget_used').default({}).notNull(),
+    plan: jsonb('plan'),
+    checkpoint: jsonb('checkpoint'),
+    error: text('error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('research_runs_user_idx').on(table.userId),
+    index('research_runs_project_idx').on(table.projectId),
+    index('research_runs_status_idx').on(table.status),
+    index('research_runs_created_idx').on(table.createdAt),
+  ],
+);
+
+export const researchSources = pgTable(
+  'research_sources',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => researchRuns.id, { onDelete: 'cascade' }),
+    sourceId: varchar('source_id', { length: 32 }).notNull(),
+    url: text('url').notNull(),
+    title: text('title').notNull(),
+    domain: varchar('domain', { length: 255 }).notNull(),
+    credibilityScore: real('credibility_score').default(0.5).notNull(),
+    fetchStatus: varchar('fetch_status', { length: 32 }).default('pending').notNull(),
+    contentHash: varchar('content_hash', { length: 64 }),
+    snippet: text('snippet'),
+    ...created,
+  },
+  (table) => [
+    index('research_sources_run_idx').on(table.runId),
+    uniqueIndex('research_sources_run_source_uq').on(table.runId, table.sourceId),
+  ],
+);
+
+export const researchEvidence = pgTable(
+  'research_evidence',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => researchRuns.id, { onDelete: 'cascade' }),
+    sourceId: varchar('source_id', { length: 32 }).notNull(),
+    statement: text('statement').notNull(),
+    claimType: varchar('claim_type', { length: 32 }).default('sourced_fact').notNull(),
+    quote: text('quote'),
+    confidence: real('confidence').default(0.8).notNull(),
+    verified: boolean('verified').default(false).notNull(),
+    ...created,
+  },
+  (table) => [
+    index('research_evidence_run_idx').on(table.runId),
+    index('research_evidence_source_idx').on(table.runId, table.sourceId),
+  ],
+);
+
+export const researchReports = pgTable(
+  'research_reports',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => researchRuns.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    contentMarkdown: text('content_markdown').notNull(),
+    confidenceBySection: jsonb('confidence_by_section').default({}).notNull(),
+    gaps: jsonb('gaps').default([]).notNull(),
+    limitations: jsonb('limitations').default([]).notNull(),
+    summary: text('summary').notNull(),
+    ...created,
+  },
+  (table) => [
+    uniqueIndex('research_reports_run_uq').on(table.runId),
+  ],
+);
+
+export type ResearchRunRow = typeof researchRuns.$inferSelect;
+export type ResearchSourceRow = typeof researchSources.$inferSelect;
+export type ResearchEvidenceRow = typeof researchEvidence.$inferSelect;
+export type ResearchReportRow = typeof researchReports.$inferSelect;
+

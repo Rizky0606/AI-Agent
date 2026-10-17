@@ -219,6 +219,25 @@ capabilities:
         - All skill executions, MCP server changes, and tool calls recorded in `audit_logs` and `mcp_call_logs`.
         - Windows and Android clients explain risk levels in plain Indonesian before enabling tools.
       - Remaining gaps: Visual rendering on live Android device and physical Windows system tray interaction require manual verification.
+  deep_research_backend:
+    status: implemented
+    code: packages/agent-core/src/deep-research; packages/evaluator/src/research-evaluator.ts; apps/api/src/routes/research.ts; apps/api/src/db/research-repository.ts
+    permission_boundary: PermissionEngine; SsrfGuard; rate limiting (max 3 concurrent fetches); untrusted content sanitizer (<untrusted_content is_instruction="false">); plan approval gating
+    clients: backend API; android & windows (API consumers via /v1/research)
+    proof: packages/agent-core/test/deep-research.test.ts; packages/evaluator/test/evaluator.test.ts; apps/api/test/research-routes.test.ts; scripts/test-deep-research-live.ts
+    limitation: |
+      Deep Research Backend implemented in Sesi 24 (ADR 0025, 2026-10-17):
+      - 8-stage bounded pipeline: Brief -> Plan -> Collect -> Read -> Extract -> Synthesize -> Verify -> Output.
+      - Hard budgets per depth (quick, standard, deep) enforcing maxSearches, maxPagesRead, maxModelTokens, and maxDurationMs in code.
+      - Validated Planning: Structured sub-question planning via ModelGateway JSON schema with bounded retries and fallback; deep depth pauses at 'waiting_plan_approval' until explicitly approved/modified via POST /v1/research/:id/approve-plan.
+      - Collection: Web search using existing DuckDuckGo / web_search; per-domain limit of max 2 pages; deduplication by normalized URL.
+      - Reading: Lightweight HTML-to-text extraction via htmlToText; sha256 content hash and snippet metadata; model receives NO tools during reading; content wrapped in <untrusted_content is_instruction="false"> tags.
+      - Evidence Extraction: Atomic claims with statement, sourceId, short quote (<= 200 chars for copyright safety), claimType (sourced_fact, inference), and confidence score.
+      - Synthesis: Structured Markdown report with numbered citations ([src-X]), confidence scores per section, and missing information section ('Yang Tidak Ditemukan').
+      - Extended ResearchEvaluator: Single evaluator reused; added verbatim limit check (<= 200 chars), claim support verification, and information gaps criteria.
+      - Concurrency & Resources: Max 3 concurrent fetches via ConcurrencyLimiter; 1 active run at a time per user to honor 2 OCPU / 12 GB ARM64 VPS constraints.
+      - Clean-room AGPL compliance: Zero code from Odysseus (AGPL-3.0-or-later); built purely on existing repo abstractions and MIT/Apache dependencies.
+      - Remaining gaps: UI screens (chat deep research mode, report viewer, plan editor) deferred to frontend sessions (Sesi 25).
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

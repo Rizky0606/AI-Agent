@@ -395,3 +395,104 @@ test('ResearchEvaluator: rejects when claims lack support in re-fetched content 
   assert.match(relevanceCrit?.reason ?? '', /tidak memiliki relevansi memadai/);
 });
 
+test('ResearchEvaluator: rejects when verbatim quotes exceed 200 characters limit (copyright protection)', () => {
+  const evaluator = new ResearchEvaluator();
+
+  const longQuote = 'A'.repeat(250);
+  const result = evaluator.evaluate({
+    sources: [
+      {
+        id: 'src-1',
+        url: 'https://nodejs.org',
+        title: 'Node.js',
+        domain: 'nodejs.org',
+        snippet: 'Node.js runtime documentation and features.',
+        credibilityScore: 0.9,
+      },
+      {
+        id: 'src-2',
+        url: 'https://developer.mozilla.org',
+        title: 'MDN',
+        domain: 'developer.mozilla.org',
+        snippet: 'JavaScript reference and web standards.',
+        credibilityScore: 0.95,
+      },
+    ],
+    claims: [
+      {
+        id: 'c-1',
+        statement: 'Node.js runtime documentation',
+        type: 'sourced_fact',
+        sourceIds: ['src-1', 'src-2'],
+      },
+    ],
+    quotes: [
+      {
+        statement: 'Node.js runtime documentation',
+        quote: longQuote,
+        sourceId: 'src-1',
+      },
+    ],
+    contradictions: [],
+    totalTopicsCount: 1,
+    topicsCoveredCount: 1,
+  });
+
+  assert.equal(result.passed, false);
+  const verbatimCrit = result.evaluatedCriteria.find((c) => c.criterionId === 'verbatim_limit');
+  assert.equal(verbatimCrit?.passed, false);
+  assert.match(verbatimCrit?.reason ?? '', /melebihi batas 200 karakter/);
+});
+
+test('ResearchEvaluator: passes with verbatim quotes within limit and documents information gaps', () => {
+  const evaluator = new ResearchEvaluator();
+
+  const shortQuote = 'Node.js is an open-source, cross-platform JavaScript runtime environment.';
+  const result = evaluator.evaluate({
+    sources: [
+      {
+        id: 'src-1',
+        url: 'https://nodejs.org',
+        title: 'Node.js',
+        domain: 'nodejs.org',
+        snippet: 'Node.js is an open-source, cross-platform JavaScript runtime environment.',
+        credibilityScore: 0.9,
+      },
+      {
+        id: 'src-2',
+        url: 'https://developer.mozilla.org',
+        title: 'MDN',
+        domain: 'developer.mozilla.org',
+        snippet: 'JavaScript standards and APIs.',
+        credibilityScore: 0.95,
+      },
+    ],
+    claims: [
+      {
+        id: 'c-1',
+        statement: 'Node.js is an open-source, cross-platform JavaScript runtime environment.',
+        type: 'sourced_fact',
+        sourceIds: ['src-1', 'src-2'],
+      },
+    ],
+    quotes: [
+      {
+        statement: 'Node.js is an open-source JavaScript runtime environment.',
+        quote: shortQuote,
+        sourceId: 'src-1',
+      },
+    ],
+    informationGaps: ['Detail internal V8 heap allocator belum tuntas dibahas.'],
+    contradictions: [],
+    totalTopicsCount: 1,
+    topicsCoveredCount: 1,
+  });
+
+  assert.equal(result.passed, true);
+  const verbatimCrit = result.evaluatedCriteria.find((c) => c.criterionId === 'verbatim_limit');
+  assert.equal(verbatimCrit?.passed, true);
+  const gapCrit = result.evaluatedCriteria.find((c) => c.criterionId === 'information_gaps');
+  assert.equal(gapCrit?.passed, true);
+});
+
+

@@ -67,7 +67,17 @@ export type TaskEventType =
   | 'task.cancelled'
   | 'task.paused'
   | 'task.resumed'
-  | 'runtime.step';
+  | 'runtime.step'
+  | 'research.started'
+  | 'research.plan'
+  | 'research.search'
+  | 'research.source'
+  | 'research.page_read'
+  | 'research.evidence'
+  | 'research.draft'
+  | 'research.verify'
+  | 'research.done'
+  | 'research.error';
 
 export interface TaskEventEnvelope {
   id: string;

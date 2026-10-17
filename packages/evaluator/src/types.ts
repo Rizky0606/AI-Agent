@@ -77,6 +77,9 @@ export interface ResearchEvidence {
   totalTopicsCount?: number | undefined;
   hasFabricatedCitations?: boolean | undefined;
   selfClaimOnly?: boolean | undefined;
+  quotes?: readonly { statement: string; quote: string; sourceId: string }[] | undefined;
+  informationGaps?: readonly string[] | undefined;
+  confidenceBySection?: Record<string, number> | undefined;
 }
 
 export interface EvaluatedCriterion {

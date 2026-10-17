@@ -19,3 +19,7 @@ export * from './skills/index.ts';
 // Runtimes
 export * from './runtimes/index.ts';
 
+// Deep Research
+export * from './deep-research/index.ts';
+
+

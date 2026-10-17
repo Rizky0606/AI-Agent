@@ -54,6 +54,20 @@ export const DEFAULT_RESEARCH_CRITERIA: readonly AcceptanceCriterion[] = [
     category: 'research',
     required: true,
   },
+  {
+    id: 'verbatim_limit',
+    description:
+      'Kutipan verbatim dibatasi pendek (maksimal 200 karakter) guna mencegah penyalinan berlebih konten berhak cipta',
+    category: 'research',
+    required: true,
+  },
+  {
+    id: 'information_gaps',
+    description:
+      'Bagian informasi yang tidak ditemukan atau belum tuntas teridentifikasi secara transparan',
+    category: 'research',
+    required: true,
+  },
 ];
 
 function extractKeywords(text: string): string[] {
@@ -405,6 +419,34 @@ export class ResearchEvaluator {
             reason = `Kelengkapan tidak memadai (coverage: ${Math.round(coverage * 100)}% atau klasifikasi klaim tidak lengkap).`;
             if (criterion.required) remainingIssues.push(`Completeness: ${reason}`);
           }
+          break;
+        }
+
+        case 'verbatim_limit': {
+          const quotes = evidence.quotes ?? [];
+          const oversized = quotes.filter((q) => q.quote && q.quote.trim().length > 200);
+          if (oversized.length === 0) {
+            passed = true;
+            evidenceSummary =
+              quotes.length > 0
+                ? `${quotes.length} verbatim quote(s) adhere to length bound (<= 200 chars).`
+                : 'No oversized verbatim quotes detected.';
+            reason = 'Batas kutipan verbatim ditaati (tidak melebihi 200 karakter).';
+          } else {
+            reason = `Terdapat ${oversized.length} kutipan verbatim yang melebihi batas 200 karakter (terpanjang: ${Math.max(...oversized.map((o) => o.quote.length))} karakter).`;
+            if (criterion.required) remainingIssues.push(`Verbatim limit: ${reason}`);
+          }
+          break;
+        }
+
+        case 'information_gaps': {
+          const gaps = evidence.informationGaps ?? [];
+          passed = true;
+          evidenceSummary =
+            gaps.length > 0
+              ? `${gaps.length} information gap(s) identified and documented.`
+              : 'Seluruh pertanyaan tuntas diteliti tanpa celah informasi tercatat.';
+          reason = 'Pencatatan celah informasi / hal yang tidak ditemukan transparan.';
           break;
         }
 
