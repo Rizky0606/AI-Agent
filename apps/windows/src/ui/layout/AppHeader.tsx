@@ -22,7 +22,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onToggleActivity,
   pendingApprovalsCount,
 }) => {
-  const { connectionStatus } = useAgentStore();
+  const { connectionStatus, conversations, activeConversationId } = useAgentStore();
+  const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
   return (
     <header className="app-header" aria-label="Navigasi Utama">
@@ -82,6 +83,21 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         </nav>
       </div>
 
+      {/* Center Breadcrumb */}
+      <div className="header-center-breadcrumb" aria-label="Konteks Percakapan">
+        <span className="header-breadcrumb-title">
+          {activeView === 'chat'
+            ? activeConversation?.title || idID.chat.defaultTitle
+            : activeView === 'project'
+              ? idID.nav.project
+              : activeView === 'memory'
+                ? idID.nav.memory
+                : activeView === 'skills'
+                  ? idID.nav.skills
+                  : idID.nav.settings}
+        </span>
+      </div>
+
       <div className="header-right-actions">
         {/* Compact connection status */}
         <div className="status-badge-compact" title={`${idID.sidebar.connection} ${idID.status[connectionStatus as StatusDotKind] ?? connectionStatus}`}>
@@ -94,32 +110,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
         {/* Activity drawer toggle with pending approval badge */}
         <button
-          className="ui-icon-btn ui-icon-btn-ghost ui-icon-btn-md"
+          className="ui-icon-btn ui-icon-btn-ghost ui-icon-btn-md header-activity-btn"
           onClick={onToggleActivity}
-          style={{ position: 'relative' }}
           title={idID.nav.toggleActivity}
           aria-label={idID.nav.toggleActivity}
         >
           <Bell size={18} />
           {pendingApprovalsCount > 0 && (
-            <span
-              style={{
-                position: 'absolute',
-                top: 2,
-                right: 2,
-                backgroundColor: 'var(--accent-rose)',
-                color: '#ffffff',
-                fontSize: 10,
-                fontWeight: 700,
-                width: 16,
-                height: 16,
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 0 0 2px var(--bg-card)',
-              }}
-            >
+            <span className="header-badge-count-pill" aria-label={`${pendingApprovalsCount} persetujuan menunggu`}>
               {pendingApprovalsCount}
             </span>
           )}
