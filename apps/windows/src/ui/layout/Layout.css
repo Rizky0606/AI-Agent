@@ -1797,6 +1797,90 @@
   gap: 8px;
 }
 
+.settings-root-path-code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-root-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.model-catalog-alert {
+  margin-bottom: var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.model-settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-settings-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-settings-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+  margin-top: 4px;
+}
+
+.settings-health-card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-health-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-health-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.settings-health-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.settings-health-sub {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settings-log-stream {
   background-color: var(--bg-canvas);
   border: 1px solid var(--border-color);
