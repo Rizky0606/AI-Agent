@@ -119,3 +119,71 @@ test('ToolStep: Aggregates real task events into structured ToolStepData with ru
   assert.equal(steps[1]?.runtime, 'hermes');
   assert.ok(steps[1]?.diff?.includes('+ export const status'));
 });
+
+test('ToolStep: Plan mode rendering and sub-agent task aggregation in Windows UI', () => {
+  assert.equal(idID.chat.toolStep.planTitle, 'Rencana Eksekusi (Plan Mode)');
+  assert.equal(idID.chat.toolStep.planSteps, 'Langkah-langkah Terencana:');
+  assert.equal(idID.chat.toolStep.subagentBadge, 'Sub-agent');
+  assert.equal(idID.chat.toolStep.oneShotNote, 'Proses batch one-shot: pengarahan langsung mid-turn tidak didukung.');
+
+  const planAndSubagentEvents = [
+    {
+      id: 'ev-sub',
+      taskId: 'task-advanced-1',
+      eventType: 'runtime.step' as const,
+      createdAt: '2026-10-18T00:10:00.000Z',
+      payload: {
+        runtimeStep: {
+          id: 'step-sub',
+          taskId: 'task-advanced-1',
+          runtime: 'omp',
+          urutan: 1,
+          waktu: '2026-10-18T00:10:00.000Z',
+          type: 'subagent' as const,
+          toolName: 'task',
+          isSubagent: true,
+          subagentTask: 'Analisis dependensi package.json',
+          status: 'running' as const,
+        },
+      },
+    },
+    {
+      id: 'ev-plan',
+      taskId: 'task-advanced-1',
+      eventType: 'runtime.step' as const,
+      createdAt: '2026-10-18T00:10:02.000Z',
+      payload: {
+        runtimeStep: {
+          id: 'step-plan',
+          taskId: 'task-advanced-1',
+          runtime: 'omp',
+          urutan: 2,
+          waktu: '2026-10-18T00:10:02.000Z',
+          type: 'plan' as const,
+          toolName: 'todo',
+          isPlan: true,
+          planItems: [
+            '1. Periksa compiler options',
+            '2. Terapkan AST transform',
+            '3. Jalankan unit test',
+          ],
+          status: 'completed' as const,
+        },
+      },
+    },
+  ];
+
+  const steps = aggregateRuntimeSteps(planAndSubagentEvents);
+  assert.equal(steps.length, 2);
+
+  // Step 1: Sub-agent
+  assert.equal(steps[0]?.isSubagent, true);
+  assert.equal(steps[0]?.subagentTask, 'Analisis dependensi package.json');
+  assert.equal(steps[0]?.status, 'running');
+
+  // Step 2: Plan
+  assert.equal(steps[1]?.isPlan, true);
+  assert.equal(steps[1]?.planItems?.length, 3);
+  assert.equal(steps[1]?.planItems?.[0], '1. Periksa compiler options');
+});
+

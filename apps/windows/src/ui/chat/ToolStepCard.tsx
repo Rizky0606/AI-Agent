@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, Terminal, CheckCircle2, AlertCircle, Clock, XCircle } from 'lucide-react';
+import { ChevronDown, ChevronRight, Terminal, CheckCircle2, AlertCircle, Clock, XCircle, ListTodo, GitFork } from 'lucide-react';
 import { idID } from '../locales/id-ID.ts';
 
 export interface ToolStepData {
@@ -13,6 +13,10 @@ export interface ToolStepData {
   details?: unknown | undefined;
   runtime?: string | undefined;
   timestamp?: string | undefined;
+  isPlan?: boolean | undefined;
+  planItems?: string[] | undefined;
+  isSubagent?: boolean | undefined;
+  subagentTask?: string | undefined;
 }
 
 interface ToolStepCardProps {
@@ -47,13 +51,28 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step, onStop }) => {
     }
   };
 
+  const getStepIcon = () => {
+    if (step.isPlan) {
+      return <ListTodo size={14} color="var(--accent-mint)" />;
+    }
+    if (step.isSubagent) {
+      return <GitFork size={14} color="var(--accent-teal)" />;
+    }
+    return <Terminal size={14} color="var(--accent-cyan)" />;
+  };
+
   const formattedDetails =
     typeof step.details === 'object' && step.details !== null
       ? JSON.stringify(step.details, null, 2)
       : String(step.details ?? '');
 
+  const isOneShotRuntime = step.runtime === 'omp' || step.runtime === 'hermes';
+
   return (
-    <div className="tool-step-card" aria-label={`Langkah ${step.stepNumber}: ${step.toolName}`}>
+    <div
+      className={`tool-step-card ${step.isPlan ? 'tool-step-card-plan' : ''} ${step.isSubagent ? 'tool-step-card-subagent' : ''}`}
+      aria-label={`Langkah ${step.stepNumber}: ${step.toolName}`}
+    >
       <div
         className="tool-step-header"
         onClick={() => setExpanded(!expanded)}
@@ -68,10 +87,15 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step, onStop }) => {
         }}
       >
         <div className="tool-step-header-left">
-          <Terminal size={14} color="var(--accent-cyan)" />
+          {getStepIcon()}
           <span className="tool-step-title">
-            {idID.chat.toolStep.title} #{step.stepNumber}: {step.toolName}
+            {step.isPlan ? idID.chat.toolStep.planTitle : `${idID.chat.toolStep.title} #${step.stepNumber}: ${step.toolName}`}
           </span>
+          {step.isSubagent && (
+            <span className="task-subagent-pill">
+              {idID.chat.toolStep.subagentBadge}
+            </span>
+          )}
           {step.runtime && (
             <span className="task-runtime-pill">
               {step.runtime}
@@ -105,6 +129,17 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step, onStop }) => {
 
       {expanded && (
         <div className="tool-step-content">
+          {step.isPlan && step.planItems && step.planItems.length > 0 && (
+            <div className="tool-step-plan-box">
+              <div className="tool-step-plan-title">{idID.chat.toolStep.planSteps}</div>
+              <ol className="tool-step-plan-list">
+                {step.planItems.map((item, idx) => (
+                  <li key={idx} className="tool-step-plan-item">{item}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           {step.diff && (
             <div className="tool-step-diff-box">
               {step.path && <div className="tool-step-diff-path">File: {step.path}</div>}
@@ -119,11 +154,18 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step, onStop }) => {
               </pre>
             </div>
           )}
-          {formattedDetails ? (
+
+          {formattedDetails && !step.planItems ? (
             <pre className="tool-step-pre-wrap">
               {formattedDetails}
             </pre>
           ) : null}
+
+          {isOneShotRuntime && (
+            <div className="tool-step-oneshot-note">
+              {idID.chat.toolStep.oneShotNote}
+            </div>
+          )}
         </div>
       )}
     </div>
