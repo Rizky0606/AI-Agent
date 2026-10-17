@@ -117,7 +117,17 @@ capabilities:
       - Code Signing & Auto-Updater Runbooks: Published `docs/windows/code-signing-runbook.md` (evaluating Azure Trusted Signing vs Cloud HSM vs EV) and ADR 0017 (`docs/adr/0017-usulan-windows-auto-updater-tauri.md`).
       - High-Risk Capabilities: Enforced default OFF with `requiresExplicitOptIn: true` for `powershell`, `docker`, and `vscode`, plus folder allowlist boundary for filesystem.
       - Sesi 17 QA & Release: All 74 test files passing in CI. Vite production bundle builds in <8s (dist/index.html, Inter fonts, CSS 62.5 KB, JS 334 KB). Tauri NSIS installer target configured for version 0.3.0. Manual verification on real Windows hardware remains necessary for SmartScreen and display rendering.
-      - Remaining gaps: Physical Windows hardware screen visual inspection and real code signing certificate procurement require manual user action.
+      - Sesi 22 UI/UX Overhaul (2026-10-17, ADR 0023 / feat/sesi-22-rombak-ui-windows):
+        - Automated design token compliance: `scripts/check-design-tokens.ts` (`pnpm check:tokens`) enforces 0 hex/rgba colors and 0 inline styles across all Windows CSS files (0 violations).
+        - Shell Header & Sidebar: Breadcrumb konteks navigasi terpotong rapi (`truncate`), status sinkronisasi, affordance "Obrolan Baru" sekunder dengan badge `<kbd>Ctrl+N</kbd>`.
+        - Chat & Composer: Kontainer pesan terpusat max-width 720px, pembungkus horizontal chip komposer (Mode, Model, Runtime) dengan scrollbar tersembunyi (`scrollbar-width: none`), 4 kartu saran prompt empty state responsif.
+        - Panel Aktivitas: Kartu persetujuan risiko HIGH (`--color-risk-high`) dan CRITICAL (`--color-risk-critical`) dengan aksen border/background subtle, judul checkpoint tindakan yang informatif ("Menjalankan Perintah", "Menavigasi Web", dsb.), indikator status live streaming tool step.
+        - Pengaturan: Tombol salin path allowlist direktori dengan feedback visual "Tersalin!", grid 3 kartu status kesehatan sistem (REST API, WebSocket Event, Worker Process) dengan dot status dinamis.
+        - Memori & Skill/MCP: 100% tokenisasi CSS (menghapus seluruh sisa hardcoded warna & spasi), tampilan badge status seragam.
+        - Layar Login: Menghapus emoji (🪟, ⚠️) digantikan icon Lucide (`Laptop`, `AlertTriangle`), penataan input dan tombol aksi hero dengan token semantik.
+        - Banner Koneksi: Banner lengket di bagian atas antarmuka saat status WebSocket terputus (`reconnecting` / `disconnected`) dengan tombol "Hubungkan Kembali".
+        - Sesi 22 QA: 78 unit test di `@personal-ai-os/windows` lulus 100% (`pnpm --filter @personal-ai-os/windows test`), typecheck lulus 0 error.
+      - Remaining gaps: Physical Windows hardware screen visual inspection at 1366x768 and 1920x1080 (125% and 150% DPI) is labeled "BELUM DIVERIFIKASI VISUAL" and requires manual user verification; real code signing certificate procurement requires manual user action.
   memory_artifacts_observability:
     status: partial
     code: packages/memory; apps/api/src/db/memory-repository.ts; apps/api/src/routes/memory.ts; apps/api/src/db
@@ -156,6 +166,9 @@ capabilities:
       - Created root DESIGN.md documenting evidenced design tokens (Inter fonts, Teal-Mint accent, surface elevation, radii, spacing, component patterns).
       - Executed read-only audit across 8 surface areas producing prioritized improvement plans in design-plans/ (windows-shell, chat, activity, settings, android-navigation, android-chat, onboarding, deep-research).
       - Established docs/design/skills-used.md tracking UI skills (ibelick/create-design-md, ibelick/improve-ui, pbakaus/shape, pbakaus/critique, kemiljk/subtractive-design, arla6ka/token-mapping, kemiljk/real-content-design, jakubkrehel/better-writing, pbakaus/clarify).
+      - Sesi 22 UI/UX Overhaul & Token Verification (2026-10-17):
+        - Implemented automated design token linter `scripts/check-design-tokens.ts` (`pnpm check:tokens`) enforcing 0 non-token colors (#hex, rgba) and 0 inline styles across client CSS (0 violations).
+        - Applied subtractive design and accessible affordances across 8 Windows surfaces per `design-plans/windows-shell.md`, `chat.md`, `activity.md`, `settings.md`, `onboarding.md`.
       - Visual appearance on physical screens remains labeled "BELUM DIVERIFIKASI VISUAL" pending live hardware inspection.
   runtime_bridges_and_execution:
     status: partial
