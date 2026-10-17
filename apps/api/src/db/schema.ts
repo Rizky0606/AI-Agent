@@ -633,3 +633,67 @@ export type ResearchSourceRow = typeof researchSources.$inferSelect;
 export type ResearchEvidenceRow = typeof researchEvidence.$inferSelect;
 export type ResearchReportRow = typeof researchReports.$inferSelect;
 
+export const compareRuns = pgTable(
+  'compare_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    prompt: text('prompt').notNull(),
+    blindMode: boolean('blind_mode').default(false).notNull(),
+    status: varchar('status', { length: 32 }).default('running').notNull(),
+    winnerModelId: varchar('winner_model_id', { length: 128 }),
+    revealed: boolean('revealed').default(false).notNull(),
+    revealedAt: timestamp('revealed_at', { withTimezone: true }),
+    synthesisStatus: varchar('synthesis_status', { length: 32 }).default('none').notNull(),
+    synthesisModel: varchar('synthesis_model', { length: 128 }),
+    synthesisContent: text('synthesis_content'),
+    synthesisUsage: jsonb('synthesis_usage').default({}).notNull(),
+    tokenBudget: integer('token_budget').default(4000).notNull(),
+    totalTokensUsed: integer('total_tokens_used').default(0).notNull(),
+    error: text('error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('compare_runs_user_idx').on(table.userId),
+    index('compare_runs_project_idx').on(table.projectId),
+    index('compare_runs_status_idx').on(table.status),
+    index('compare_runs_created_idx').on(table.createdAt),
+  ],
+);
+
+export const compareResults = pgTable(
+  'compare_results',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => compareRuns.id, { onDelete: 'cascade' }),
+    modelId: varchar('model_id', { length: 128 }).notNull(),
+    modelAlias: varchar('model_alias', { length: 32 }).notNull(),
+    columnIndex: integer('column_index').notNull(),
+    content: text('content').default('').notNull(),
+    status: varchar('status', { length: 32 }).default('pending').notNull(),
+    error: text('error'),
+    latencyMs: integer('latency_ms'),
+    promptTokens: integer('prompt_tokens'),
+    completionTokens: integer('completion_tokens'),
+    totalTokens: integer('total_tokens'),
+    cost: real('cost'),
+    isWinner: boolean('is_winner').default(false).notNull(),
+    ...created,
+  },
+  (table) => [
+    index('compare_results_run_idx').on(table.runId),
+    uniqueIndex('compare_results_run_col_uq').on(table.runId, table.columnIndex),
+  ],
+);
+
+export type CompareRunRow = typeof compareRuns.$inferSelect;
+export type CompareResultRow = typeof compareResults.$inferSelect;
+

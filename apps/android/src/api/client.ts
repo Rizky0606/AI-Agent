@@ -21,6 +21,10 @@ import {
   type RuntimeDescriptor,
 } from './types.ts';
 import type {
+  CompareRunDetail,
+  CompareRunSummary,
+  CreateCompareRequest,
+  PromoteCompareResponse,
   ResearchBudgetConfig,
   ResearchDepth,
   ResearchEvidenceItem,
@@ -654,6 +658,59 @@ export class ApiClient {
 
   async deleteResearch(id: string): Promise<{ success: boolean }> {
     return this.request<{ success: boolean }>(`/v1/research/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Compare Multi-Model (Sesi 26) ---
+  async createCompare(payload: CreateCompareRequest): Promise<CompareRunSummary> {
+    return this.request<CompareRunSummary>('/v1/compare', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getCompare(id: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}`);
+  }
+
+  async listCompares(): Promise<CompareRunSummary[]> {
+    const res = await this.request<{ items: CompareRunSummary[] }>('/v1/compare');
+    return res.items ?? [];
+  }
+
+  async revealCompare(id: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}/reveal`, {
+      method: 'POST',
+    });
+  }
+
+  async selectCompareWinner(id: string, winnerModelId: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}/winner`, {
+      method: 'POST',
+      body: JSON.stringify({ winnerModelId }),
+    });
+  }
+
+  async synthesizeCompare(id: string, synthesisModelId?: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}/synthesize`, {
+      method: 'POST',
+      body: JSON.stringify(synthesisModelId ? { synthesisModelId } : {}),
+    });
+  }
+
+  async promoteCompare(
+    id: string,
+    options?: { target?: 'new' | 'existing'; conversationId?: string },
+  ): Promise<PromoteCompareResponse> {
+    return this.request<PromoteCompareResponse>(`/v1/compare/${encodeURIComponent(id)}/promote`, {
+      method: 'POST',
+      body: JSON.stringify(options ?? {}),
+    });
+  }
+
+  async deleteCompare(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/compare/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
   }

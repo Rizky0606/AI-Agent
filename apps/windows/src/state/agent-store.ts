@@ -1,8 +1,13 @@
 import { create } from 'zustand';
 import {
   DEFAULT_BUDGET_ESTIMATES,
+  compareReducer,
   createInitialResearchProgressState,
   reduceResearchProgress,
+  type CompareRunDetail,
+  type CompareRunSummary,
+  type CreateCompareRequest,
+  type PromoteCompareResponse,
   type ResearchBudgetConfig,
   type ResearchDepth,
   type ResearchProgressState,
@@ -295,6 +300,20 @@ export interface AgentState {
   approveResearchPlan: (runId: string, plan: { subQuestions: ResearchSubQuestionState[] }) => Promise<void>;
   cancelResearch: (runId: string) => Promise<void>;
   deleteResearch: (runId: string) => Promise<void>;
+  activeCompareId: string | null;
+  activeCompareState: CompareRunDetail | null;
+  compareHistory: CompareRunSummary[];
+  isLoadingCompare: boolean;
+  compareError: string | null;
+  startCompare: (payload: CreateCompareRequest) => Promise<string>;
+  openCompare: (runId: string) => Promise<void>;
+  closeActiveCompare: () => void;
+  refreshCompareHistory: () => Promise<void>;
+  revealCompare: (runId: string) => Promise<void>;
+  selectCompareWinner: (runId: string, winnerModelId: string) => Promise<void>;
+  synthesizeCompare: (runId: string, synthesisModelId?: string) => Promise<void>;
+  promoteCompare: (runId: string, options?: { target?: 'new' | 'existing'; conversationId?: string }) => Promise<PromoteCompareResponse>;
+  deleteCompare: (runId: string) => Promise<void>;
 }
 
 export const createAgentStore = (
@@ -349,6 +368,7 @@ export const createAgentStore = (
     let eventsStream: TaskEventsStream | null = null;
     let chatEventsStream: TaskEventsStream | null = null;
     let researchEventsStream: TaskEventsStream | null = null;
+    let compareEventsStream: TaskEventsStream | null = null;
     const appendEvent = (event: TaskEventEnvelope): void => {
       set((state) => ({
         taskEvents: [
@@ -1449,6 +1469,150 @@ export const createAgentStore = (
       }
       set((state) => ({
         researchHistory: state.researchHistory.filter((r) => r.id !== runId),
+      }));
+    }),
+
+    activeCompareId: null,
+    activeCompareState: null,
+    compareHistory: [],
+    isLoadingCompare: false,
+    compareError: null,
+
+    startCompare: async (payload) => {
+      set({ isLoadingCompare: true, compareError: null });
+      try {
+        const summary = await api().createCompare(payload);
+        const detail = await api().getCompare(summary.id);
+
+        set({
+          activeCompareId: summary.id,
+          activeCompareState: detail,
+          isLoadingCompare: false,
+        });
+
+        compareEventsStream?.disconnect();
+        compareEventsStream?.reset();
+        compareEventsStream = new TaskEventsStream({
+          serverUrl: () => get().serverUrl,
+          token: () => get().authToken,
+          taskId: () => get().activeCompareId,
+          onEvent: (event) => {
+            const current = get().activeCompareState;
+            if (!current) return;
+            const next = compareReducer(current, event);
+            set({ activeCompareState: next });
+            if (next.status === 'completed' || next.status === 'failed') {
+              void get().refreshCompareHistory();
+            }
+          },
+        });
+        compareEventsStream.connect();
+
+        void get().refreshCompareHistory();
+        return summary.id;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        set({ isLoadingCompare: false, compareError: msg });
+        throw err;
+      }
+    },
+
+    openCompare: async (runId) => {
+      set({ isLoadingCompare: true, activeCompareId: runId, compareError: null });
+      try {
+        const detail = await api().getCompare(runId);
+        set({
+          activeCompareState: detail,
+          isLoadingCompare: false,
+        });
+
+        if (detail.status === 'running' || detail.status === 'queued') {
+          compareEventsStream?.disconnect();
+          compareEventsStream?.reset();
+          compareEventsStream = new TaskEventsStream({
+            serverUrl: () => get().serverUrl,
+            token: () => get().authToken,
+            taskId: () => get().activeCompareId,
+            onEvent: (event) => {
+              const current = get().activeCompareState;
+              if (!current) return;
+              const next = compareReducer(current, event);
+              set({ activeCompareState: next });
+              if (next.status === 'completed' || next.status === 'failed') {
+                void get().refreshCompareHistory();
+              }
+            },
+          });
+          compareEventsStream.connect();
+        }
+      } catch (err: unknown) {
+        set({ isLoadingCompare: false });
+        throw err;
+      }
+    },
+
+    closeActiveCompare: () => {
+      compareEventsStream?.disconnect();
+      set({ activeCompareId: null, activeCompareState: null, compareError: null });
+    },
+
+    refreshCompareHistory: () => run(async () => {
+      try {
+        const items = await api().listCompares();
+        set({ compareHistory: items });
+      } catch {
+        // ignore
+      }
+    }),
+
+    revealCompare: (runId) => run(async () => {
+      const updated = await api().revealCompare(runId);
+      set((state) => {
+        if (state.activeCompareState && state.activeCompareState.id === runId) {
+          return { activeCompareState: updated };
+        }
+        return state;
+      });
+      void get().refreshCompareHistory();
+    }),
+
+    selectCompareWinner: (runId, winnerModelId) => run(async () => {
+      const updated = await api().selectCompareWinner(runId, winnerModelId);
+      set((state) => {
+        if (state.activeCompareState && state.activeCompareState.id === runId) {
+          return { activeCompareState: updated };
+        }
+        return state;
+      });
+      void get().refreshCompareHistory();
+    }),
+
+    synthesizeCompare: (runId, synthesisModelId) => run(async () => {
+      const updated = await api().synthesizeCompare(runId, synthesisModelId);
+      set((state) => {
+        if (state.activeCompareState && state.activeCompareState.id === runId) {
+          return { activeCompareState: updated };
+        }
+        return state;
+      });
+      void get().refreshCompareHistory();
+    }),
+
+    promoteCompare: async (runId, options) => {
+      const res = await api().promoteCompare(runId, options);
+      if (res.conversationId) {
+        void get().refreshChat();
+      }
+      return res;
+    },
+
+    deleteCompare: (runId) => run(async () => {
+      await api().deleteCompare(runId);
+      if (get().activeCompareId === runId) {
+        get().closeActiveCompare();
+      }
+      set((state) => ({
+        compareHistory: state.compareHistory.filter((c) => c.id !== runId),
       }));
     }),
     };

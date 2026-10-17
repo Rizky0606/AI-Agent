@@ -80,7 +80,17 @@ export type TaskEventType =
   | 'research.plan_approved'
   | 'research.completed'
   | 'research.cancelled'
-  | 'research.error';
+  | 'research.error'
+  | 'compare.started'
+  | 'compare.chunk'
+  | 'compare.model_completed'
+  | 'compare.model_failed'
+  | 'compare.completed'
+  | 'compare.revealed'
+  | 'compare.winner_selected'
+  | 'compare.synthesis_chunk'
+  | 'compare.synthesis_completed'
+  | 'compare.synthesis_failed';
 
 export interface TaskEventEnvelope {
   id: string;

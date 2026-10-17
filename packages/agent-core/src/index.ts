@@ -22,4 +22,7 @@ export * from './runtimes/index.ts';
 // Deep Research
 export * from './deep-research/index.ts';
 
+// Compare Multi-Model
+export * from './compare/index.ts';
+
 

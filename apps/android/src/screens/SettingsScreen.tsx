@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Columns2,
   Copy,
   Cpu,
   FileCode,
@@ -55,12 +56,14 @@ export interface SettingsScreenProps {
   onNavigateToArtifacts?: () => void;
   onNavigateToProjects?: () => void;
   onNavigateToMemory?: () => void;
+  onNavigateToCompare?: () => void;
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onNavigateToArtifacts,
   onNavigateToProjects,
   onNavigateToMemory,
+  onNavigateToCompare,
 }) => {
   const theme = useAppTheme();
   const { user, device, serverUrl, logout } = useAuthStore();
@@ -391,6 +394,57 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 ]}
               >
                 Buka Pusat Memori
+              </Text>
+            </View>
+            <ChevronRight size={16} color={theme.colors.textMuted} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {/* 5b. Bandingkan Multi-Model (Sesi 26) */}
+      <View
+        style={[
+          styles.card,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        <View style={styles.cardHeader}>
+          <Columns2 size={18} color={theme.colors.primary} />
+          <Text style={[styles.cardTitle, { color: theme.colors.textPrimary }]}>
+            {idID.compare.title}
+          </Text>
+        </View>
+
+        <Text style={[styles.cardDesc, { color: theme.colors.textSecondary }]}>
+          {idID.compare.subtitle}
+        </Text>
+
+        {onNavigateToCompare ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Buka Bandingkan Model"
+            style={[
+              styles.navLinkBtn,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+                marginTop: 10,
+              },
+            ]}
+            onPress={onNavigateToCompare}
+          >
+            <View style={styles.navLinkLeft}>
+              <Columns2 size={16} color={theme.colors.primary} />
+              <Text
+                style={[
+                  styles.navLinkText,
+                  { color: theme.colors.textPrimary },
+                ]}
+              >
+                Buka Bandingkan Model
               </Text>
             </View>
             <ChevronRight size={16} color={theme.colors.textMuted} />

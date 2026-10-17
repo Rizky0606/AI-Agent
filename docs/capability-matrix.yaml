@@ -252,6 +252,22 @@ capabilities:
       - Section Confidence & Gaps: Visual meters showing confidence score per section and explicit 'Yang Tidak Ditemukan' callouts for missing information.
       - Shared State Architecture: Cross-platform pure reducer and citation parser in `@personal-ai-os/shared` consumed identically by React (Windows) and React Native (Android).
       - Remaining gaps: Physical device validation on Android and Windows native tray notifications require manual verification.
+  compare_multi_model:
+    status: implemented
+    code: packages/agent-core/src/compare; packages/shared/src/compare; apps/api/src/routes/compare.ts; apps/api/src/db/compare-repository.ts; apps/windows/src/ui/compare; apps/android/src/screens/CompareScreen.tsx
+    permission_boundary: PermissionEngine; server-only gateway calls; no tools or agents executed (pure chat); strict per-model rate limit & token budget (default 4000, max 8000)
+    clients: windows (side-by-side columns); android (segmented tabs / horizontal swipe); backend REST & WebSocket
+    proof: packages/shared/test/compare-reducer.test.ts; packages/agent-core/test/compare-engine.test.ts; apps/api/test/compare-routes.test.ts; apps/windows/test/compare-ui.test.ts; apps/android/test/compare.test.ts; scripts/test-compare-live.ts
+    limitation: |
+      Compare Multi-Model implemented in Sesi 26 (ADR 0027, 2026-10-17):
+      - Multi-Model Parallel Inference: User selects 2–3 verified models from the catalog; server dispatches parallel requests bounded by concurrency limiter and cumulative token budget; per-column streaming via WebSocket events.
+      - Strict No-Fallback Rule: If a model fails, that column is marked 'failed' with the exact upstream error. Fallback substitution is forbidden so comparisons remain truthful.
+      - Blind Mode (Mode Buta): Model identities are masked as 'Model A', 'Model B', etc. without leaking `modelId` across payloads until revealed via explicit Reveal or Pick Winner action.
+      - Optional Synthesis: Extra single-pass prompt synthesizing Persamaan, Perbedaan, and Rekomendasi, with the synthesizing model explicitly labeled.
+      - Honest Gateway Metrics: Latency (ms), tokens (in/out/total), and cost displayed ONLY if provided by gateway, never fabricated.
+      - Persistence & Promotion: `compare_runs` and `compare_results` tables with migration `0016_compare_runs.sql`. Winning or selected answer can be promoted to a new or existing chat conversation.
+      - Cross-platform UI: Windows side-by-side columns (`CompareView.tsx`); Android segmented tabs / horizontal view (`CompareScreen.tsx`).
+      - Remaining gaps: Visual rendering on live physical Android device and live physical Windows desktop require manual verification. Real 9Router calls with live model keys require explicit user permission.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

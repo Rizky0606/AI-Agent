@@ -38,7 +38,9 @@ import { registerModelRoutes } from './routes/models.ts';
 import { registerRuntimeRoutes } from './routes/runtimes.ts';
 import type { ResearchRepository } from './db/research-repository.ts';
 import { registerResearchRoutes } from './routes/research.ts';
-import type { DeepResearchEngine, ResearchEnvironment } from '@personal-ai-os/agent-core';
+import type { DeepResearchEngine, ResearchEnvironment, CompareEngine } from '@personal-ai-os/agent-core';
+import type { CompareRepository } from './db/compare-repository.ts';
+import { registerCompareRoutes } from './routes/compare.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
@@ -170,6 +172,17 @@ export type AppDependencies = {
         modelGateway?: ModelGateway | undefined;
         fastModel?: string | undefined;
         complexModel?: string | undefined;
+      }
+    | undefined;
+  compare?:
+    | {
+        compareRepo: CompareRepository;
+        chatRepo?: ChatRepository | undefined;
+        broadcaster?: TaskEventBroadcaster | undefined;
+        engine?: CompareEngine | undefined;
+        modelGateway?: ModelGateway | undefined;
+        modelConfigs?: ModelConfigRepository | undefined;
+        defaultSynthesisModel?: string | undefined;
       }
     | undefined;
 };
@@ -740,6 +753,19 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       modelGateway: dependencies.research.modelGateway ?? dependencies.chat?.gateway,
       fastModel: dependencies.research.fastModel,
       complexModel: dependencies.research.complexModel,
+    });
+  }
+
+  if (dependencies.compare) {
+    registerCompareRoutes(app, {
+      auth: dependencies.auth,
+      compareRepo: dependencies.compare.compareRepo,
+      chatRepo: dependencies.compare.chatRepo ?? dependencies.chat?.chatRepo,
+      broadcaster: dependencies.compare.broadcaster ?? dependencies.task?.broadcaster,
+      engine: dependencies.compare.engine,
+      modelGateway: dependencies.compare.modelGateway ?? dependencies.chat?.gateway,
+      modelConfigs: dependencies.compare.modelConfigs ?? dependencies.chat?.modelConfigs,
+      defaultSynthesisModel: dependencies.compare.defaultSynthesisModel,
     });
   }
 

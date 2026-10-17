@@ -1,11 +1,11 @@
 import React from 'react';
-import { PanelLeft, MessageSquare, FolderGit2, Brain, Wrench, BookOpen, Settings, Bell } from 'lucide-react';
+import { PanelLeft, MessageSquare, FolderGit2, Brain, Wrench, BookOpen, Columns2, Settings, Bell } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import { StatusDot, type StatusDotKind } from '../components/StatusDot.tsx';
 import { ThemeSwitcher } from '../components/ThemeSwitcher.tsx';
 import { idID } from '../locales/id-ID.ts';
 
-export type ActiveView = 'chat' | 'project' | 'memory' | 'skills' | 'research' | 'settings';
+export type ActiveView = 'chat' | 'project' | 'memory' | 'skills' | 'research' | 'compare' | 'settings';
 
 interface AppHeaderProps {
   activeView: ActiveView;
@@ -81,6 +81,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <span>{idID.nav.research}</span>
           </button>
           <button
+            className={`header-nav-btn ${activeView === 'compare' ? 'active' : ''}`}
+            onClick={() => onChangeView('compare')}
+            aria-current={activeView === 'compare' ? 'page' : undefined}
+          >
+            <Columns2 size={15} />
+            <span>{idID.nav.compare}</span>
+          </button>
+          <button
             className={`header-nav-btn ${activeView === 'settings' ? 'active' : ''}`}
             onClick={() => onChangeView('settings')}
             aria-current={activeView === 'settings' ? 'page' : undefined}
@@ -102,7 +110,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 ? idID.nav.memory
                 : activeView === 'skills'
                   ? idID.nav.skills
-                  : idID.nav.settings}
+                  : activeView === 'research'
+                    ? idID.nav.research
+                    : activeView === 'compare'
+                      ? idID.compare.title
+                      : idID.nav.settings}
         </span>
       </div>
 

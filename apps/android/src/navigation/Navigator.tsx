@@ -24,6 +24,7 @@ import { ProjectsScreen } from '../screens/ProjectsScreen.tsx';
 import { SettingsScreen } from '../screens/SettingsScreen.tsx';
 import { TaskDetailScreen } from '../screens/TaskDetailScreen.tsx';
 import { ResearchScreen } from '../screens/ResearchScreen.tsx';
+import { CompareScreen } from '../screens/CompareScreen.tsx';
 import { DeepLinkService, type DeepLinkTarget } from '../services/deep-link.ts';
 import { defaultFcmService } from '../services/fcm-service.ts';
 import { useAuthStore } from '../state/auth-store.ts';
@@ -42,8 +43,10 @@ export const AppNavigator: React.FC = () => {
   const [activeConversationTitle, setActiveConversationTitle] = useState<string | undefined>(undefined);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [activeResearchId, setActiveResearchId] = useState<string | null>(null);
+  const [activeCompareId, setActiveCompareId] = useState<string | null>(null);
+  const [isCompareOpen, setIsCompareOpen] = useState(false);
   const [activityInitialTab, setActivityInitialTab] = useState<'tasks' | 'approvals'>('tasks');
-  const [moreSubscreen, setMoreSubscreen] = useState<'artifacts' | 'projects' | 'memory' | null>(null);
+  const [moreSubscreen, setMoreSubscreen] = useState<'artifacts' | 'projects' | 'memory' | 'compare' | null>(null);
 
   // Pending approvals count for tab badge
   const { data: pendingApprovals } = useApprovals('pending');
@@ -67,6 +70,11 @@ export const AppNavigator: React.FC = () => {
         setMoreSubscreen(null);
         return true;
       }
+      if (isCompareOpen || activeCompareId !== null) {
+        setIsCompareOpen(false);
+        setActiveCompareId(null);
+        return true;
+      }
       if (activeTaskId !== null) {
         setActiveTaskId(null);
         return true;
@@ -85,7 +93,7 @@ export const AppNavigator: React.FC = () => {
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [moreSubscreen, activeTaskId, activeResearchId, activeConversationId]);
+  }, [moreSubscreen, isCompareOpen, activeCompareId, activeTaskId, activeResearchId, activeConversationId]);
 
   const handleDeepLinkTarget = (target: DeepLinkTarget | null) => {
     if (!target) return;
@@ -154,6 +162,25 @@ export const AppNavigator: React.FC = () => {
     );
   }
 
+  if (isCompareOpen || activeCompareId) {
+    return (
+      <CompareScreen
+        runId={activeCompareId}
+        onBack={() => {
+          setIsCompareOpen(false);
+          setActiveCompareId(null);
+        }}
+        onNavigateToChat={(convId) => {
+          setIsCompareOpen(false);
+          setActiveCompareId(null);
+          if (convId) {
+            setActiveConversationId(convId);
+          }
+        }}
+      />
+    );
+  }
+
   // Subscreen renderers for tabs
   const renderChatStack = () => {
     if (activeConversationId) {
@@ -210,11 +237,25 @@ export const AppNavigator: React.FC = () => {
     if (moreSubscreen === 'memory') {
       return <MemoryScreen onBack={() => setMoreSubscreen(null)} />;
     }
+    if (moreSubscreen === 'compare') {
+      return (
+        <CompareScreen
+          onBack={() => setMoreSubscreen(null)}
+          onNavigateToChat={(convId) => {
+            setMoreSubscreen(null);
+            if (convId) {
+              setActiveConversationId(convId);
+            }
+          }}
+        />
+      );
+    }
     return (
       <SettingsScreen
         onNavigateToArtifacts={() => setMoreSubscreen('artifacts')}
         onNavigateToProjects={() => setMoreSubscreen('projects')}
         onNavigateToMemory={() => setMoreSubscreen('memory')}
+        onNavigateToCompare={() => setMoreSubscreen('compare')}
       />
     );
   };

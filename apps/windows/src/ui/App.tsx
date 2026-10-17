@@ -10,6 +10,7 @@ import { ProjectView } from './project/ProjectView.tsx';
 import { MemoryView } from './memory/MemoryView.tsx';
 import { SkillMcpView } from './skills/SkillMcpView.tsx';
 import { ResearchView } from './research/ResearchView.tsx';
+import { CompareView } from './compare/CompareView.tsx';
 import { SettingsView } from './settings/SettingsView.tsx';
 import { ActivityPanel } from './activity/ActivityPanel.tsx';
 import { StatusDot, type StatusDotKind } from './components/StatusDot.tsx';
@@ -194,6 +195,9 @@ const AppShell: React.FC = () => {
         {activeView === 'skills' && <SkillMcpView />}
         {activeView === 'research' && (
           <ResearchView onNavigateToChat={() => setActiveView('chat')} />
+        )}
+        {activeView === 'compare' && (
+          <CompareView onNavigateToChat={() => setActiveView('chat')} />
         )}
         {activeView === 'settings' && <SettingsView />}
       </div>

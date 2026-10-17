@@ -19,3 +19,4 @@ export * from './tasks/state-machine.ts';
 export * from './tasks/repository.ts';
 export * from './design/index.ts';
 export * from './research/index.ts';
+export * from './compare/index.ts';
