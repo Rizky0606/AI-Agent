@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, Terminal, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import { ChevronDown, ChevronRight, Terminal, CheckCircle2, AlertCircle, Clock, XCircle } from 'lucide-react';
 import { idID } from '../locales/id-ID.ts';
 
 export interface ToolStepData {
@@ -10,14 +10,17 @@ export interface ToolStepData {
   summary: string;
   diff?: string | undefined;
   path?: string | undefined;
-  details?: string | Record<string, unknown> | undefined;
+  details?: unknown | undefined;
+  runtime?: string | undefined;
+  timestamp?: string | undefined;
 }
 
 interface ToolStepCardProps {
   step: ToolStepData;
+  onStop?: (() => void) | undefined;
 }
 
-export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
+export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step, onStop }) => {
   const [expanded, setExpanded] = useState(false);
 
   const getStatusIcon = () => {
@@ -69,12 +72,31 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
           <span className="tool-step-title">
             {idID.chat.toolStep.title} #{step.stepNumber}: {step.toolName}
           </span>
+          {step.runtime && (
+            <span className="task-runtime-pill">
+              {step.runtime}
+            </span>
+          )}
           <span className="tool-step-summary">
             — {step.summary}
           </span>
         </div>
 
         <div className="tool-step-header-right">
+          {onStop && step.status === 'running' && (
+            <button
+              type="button"
+              className="ui-btn ui-btn-danger ui-btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStop();
+              }}
+              title="Hentikan Langkah Ini"
+            >
+              <XCircle size={12} />
+              <span>Stop</span>
+            </button>
+          )}
           {getStatusIcon()}
           <span className="tool-step-status-text">{getStatusLabel()}</span>
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}

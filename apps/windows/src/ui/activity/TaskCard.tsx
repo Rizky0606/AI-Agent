@@ -1,8 +1,9 @@
 import React from 'react';
-import type { TaskRecord } from '@personal-ai-os/shared';
+import { aggregateRuntimeSteps, type TaskRecord } from '@personal-ai-os/shared';
 import type { TaskEventEntry } from '../../state/agent-store.ts';
 import { Play, Pause, XCircle } from 'lucide-react';
 import { idID } from '../locales/id-ID.ts';
+import { ToolStepCard } from '../chat/ToolStepCard.tsx';
 
 interface TaskCardProps {
   task: TaskRecord;
@@ -113,47 +114,66 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         <div className="settings-form-group task-events-group">
           <span className="settings-label">{idID.activity.tasks.eventStreamLabel}</span>
           <div className="task-timeline-container">
-            {events.map((ev, i) => {
-              const payload = (ev.payload ?? {}) as Record<string, unknown>;
-              const isDiff = Boolean(payload.diff);
-              return (
-                <div key={ev.id || i} className="task-event-card">
-                  <div className="task-event-header-row">
-                    <span>
-                      #{i + 1} {ev.eventType}
-                      {payload.action ? ` (${String(payload.action)})` : ''}
-                    </span>
-                    <span className="task-event-time">
-                      {ev.createdAt ? new Date(ev.createdAt).toLocaleTimeString() : ''}
-                    </span>
-                  </div>
-                  {payload.text ? (
-                    <div className="task-event-text">
-                      {String(payload.text)}
+            {(() => {
+              const formattedEvents = events.map((ev, idx) => ({
+                id: ev.id || `ev-${idx}`,
+                taskId: task.id,
+                eventType: ev.eventType,
+                payload: (ev.payload ?? {}) as Record<string, unknown>,
+                createdAt: ev.createdAt ?? new Date().toISOString(),
+              }));
+              const steps = aggregateRuntimeSteps(formattedEvents);
+              if (steps.length > 0) {
+                return steps.map((step) => (
+                  <ToolStepCard
+                    key={step.id}
+                    step={step}
+                    onStop={task.status === 'running' && onCancel ? () => void onCancel(task.id) : undefined}
+                  />
+                ));
+              }
+              return events.map((ev, i) => {
+                const payload = (ev.payload ?? {}) as Record<string, unknown>;
+                const isDiff = Boolean(payload.diff);
+                return (
+                  <div key={ev.id || i} className="task-event-card">
+                    <div className="task-event-header-row">
+                      <span>
+                        #{i + 1} {ev.eventType}
+                        {payload.action ? ` (${String(payload.action)})` : ''}
+                      </span>
+                      <span className="task-event-time">
+                        {ev.createdAt ? new Date(ev.createdAt).toLocaleTimeString() : ''}
+                      </span>
                     </div>
-                  ) : null}
-                  {isDiff ? (
-                    <div className="task-event-diff-box">
-                      {payload.path ? <div className="task-event-diff-path">{String(payload.path)}</div> : null}
-                      <pre className="tool-step-pre">
-                        {String(payload.diff).split('\n').map((line, lIdx) => {
-                          let lineClass = '';
-                          if (line.startsWith('+')) lineClass = 'diff-line-add';
-                          else if (line.startsWith('-')) lineClass = 'diff-line-del';
-                          else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
-                          return <div key={lIdx} className={lineClass}>{line}</div>;
-                        })}
+                    {payload.text ? (
+                      <div className="task-event-text">
+                        {String(payload.text)}
+                      </div>
+                    ) : null}
+                    {isDiff ? (
+                      <div className="task-event-diff-box">
+                        {payload.path ? <div className="task-event-diff-path">{String(payload.path)}</div> : null}
+                        <pre className="tool-step-pre">
+                          {String(payload.diff).split('\n').map((line, lIdx) => {
+                            let lineClass = '';
+                            if (line.startsWith('+')) lineClass = 'diff-line-add';
+                            else if (line.startsWith('-')) lineClass = 'diff-line-del';
+                            else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
+                            return <div key={lIdx} className={lineClass}>{line}</div>;
+                          })}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {!payload.text && !isDiff ? (
+                      <pre className="task-event-raw-json">
+                        {JSON.stringify(payload)}
                       </pre>
-                    </div>
-                  ) : null}
-                  {!payload.text && !isDiff ? (
-                    <pre className="task-event-raw-json">
-                      {JSON.stringify(payload)}
-                    </pre>
-                  ) : null}
-                </div>
-              );
-            })}
+                    ) : null}
+                  </div>
+                );
+              });
+            })()}
           </div>
         </div>
       )}

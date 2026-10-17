@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
-import { Copy, Check, RotateCcw, Edit2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Copy, Check, RotateCcw, Edit2, XCircle } from 'lucide-react';
 import type { ChatMessage } from '../../state/agent-store.ts';
+import { useAgentStore } from '../context.ts';
+import { aggregateRuntimeSteps } from '@personal-ai-os/shared';
 import { MarkdownMessage } from '../components/MarkdownMessage.tsx';
+import { ToolStepCard } from './ToolStepCard.tsx';
 import { idID } from '../locales/id-ID.ts';
 
 interface ChatMessagesProps {
@@ -18,6 +21,23 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
   onEditUserMessage,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const { conversationTasks, taskEvents, cancelServerTask } = useAgentStore();
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const isAtBottomRef = useRef<boolean>(true);
+
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 40;
+    isAtBottomRef.current = atBottom;
+  };
+
+  useEffect(() => {
+    if (isAtBottomRef.current && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
+  }, [messages, conversationTasks, taskEvents, streaming]);
 
   const handleCopy = async (id: string, text: string) => {
     try {
@@ -30,7 +50,13 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
   };
 
   return (
-    <div className="chat-messages-scroll" role="log" aria-live="polite">
+    <div
+      ref={scrollContainerRef}
+      onScroll={handleScroll}
+      className="chat-messages-scroll"
+      role="log"
+      aria-live="polite"
+    >
       {messages.map((message, index) => {
         const isUser = message.role === 'user';
         const isLastAssistant = !isUser && index === messages.length - 1;
@@ -112,6 +138,62 @@ export const ChatMessages: React.FC<ChatMessagesProps> = ({
           </article>
         );
       })}
+
+      {/* Real-time Conversation Tasks & Runtime Steps Strip */}
+      {conversationTasks && conversationTasks.length > 0 && (
+        <div className="chat-conversation-tasks-section" aria-label={idID.chat.conversationTasks}>
+          {conversationTasks.map((task) => {
+            const runtimeLabel = String(task.payload?.runtime || task.payload?.selectedRuntimeId || 'omp');
+            const formattedEvents = taskEvents.map((ev, idx) => ({
+              id: ev.id || `ev-${idx}`,
+              taskId: task.id,
+              eventType: ev.eventType,
+              payload: (ev.payload ?? {}) as Record<string, unknown>,
+              createdAt: ev.createdAt ?? new Date().toISOString(),
+            }));
+            const steps = aggregateRuntimeSteps(formattedEvents);
+
+            return (
+              <div key={task.id} className="chat-task-execution-strip">
+                <div className="chat-task-header-row">
+                  <div className="chat-task-title-group">
+                    <strong className="card-title-text">{task.kind}</strong>
+                    <span className={`status-pill ${task.status}`}>{task.status}</span>
+                    <span className="task-runtime-pill">
+                      Runtime: {runtimeLabel}
+                    </span>
+                    {task.progress != null && <span>{task.progress}%</span>}
+                  </div>
+
+                  {(task.status === 'running' || task.status === 'paused' || task.status === 'waiting_approval') && (
+                    <button
+                      type="button"
+                      className="ui-btn ui-btn-danger ui-btn-sm"
+                      onClick={() => void cancelServerTask(task.id)}
+                      title="Hentikan / Batalkan Tugas"
+                    >
+                      <XCircle size={12} />
+                      <span>Hentikan</span>
+                    </button>
+                  )}
+                </div>
+
+                {steps.length > 0 ? (
+                  <div className="chat-task-steps-container">
+                    {steps.map((step) => (
+                      <ToolStepCard
+                        key={step.id}
+                        step={step}
+                        onStop={task.status === 'running' ? () => void cancelServerTask(task.id) : undefined}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

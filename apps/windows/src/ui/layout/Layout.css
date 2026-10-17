@@ -714,6 +714,36 @@
   color: var(--color-accent);
 }
 
+/* Chat Task Execution Strip */
+.chat-task-execution-strip {
+  width: 100%;
+  margin-top: 10px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}
+
+.chat-task-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.chat-task-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-task-steps-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* Responsive Rules for Small Windows */
 @media (max-width: 900px) {
   .app-sidebar:not(.manually-opened) {
