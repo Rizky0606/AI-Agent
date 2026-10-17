@@ -13,6 +13,7 @@ interface TaskCardProps {
   onPause?: ((taskId: string) => Promise<void>) | undefined;
   onResume?: ((taskId: string) => Promise<void>) | undefined;
   onCancel?: ((taskId: string) => Promise<void>) | undefined;
+  onProposeSkill?: ((task: TaskRecord) => void) | undefined;
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({
@@ -23,7 +24,17 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   onPause,
   onResume,
   onCancel,
+  onProposeSkill,
 }) => {
+  const payloadRecord = task.payload as Record<string, unknown> | undefined;
+  const metaRecord = (payloadRecord?.metadata ?? {}) as Record<string, unknown>;
+  const isScheduled = Boolean(payloadRecord?.scheduleId || metaRecord.scheduled);
+  const briefText = typeof payloadRecord?.brief === 'string'
+    ? (payloadRecord.brief as string)
+    : typeof metaRecord.brief === 'string'
+      ? (metaRecord.brief as string)
+      : null;
+
   return (
     <div
       onClick={() => onSelect(task.id)}
@@ -33,7 +44,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       aria-pressed={isSelected}
     >
       <div className="card-header-row">
-        <strong className="card-title-text">{task.kind}</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <strong className="card-title-text">{task.kind}</strong>
+          {isScheduled && (
+            <span className="status-pill scheduled" title={idID.activity.tasks.scheduledBadge}>
+              {idID.activity.tasks.scheduledBadge}
+            </span>
+          )}
+        </div>
         <span className={`status-pill ${task.status}`}>{task.status}</span>
       </div>
 
@@ -81,6 +99,17 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         </div>
       )}
 
+      {briefText && (
+        <div className="task-checkpoint-block" style={{ marginTop: 'var(--space-2)' }}>
+          <div className="task-checkpoint-header">
+            <span className="task-checkpoint-label">{idID.activity.tasks.briefLabel}</span>
+          </div>
+          <div className="task-event-text" style={{ whiteSpace: 'pre-wrap', marginTop: 'var(--space-1)' }}>
+            {briefText}
+          </div>
+        </div>
+      )}
+
       {/* Task Controls */}
       <div className="card-header-row" onClick={(e) => e.stopPropagation()}>
         <div className="chat-error-actions">
@@ -117,6 +146,17 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             >
               <XCircle size={12} />
               <span>Hentikan</span>
+            </button>
+          )}
+
+          {task.status === 'completed' && onProposeSkill && (
+            <button
+              type="button"
+              className="ui-btn ui-btn-secondary ui-btn-sm"
+              onClick={() => onProposeSkill(task)}
+              title={idID.activity.tasks.proposeSkill}
+            >
+              <span>{idID.activity.tasks.proposeSkill}</span>
             </button>
           )}
         </div>

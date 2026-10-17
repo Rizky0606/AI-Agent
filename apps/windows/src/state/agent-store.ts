@@ -16,7 +16,7 @@ import {
   type TaskEventEnvelope,
   type TaskRecord,
 } from '@personal-ai-os/shared';
-import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem, type PromptTemplateRecord } from '../api/client.ts';
+import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem, type PromptTemplateRecord, type ScheduleJobRecord, type CreateScheduleInput, type SkillProposalRecord, type CreateSkillProposalInput } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
@@ -334,6 +334,20 @@ export interface AgentState {
   queueMessage: (content: string) => void;
   dequeueAndSend: () => void;
   cycleFavoriteModel: () => void;
+  // Sesi 28: Tugas Terjadwal & Usulan Skill
+  schedules: ScheduleJobRecord[];
+  schedulesLoading: boolean;
+  skillProposals: SkillProposalRecord[];
+  skillProposalsLoading: boolean;
+  fetchSchedules: () => Promise<void>;
+  createSchedule: (input: CreateScheduleInput) => Promise<ScheduleJobRecord>;
+  pauseSchedule: (id: string) => Promise<void>;
+  resumeSchedule: (id: string) => Promise<void>;
+  cancelSchedule: (id: string) => Promise<void>;
+  fetchSkillProposals: (status?: string) => Promise<void>;
+  createSkillProposal: (input: CreateSkillProposalInput) => Promise<SkillProposalRecord>;
+  approveSkillProposal: (id: string) => Promise<SkillProposalRecord>;
+  rejectSkillProposal: (id: string, reason: string) => Promise<SkillProposalRecord>;
 }
 
 export const createAgentStore = (
@@ -1799,6 +1813,74 @@ export const createAgentStore = (
       } catch (err) {
         return { compacted: false, reason: err instanceof Error ? err.message : 'Gagal meringkas konteks' };
       }
+    },
+
+    // --- Sesi 28: Tugas Terjadwal & Usulan Skill ---
+    schedules: [],
+    schedulesLoading: false,
+    skillProposals: [],
+    skillProposalsLoading: false,
+
+    fetchSchedules: async () => {
+      set({ schedulesLoading: true });
+      try {
+        const schedules = await api().listSchedules();
+        set({ schedules, schedulesLoading: false });
+      } catch {
+        set({ schedulesLoading: false });
+      }
+    },
+
+    createSchedule: async (input: CreateScheduleInput) => {
+      const schedule = await api().createSchedule(input);
+      await get().fetchSchedules();
+      return schedule;
+    },
+
+    pauseSchedule: async (id: string) => {
+      await api().pauseSchedule(id);
+      await get().fetchSchedules();
+    },
+
+    resumeSchedule: async (id: string) => {
+      await api().resumeSchedule(id);
+      await get().fetchSchedules();
+    },
+
+    cancelSchedule: async (id: string) => {
+      await api().cancelSchedule(id);
+      await get().fetchSchedules();
+    },
+
+    fetchSkillProposals: async (status?: string) => {
+      set({ skillProposalsLoading: true });
+      try {
+        const proposals = await api().listSkillProposals(status);
+        set({ skillProposals: proposals, skillProposalsLoading: false });
+      } catch {
+        set({ skillProposalsLoading: false });
+      }
+    },
+
+    createSkillProposal: async (input: CreateSkillProposalInput) => {
+      const proposal = await api().createSkillProposal(input);
+      await get().fetchSkillProposals();
+      return proposal;
+    },
+
+    approveSkillProposal: async (id: string) => {
+      const res = await api().approveSkillProposal(id);
+      await Promise.all([
+        get().fetchSkillProposals(),
+        get().fetchSkills(),
+      ]);
+      return res.proposal;
+    },
+
+    rejectSkillProposal: async (id: string, reason: string) => {
+      const res = await api().rejectSkillProposal(id, reason);
+      await get().fetchSkillProposals();
+      return res.proposal;
     },
     };
   });

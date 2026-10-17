@@ -767,6 +767,79 @@ export class ApiClient {
       method: 'DELETE',
     });
   }
+
+  // --- Schedules ---
+  async listSchedules(status?: string): Promise<ScheduleJobRecord[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await this.request<{ schedules: ScheduleJobRecord[] }>(`/v1/schedules${q}`);
+    return res.schedules;
+  }
+
+  async createSchedule(input: CreateScheduleInput): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>('/v1/schedules', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return res.schedule;
+  }
+
+  async pauseSchedule(id: string): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>(`/v1/schedules/${id}/pause`, {
+      method: 'POST',
+    });
+    return res.schedule;
+  }
+
+  async resumeSchedule(id: string): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>(`/v1/schedules/${id}/resume`, {
+      method: 'POST',
+    });
+    return res.schedule;
+  }
+
+  async cancelSchedule(id: string): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>(`/v1/schedules/${id}`, {
+      method: 'DELETE',
+    });
+    return res.schedule;
+  }
+
+  // --- Skill Proposals ---
+  async listSkillProposals(status?: string): Promise<SkillProposalRecord[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await this.request<{ proposals: SkillProposalRecord[] }>(`/v1/skills/proposals${q}`);
+    return res.proposals;
+  }
+
+  async createSkillProposal(input: CreateSkillProposalInput): Promise<SkillProposalRecord> {
+    const res = await this.request<{ proposal: SkillProposalRecord }>('/v1/skills/proposals', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return res.proposal;
+  }
+
+  async approveSkillProposal(
+    id: string,
+  ): Promise<{ success: boolean; proposal: SkillProposalRecord; createdSkillName: string; statusNote: string }> {
+    return this.request<{ success: boolean; proposal: SkillProposalRecord; createdSkillName: string; statusNote: string }>(
+      `/v1/skills/proposals/${id}/approve`,
+      { method: 'POST' },
+    );
+  }
+
+  async rejectSkillProposal(
+    id: string,
+    reason?: string,
+  ): Promise<{ success: boolean; proposal: SkillProposalRecord }> {
+    return this.request<{ success: boolean; proposal: SkillProposalRecord }>(
+      `/v1/skills/proposals/${id}/reject`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    );
+  }
 }
 
 export type RuntimeId = 'auto' | 'omp' | 'hermes' | 'native';
@@ -834,4 +907,72 @@ export interface McpCallLogItem {
   error?: string | null;
   createdAt: string;
 }
+
+export interface ScheduleJobRecord {
+  id: string;
+  userId: string;
+  projectId?: string | null | undefined;
+  name: string;
+  type: 'one_off' | 'recurring';
+  runAt?: string | null | undefined;
+  cronExpression?: string | null | undefined;
+  timezone: string;
+  status: 'active' | 'paused' | 'completed' | 'cancelled';
+  missedRunPolicy: 'skip' | 'run_once' | 'catch_up';
+  taskPayload: {
+    kind: string;
+    input: Record<string, unknown>;
+    priority?: number | undefined;
+  };
+  lastRunAt?: string | null | undefined;
+  nextRunAt?: string | null | undefined;
+  lastBrief?: string | null | undefined;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateScheduleInput {
+  name: string;
+  type: 'one_off' | 'recurring';
+  projectId?: string | undefined;
+  runAt?: string | undefined;
+  cronExpression?: string | undefined;
+  timezone?: string | undefined;
+  missedRunPolicy?: 'skip' | 'run_once' | 'catch_up' | undefined;
+  taskPayload: {
+    kind: string;
+    input: Record<string, unknown>;
+    priority?: number | undefined;
+  };
+}
+
+export interface SkillProposalRecord {
+  id: string;
+  userId: string;
+  taskId?: string | null | undefined;
+  skillName: string;
+  title: string;
+  description: string;
+  proposedManifest: Record<string, unknown>;
+  promptInstructions?: string | null | undefined;
+  changeType: 'new_skill' | 'improvement';
+  targetSkillName?: string | null | undefined;
+  diff?: string | null | undefined;
+  status: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string | null | undefined;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSkillProposalInput {
+  skillName: string;
+  title: string;
+  description: string;
+  proposedManifest: Record<string, unknown>;
+  promptInstructions?: string | undefined;
+  changeType?: 'new_skill' | 'improvement' | undefined;
+  targetSkillName?: string | undefined;
+  taskId?: string | undefined;
+}
+
 

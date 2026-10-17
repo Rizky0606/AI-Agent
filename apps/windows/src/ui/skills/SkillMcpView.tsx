@@ -41,12 +41,28 @@ export const SkillMcpView: React.FC = () => {
     addMcpServer,
     deleteMcpServer,
     conversations,
+    skillProposals,
+    skillProposalsLoading,
+    fetchSkillProposals,
+    approveSkillProposal,
+    rejectSkillProposal,
   } = useAgentStore();
 
   const { success, error: toastError, info } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'skills' | 'mcp'>('skills');
+  const [activeTab, setActiveTab] = useState<'skills' | 'mcp' | 'proposals'>('skills');
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+
+  // Rejection dialog state
+  const [rejectDialog, setRejectDialog] = useState<{
+    open: boolean;
+    proposalId: string | null;
+    reason: string;
+  }>({
+    open: false,
+    proposalId: null,
+    reason: '',
+  });
 
   // Manifest modal state
   const [manifestModal, setManifestModal] = useState<{
@@ -92,15 +108,38 @@ export const SkillMcpView: React.FC = () => {
     return Array.from(set);
   }, [conversations]);
 
-  // Load skills or MCP on mount/tab change
+  // Load skills, MCP, or proposals on mount/tab change
   useEffect(() => {
     if (activeTab === 'skills') {
       void fetchSkills(selectedProjectId || undefined);
-    } else {
+    } else if (activeTab === 'mcp') {
       void fetchMcpServers();
       void fetchMcpLogs();
+    } else if (activeTab === 'proposals') {
+      void fetchSkillProposals();
     }
-  }, [activeTab, selectedProjectId, fetchSkills, fetchMcpServers, fetchMcpLogs]);
+  }, [activeTab, selectedProjectId, fetchSkills, fetchMcpServers, fetchMcpLogs, fetchSkillProposals]);
+
+  const handleApproveProposal = async (id: string) => {
+    try {
+      await approveSkillProposal(id);
+      success('Usulan skill disetujui! Skill baru dibuat dalam keadaan NONAKTIF. Anda dapat mengaktifkannya di tab Keterampilan.');
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Gagal menyetujui usulan skill.');
+    }
+  };
+
+  const handleRejectProposalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectDialog.proposalId) return;
+    try {
+      await rejectSkillProposal(rejectDialog.proposalId, rejectDialog.reason.trim() || 'Ditolak oleh pengguna.');
+      success('Usulan skill berhasil ditolak.');
+      setRejectDialog({ open: false, proposalId: null, reason: '' });
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Gagal menolak usulan skill.');
+    }
+  };
 
   const handleToggleSkill = async (skillName: string, currentEnabled: boolean, isReadOnly?: boolean) => {
     if (isReadOnly) {
@@ -225,6 +264,18 @@ export const SkillMcpView: React.FC = () => {
           >
             <Server size={16} />
             {idID.skillsMcp.tabs.mcp}
+          </button>
+          <button
+            className={`skill-mcp-tab-btn ${activeTab === 'proposals' ? 'active' : ''}`}
+            onClick={() => setActiveTab('proposals')}
+          >
+            <FileCode size={16} />
+            {idID.skillsMcp.tabs.proposals}
+            {skillProposals.filter((p) => p.status === 'pending').length > 0 && (
+              <span className="activity-badge">
+                {skillProposals.filter((p) => p.status === 'pending').length}
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -591,6 +642,165 @@ export const SkillMcpView: React.FC = () => {
         </div>
       )}
 
+      {/* PROPOSALS TAB CONTENT */}
+      {activeTab === 'proposals' && (
+        <div className="skills-tab-content">
+          <div className="skills-toolbar">
+            <div className="skill-mcp-titles">
+              <h2 style={{ fontSize: '1.1rem', margin: 0 }}>
+                {idID.skillsMcp.proposalsSection.title}
+              </h2>
+              <p style={{ margin: 'var(--space-1) 0 0 0', fontSize: '0.85rem' }}>
+                {idID.skillsMcp.proposalsSection.subtitle}
+              </p>
+            </div>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              iconLeft={<RefreshCw size={14} className={skillProposalsLoading ? 'spin' : ''} />}
+              onClick={() => void fetchSkillProposals()}
+            >
+              {idID.skillsMcp.proposalsSection.refresh}
+            </Button>
+          </div>
+
+          <div className="risk-card" style={{ marginTop: 'var(--space-2)' }}>
+            <div className="risk-card-header">
+              <ShieldCheck size={16} />
+              <span>{idID.skillsMcp.riskEducation.title}</span>
+            </div>
+            <div className="risk-card-body">
+              {idID.skillsMcp.proposalsSection.safetyNote}
+            </div>
+          </div>
+
+          <div className="skills-grid" style={{ marginTop: 'var(--space-4)' }}>
+            {skillProposals.length === 0 ? (
+              <div className="sidebar-empty-state" style={{ gridColumn: '1 / -1' }}>
+                {idID.skillsMcp.proposalsSection.empty}
+              </div>
+            ) : (
+              skillProposals.map((proposal) => {
+                const manifest = (proposal.proposedManifest ?? {}) as Record<string, unknown>;
+                const isImprovement = Boolean(proposal.targetSkillName);
+                const skillTitle = proposal.targetSkillName || String(manifest.name || proposal.skillName || 'Skill Tanpa Nama');
+                const toolsList = Array.isArray(manifest.tools) ? (manifest.tools as string[]) : [];
+
+                return (
+                  <div key={proposal.id} className="skill-card">
+                    <div>
+                      <div className="skill-card-header">
+                        <div className="skill-title-block">
+                          <span className="skill-title">{skillTitle}</span>
+                          <span className="skill-scope-badge">
+                            {isImprovement
+                              ? idID.skillsMcp.proposalsSection.improvementBadge
+                              : idID.skillsMcp.proposalsSection.newSkillBadge}
+                          </span>
+                        </div>
+                        <span
+                          className={`risk-pill ${
+                            proposal.status === 'approved'
+                              ? 'low'
+                              : proposal.status === 'rejected'
+                                ? 'high'
+                                : 'medium'
+                          }`}
+                        >
+                          {proposal.status === 'approved'
+                            ? idID.skillsMcp.proposalsSection.statusApproved
+                            : proposal.status === 'rejected'
+                              ? idID.skillsMcp.proposalsSection.statusRejected
+                              : idID.skillsMcp.proposalsSection.statusPending}
+                        </span>
+                      </div>
+
+                      <p className="skill-description">
+                        {String(manifest.description || proposal.description || 'Tidak ada deskripsi')}
+                      </p>
+
+                      <div className="skill-meta-row" style={{ marginTop: 'var(--space-2)' }}>
+                        <span className="skill-meta-item">
+                          <strong>Judul:</strong> {proposal.title}
+                        </span>
+                        {proposal.taskId && (
+                          <span className="skill-meta-item">
+                            <strong>Sumber Task:</strong> #{proposal.taskId.slice(0, 8)}
+                          </span>
+                        )}
+                        <span className="skill-meta-item">
+                          <strong>Tingkat Risiko:</strong> {String(manifest.riskLevel || 'LOW')}
+                        </span>
+                        {toolsList.length > 0 && (
+                          <span className="skill-meta-item">
+                            <strong>Alat:</strong> {toolsList.join(', ')}
+                          </span>
+                        )}
+                      </div>
+
+                      {proposal.promptInstructions && (
+                        <div style={{ marginTop: 'var(--space-2)' }}>
+                          <span className="settings-label" style={{ fontSize: '0.8rem' }}>Instruksi Prompt:</span>
+                          <pre
+                            className="manifest-code-box"
+                            style={{ maxHeight: '120px', overflowY: 'auto', fontSize: '0.8rem', whiteSpace: 'pre-wrap' }}
+                          >
+                            {proposal.promptInstructions}
+                          </pre>
+                        </div>
+                      )}
+
+                      {proposal.diff && (
+                        <div className="task-event-diff-box" style={{ marginTop: 'var(--space-2)' }}>
+                          <span className="settings-label" style={{ fontSize: '0.8rem' }}>
+                            {idID.skillsMcp.proposalsSection.viewDiff}
+                          </span>
+                          <pre className="tool-step-pre" style={{ maxHeight: '150px', overflowY: 'auto' }}>
+                            {proposal.diff.split('\n').map((line, lIdx) => {
+                              let lineClass = '';
+                              if (line.startsWith('+')) lineClass = 'diff-line-add';
+                              else if (line.startsWith('-')) lineClass = 'diff-line-del';
+                              else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
+                              return <div key={lIdx} className={lineClass}>{line}</div>;
+                            })}
+                          </pre>
+                        </div>
+                      )}
+
+                      {proposal.status === 'rejected' && proposal.rejectionReason && (
+                        <div className="task-error-banner" style={{ marginTop: 'var(--space-2)' }}>
+                          <strong>{idID.skillsMcp.proposalsSection.rejectionReason}</strong> {proposal.rejectionReason}
+                        </div>
+                      )}
+                    </div>
+
+                    {proposal.status === 'pending' && (
+                      <div className="skill-card-footer" style={{ marginTop: 'var(--space-3)', display: 'flex', gap: 'var(--space-2)' }}>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => handleApproveProposal(proposal.id)}
+                        >
+                          {idID.skillsMcp.proposalsSection.approveAction}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => setRejectDialog({ open: true, proposalId: proposal.id, reason: '' })}
+                        >
+                          {idID.skillsMcp.proposalsSection.rejectAction}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
       {/* MANIFEST MODAL DIALOG */}
       <Dialog
         isOpen={manifestModal.open}
@@ -746,6 +956,37 @@ export const SkillMcpView: React.FC = () => {
             </Button>
             <Button variant="primary" type="submit">
               {idID.skillsMcp.mcpSection.confirmAdd}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
+      {/* REJECT PROPOSAL MODAL DIALOG */}
+      <Dialog
+        isOpen={rejectDialog.open}
+        onClose={() => setRejectDialog({ open: false, proposalId: null, reason: '' })}
+        title={idID.skillsMcp.proposalsSection.rejectAction}
+      >
+        <form onSubmit={handleRejectProposalSubmit} className="mcp-form-body">
+          <p className="settings-label">
+            {idID.skillsMcp.proposalsSection.reasonPrompt}
+          </p>
+          <textarea
+            className="project-select mcp-form-input"
+            rows={3}
+            value={rejectDialog.reason}
+            onChange={(e) => setRejectDialog({ ...rejectDialog, reason: e.target.value })}
+            placeholder="Contoh: Format manifest tidak sesuai standar atau pola belum teruji."
+          />
+          <div className="mcp-form-actions" style={{ marginTop: 'var(--space-3)' }}>
+            <Button
+              variant="secondary"
+              onClick={() => setRejectDialog({ open: false, proposalId: null, reason: '' })}
+            >
+              {idID.common.cancel}
+            </Button>
+            <Button variant="danger" type="submit">
+              {idID.skillsMcp.proposalsSection.rejectAction}
             </Button>
           </div>
         </form>
