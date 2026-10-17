@@ -63,3 +63,26 @@ Dokumen ini mencatat seluruh UI Skills (https://www.ui-skills.com) yang diakses 
 - **URL Sumber**: https://www.ui-skills.com/skills/pbakaus/clarify/llms.txt
 - **Ringkasan Penggunaan**: Memastikan hierarki pesan antarmuka pengguna dalam bahasa Indonesia yang lugas, tidak berbelit-belit, dan menyajikan tindakan pemulihan yang jelas pada kondisi error atau izin.
 - **Tindakan yang Diabaikan**: Tidak ada tindakan yang diabaikan.
+
+---
+
+## 3. Skill Yang Diterapkan pada Sesi 22 (Rombak UI/UX Windows)
+
+Seluruh skill di bawah ini dijadikan panduan perancangan dan refaktorisasi antarmuka 8 layar Windows. Seluruh aturan teknis, keamanan, dan non-eksekusi skrip eksternal dipatuhi secara ketat.
+
+| Skill | Tanggal Akses | Peran & Penerapan di Sesi 22 |
+|---|---|---|
+| `pbakaus/layout` | 2026-10-17 | Mengatur batas lebar kontainer obrolan (720px), tata letak 2 kolom pengaturan vertikal, dan pembungkus horizontal chip komposer tanpa meluap. |
+| `pbakaus/typeset` | 2026-10-17 | Hierarki tipografi sans-serif lokal Inter (Regular, Medium, SemiBold, Bold) tanpa panggilan CDN, monospace pada diff/checkpoint/token. |
+| `kemiljk/subtractive-design` | 2026-10-17 | Mengurangi kepekatan warna tombol "Obrolan Baru" menjadi `secondary` dengan badge `<kbd>Ctrl+N</kbd>`, menghapus emoji 🪟 dan ⚠️ dari alur login, menghapus bayangan tebal. |
+| `kemiljk/interface-affordances` | 2026-10-17 | Target interaktif $\ge 32\text{px}$ pada desktop, cincin fokus terlihat (`:focus-visible`), tombol salin path dengan umpan balik visual "Tersalin!", breadcrumb konteks di header. |
+| `jakubkrehel/better-layout` | 2026-10-17 | Navigasi tab sisi samping pada Pengaturan, tata letak grid kartu kesehatan sistem (API, WSS, Worker), grid contoh prompt empty state. |
+| `better-typography` | 2026-10-17 | Ukuran font proporsional, perataan teks, pelabelan status yang tegas. |
+| `better-colors` | 2026-10-17 | Palet warna harmonis bertoken, pembedaan aksen risiko HIGH (`--color-risk-high`) dan CRITICAL (`--color-risk-critical`) dengan border dan background subtle. |
+| `better-writing` | 2026-10-17 | Teks UI berbahasa Indonesia baku konsisten (id-ID), tombol berorientasi aksi ("Hubungkan Kembali", "Coba lagi", "Hentikan", "Salin"). |
+| `ibelick/baseline-ui` | 2026-10-17 | Penanganan 5 status antarmuka (kosong, memuat/skeleton, normal, error, offline) pada semua layar. |
+| `ibelick/fixing-accessibility` | 2026-10-17 | Kontras WCAG AA (>4.5:1 untuk teks normal, >7:1 untuk teks utama pada tema gelap dan terang), aria-label, role status/alert/dialog, dukungan penuh `prefers-reduced-motion`. |
+| `arla6ka/token-mapping` | 2026-10-17 | Pemetaan 100% nilai warna hex, rgba, dan spasi ke variabel CSS token; diverifikasi dengan skrip otomatis `scripts/check-design-tokens.ts` (0 pelanggaran). |
+| `pbakaus/harden` | 2026-10-17 | Pencegahan overflow teks dengan ellipsis pada breadcrumb dan path direktori, batas tinggi maksimal pada textarea komposer. |
+| `pbakaus/polish` | 2026-10-17 | Transisi fungsional halus (150–200ms ease-out), peniadaan animasi dekoratif tanpa henti, penyelarasan radius sudut (sm: 8px, md: 12px, lg: 16px). |
+
