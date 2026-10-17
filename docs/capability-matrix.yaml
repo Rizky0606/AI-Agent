@@ -1,5 +1,5 @@
 version: 1
-updated: 2026-10-16
+updated: 2026-10-17
 capabilities:
   control_plane:
     status: implemented
@@ -167,7 +167,14 @@ capabilities:
       - Untrusted Output Sanitization: Output from external runtimes is strictly isolated and wrapped in `<untrusted_content is_instruction="false">...</untrusted_content>` before ingestion into artifacts or context.
       - Telegram & Deep Link Safety: Single Telegram instance policy enforced (no second bot). Notifications carry deep links (`personal-ai://tasks/:taskId`, `personal-ai://approvals/:approvalId`). HIGH and CRITICAL approvals strictly require authenticated application JWT sessions and secondary modal confirmation; approvals cannot be made directly from unauthenticated Telegram messages.
       - In Sesi 19: Fixed race condition during runtime cancellation in `apps/runtime-bridge` and verified all 9 tests pass. Renumbered runtime mapping ADR to ADR 0020 and updated verified facts (can1357/oh-my-pi, Odysseus 1.0.2 release tag, pi.dev 4 standard tools).
-      - Remaining gaps: Marked as Partial because interactive visual runtime integration on Windows/Android physical displays requires live visual check, and daemon HTTP prompt execution on Hermes VPS port 9119 remains unauthenticated (TIDAK TERVERIFIKASI).
+      - In Sesi 20 (ADR 0022): Implemented end-to-end live agent step streaming across Windows and Android:
+        1. Unified `RuntimeStepEvent` schema in `@personal-ai-os/shared` (types: `message`, `tool_start`, `tool_end`, `file_edit` with diff, `error`, `done`; fields: `id`, `taskId`, `runtime`, `urutan`, `waktu`).
+        2. Strict sanitization & bounds: untrusted output stripped of HTML tags, event handlers, and `javascript:` pseudo-protocols; diff bounded to 32 KB, text bounded to 16 KB.
+        3. Sequential execution event queue in `TaskExecutor` emitting structured `task.progress` runtime steps persisted to `task_events` and broadcasted via WebSocket.
+        4. Windows: `ToolStepCard` integrated into `TaskCard` (Aktivitas panel) and `ChatMessages` (chat view) with collapsible timeline, colored diffs, running/completed/failed status, runtime badges, and bottom-guarded auto-scroll (`isAtBottom`).
+        5. Android: `TaskDetailScreen` timeline updated with `DiffBlock` (monospace font, 140dp height limit, "Lihat semua" / "Tutup diff" toggle), status pills, and runtime badges.
+        6. Resilience & Replay: Duplicate suppression and sequence sorting (`sortRuntimeEvents`) across reconnects using `last_event_id`.
+      - Remaining gaps: Marked as Partial because interactive visual rendering on Windows/Android physical displays requires manual verification on real hardware ("Belum diverifikasi di perangkat fisik"), and daemon HTTP prompt execution on Hermes VPS port 9119 remains unauthenticated (TIDAK TERVERIFIKASI).
   skills_and_mcp_manager:
     status: implemented
     code: packages/agent-core/src/skills; packages/mcp; apps/api/src/routes/skills.ts; apps/api/src/routes/mcp.ts; apps/api/src/db/skill-repository.ts; apps/api/src/db/mcp-repository.ts; apps/windows/src/ui/skills; apps/android/src/screens/SettingsScreen.tsx; docs/adr/0015-skill-dan-mcp-manager.md; docs/skills/writing-skills.md
