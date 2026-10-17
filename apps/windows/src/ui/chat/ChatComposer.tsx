@@ -78,35 +78,15 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
       <div className="floating-composer-card">
         {/* Model Notice Banner if model disappeared and reverted to Auto */}
         {modelNotice && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '6px 12px',
-              backgroundColor: 'rgba(245, 158, 11, 0.12)',
-              borderBottom: '1px solid rgba(245, 158, 11, 0.25)',
-              fontSize: 11,
-              color: 'var(--accent-amber, #f59e0b)',
-            }}
-            role="status"
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div className="composer-model-notice" role="status">
+            <div className="composer-notice-content">
               <AlertCircle size={13} />
               <span>{modelNotice}</span>
             </div>
             <button
               type="button"
               onClick={clearModelNotice}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'inherit',
-                cursor: 'pointer',
-                padding: 0,
-                display: 'flex',
-                alignItems: 'center',
-              }}
+              className="composer-notice-close-btn"
               aria-label="Tutup pemberitahuan"
             >
               <X size={12} />
@@ -116,22 +96,14 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
 
         {/* Top Toolbar with Model and Mode Chips */}
         <div className="composer-toolbar-top">
-          <div className="composer-chips-group" style={{ position: 'relative' }}>
+          <div className="composer-chips-group">
             {/* Mode Chip */}
             <div className="composer-chip" title="Mode Asisten AI">
               <SlidersHorizontal size={12} color="var(--accent-cyan)" />
               <select
                 value={selectedMode}
                 onChange={(e) => setSelectedMode(e.target.value as typeof selectedMode)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  fontSize: 11,
-                  color: 'inherit',
-                  cursor: 'pointer',
-                  outline: 'none',
-                  padding: 0,
-                }}
+                className="composer-chip-select"
                 aria-label={idID.chat.modeLabel}
               >
                 <option value="auto">{idID.chat.modes.auto}</option>
@@ -148,15 +120,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
               <select
                 value={selectedRuntime}
                 onChange={(e) => setSelectedRuntime(e.target.value as typeof selectedRuntime)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  fontSize: 11,
-                  color: 'inherit',
-                  cursor: 'pointer',
-                  outline: 'none',
-                  padding: 0,
-                }}
+                className="composer-chip-select"
                 aria-label={idID.chat.runtimeLabel}
               >
                 <option value="auto">{idID.chat.runtime.auto}</option>
@@ -191,17 +155,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
                     e.stopPropagation();
                     void refreshModels();
                   }}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#f59e0b',
-                    fontSize: 10,
-                    padding: 0,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 2,
-                  }}
+                  className="composer-model-offline-retry"
                   title="Katalog offline. Klik untuk coba lagi."
                 >
                   <RefreshCw size={10} />
