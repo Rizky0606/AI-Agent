@@ -17,6 +17,7 @@
     "test:live": "turbo run test:live",
     "test:ci": "pnpm -r lint && pnpm -r typecheck && pnpm -r test && pnpm -r build && pnpm verify:audit",
     "verify:audit": "node --experimental-strip-types scripts/verify-audit-refs.ts",
+    "check:tokens": "node --experimental-strip-types scripts/check-design-tokens.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
