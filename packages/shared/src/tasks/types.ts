@@ -66,7 +66,8 @@ export type TaskEventType =
   | 'task.failed'
   | 'task.cancelled'
   | 'task.paused'
-  | 'task.resumed';
+  | 'task.resumed'
+  | 'runtime.step';
 
 export interface TaskEventEnvelope {
   id: string;
@@ -84,3 +85,6 @@ export interface TaskEventBroadcaster {
   subscribeUser(userId: string, listener: (event: TaskEventEnvelope) => void): () => void;
   close?(): Promise<void>;
 }
+
+export * from './runtime-step-event.ts';
+
