@@ -90,8 +90,39 @@ export interface AuthSession {
   refreshToken: string;
   user: { id: string; email: string };
 }
-export interface WindowsChatMessage { id: string; conversationId: string; role: 'user' | 'assistant' | 'system'; content: string; metadata?: Record<string, unknown>; createdAt: string; cancelled?: boolean; }
-export interface WindowsConversation { id: string; title: string | null; projectId: string; createdAt: string; }
+export interface WindowsChatMessage {
+  id: string;
+  conversationId: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata?: Record<string, unknown> | undefined;
+  createdAt: string;
+  cancelled?: boolean | undefined;
+  parentMessageId?: string | null | undefined;
+  isActiveBranch?: boolean | undefined;
+  branchIndex?: number | undefined;
+  branchCount?: number | undefined;
+  siblingMessageIds?: string[] | undefined;
+}
+export interface WindowsConversation {
+  id: string;
+  title: string | null;
+  projectId: string;
+  createdAt: string;
+  compactedSummary?: string | null | undefined;
+}
+
+export interface PromptTemplateRecord {
+  id: string;
+  userId: string;
+  name: string;
+  title?: string | null;
+  content: string;
+  description?: string | null;
+  variables: string[];
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface MemoryItem {
   id: string;
@@ -397,6 +428,92 @@ export class ApiClient {
 
   async listMessages(conversationId: string): Promise<{ messages: WindowsChatMessage[] }> {
     return this.request<{ messages: WindowsChatMessage[] }>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`);
+  }
+
+  // --- Prompt Templates (Sesi 27) ---
+  async listPromptTemplates(): Promise<{ templates: PromptTemplateRecord[] }> {
+    return this.request<{ templates: PromptTemplateRecord[] }>('/v1/prompt-templates');
+  }
+
+  async createPromptTemplate(payload: {
+    name: string;
+    title?: string;
+    content: string;
+    description?: string;
+  }): Promise<{ template: PromptTemplateRecord }> {
+    return this.request<{ template: PromptTemplateRecord }>('/v1/prompt-templates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updatePromptTemplate(
+    id: string,
+    payload: {
+      name?: string;
+      title?: string;
+      content?: string;
+      description?: string;
+    },
+  ): Promise<{ template: PromptTemplateRecord }> {
+    return this.request<{ template: PromptTemplateRecord }>(`/v1/prompt-templates/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePromptTemplate(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/prompt-templates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Session Tree & Branching (Sesi 27) ---
+  async switchMessageBranch(
+    conversationId: string,
+    messageId: string,
+  ): Promise<{ messages: WindowsChatMessage[] }> {
+    return this.request<{ messages: WindowsChatMessage[] }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/switch`,
+      { method: 'POST' },
+    );
+  }
+
+  async deleteMessageBranch(
+    conversationId: string,
+    messageId: string,
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async exportConversation(
+    conversationId: string,
+    format: 'markdown' | 'html',
+  ): Promise<{ format: string; filename: string; content: string }> {
+    return this.request<{ format: string; filename: string; content: string }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/export?format=${encodeURIComponent(format)}`,
+    );
+  }
+
+  async compactConversation(
+    conversationId: string,
+  ): Promise<{
+    compacted: boolean;
+    reason?: string;
+    compactedSummary?: string;
+    compactedMessageCount?: number;
+  }> {
+    return this.request<{
+      compacted: boolean;
+      reason?: string;
+      compactedSummary?: string;
+      compactedMessageCount?: number;
+    }>(`/v1/conversations/${encodeURIComponent(conversationId)}/compact`, {
+      method: 'POST',
+    });
   }
 
   // --- Memories ---

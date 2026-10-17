@@ -9,10 +9,13 @@ import {
   X,
   AlertCircle,
   Terminal,
+  Clock,
+  FileText,
 } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import { idID } from '../locales/id-ID.ts';
 import { ModelSelectorPopover } from './ModelSelectorPopover.tsx';
+import type { PromptTemplateRecord } from '../../api/client.ts';
 
 interface ChatComposerProps {
   textareaRef?: React.Ref<HTMLTextAreaElement> | undefined;
@@ -47,9 +50,15 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     fetchResearchConfig,
     startResearch,
     isLoadingResearch,
+    messageQueue,
+    queueMessage,
+    promptTemplates,
+    fetchPromptTemplates,
+    cycleFavoriteModel,
   } = useAgentStore();
 
   const [isModelPopoverOpen, setIsModelPopoverOpen] = useState(false);
+  const [templateSearch, setTemplateSearch] = useState<string | null>(null);
   const localRef = useRef<HTMLTextAreaElement | null>(null);
   const modelChipAnchorRef = useRef<HTMLDivElement | null>(null);
 
@@ -65,6 +74,20 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     }
   }, [selectedMode, fetchResearchConfig]);
 
+  useEffect(() => {
+    void fetchPromptTemplates();
+  }, [fetchPromptTemplates]);
+
+  // Handle slash template trigger detection
+  useEffect(() => {
+    if (chatDraft.startsWith('/')) {
+      const query = chatDraft.slice(1).trim().toLowerCase();
+      setTemplateSearch(query);
+    } else {
+      setTemplateSearch(null);
+    }
+  }, [chatDraft]);
+
   // Auto resize textarea height based on content up to 140px
   useEffect(() => {
     if (localRef.current) {
@@ -74,7 +97,11 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   }, [chatDraft]);
 
   const handleSubmit = async () => {
-    if (!chatDraft.trim() || chatStreaming || isLoadingResearch) return;
+    if (!chatDraft.trim() || isLoadingResearch) return;
+    if (chatStreaming) {
+      queueMessage(chatDraft);
+      return;
+    }
     if (selectedMode === 'research') {
       const q = chatDraft.trim();
       setChatDraft('');
@@ -91,7 +118,22 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     }
   };
 
+  const handleSelectTemplate = (template: PromptTemplateRecord) => {
+    setChatDraft(template.content);
+    setTemplateSearch(null);
+    if (localRef.current) {
+      localRef.current.focus();
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Sesi 27: Shortcut keyboard Ctrl+M / Alt+M untuk siklus model favorit
+    if ((e.ctrlKey || e.altKey) && (e.key === 'm' || e.key === 'M')) {
+      e.preventDefault();
+      cycleFavoriteModel();
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSubmit();
@@ -251,7 +293,139 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           </div>
         )}
 
-        {/* Input Textarea and Send/Stop Button */}
+        {/* Prompt Template Autocomplete Popover (Sesi 27) */}
+        {templateSearch !== null && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '100%',
+              left: 12,
+              right: 12,
+              marginBottom: 8,
+              maxHeight: 220,
+              overflowY: 'auto',
+              borderRadius: 8,
+              border: '1px solid var(--border-subtle, #334155)',
+              background: 'var(--bg-secondary, #1e293b)',
+              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
+              zIndex: 50,
+              padding: 6,
+            }}
+            role="listbox"
+            aria-label="Daftar Template Prompt"
+          >
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--text-sub, #94a3b8)',
+                padding: '4px 8px',
+                borderBottom: '1px solid var(--border-subtle, #334155)',
+                marginBottom: 4,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <FileText size={12} color="var(--accent-cyan, #06b6d4)" />
+              <span>{idID.chat.templates.title} ({promptTemplates.length})</span>
+            </div>
+            {promptTemplates
+              .filter(
+                (t) =>
+                  t.name.toLowerCase().includes(templateSearch) ||
+                  (t.title && t.title.toLowerCase().includes(templateSearch)),
+              )
+              .map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => handleSelectTemplate(t)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    width: '100%',
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-main, #f8fafc)',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-tertiary, #334155)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <strong style={{ color: 'var(--accent-cyan, #06b6d4)' }}>/{t.name}</strong>
+                    <span style={{ color: 'var(--text-sub, #94a3b8)' }}>{t.title || t.description || ''}</span>
+                  </div>
+                  {t.variables && t.variables.length > 0 && (
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      {t.variables.map((v) => (
+                        <span
+                          key={v}
+                          style={{
+                            fontSize: 10,
+                            padding: '1px 5px',
+                            borderRadius: 3,
+                            background: 'rgba(6, 182, 212, 0.15)',
+                            color: 'var(--accent-cyan, #06b6d4)',
+                          }}
+                        >
+                          {`{{${v}}}`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              ))}
+            {promptTemplates.length === 0 && (
+              <div style={{ fontSize: 11, color: 'var(--text-sub, #94a3b8)', padding: '8px 10px' }}>
+                {idID.chat.templates.noTemplates}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Message Queue Ribbon Banner (Sesi 27) */}
+        {messageQueue.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '4px 12px',
+              background: 'rgba(6, 182, 212, 0.1)',
+              borderBottom: '1px solid rgba(6, 182, 212, 0.2)',
+              fontSize: 11,
+              color: 'var(--accent-cyan, #06b6d4)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Clock size={12} />
+              <span>
+                {idID.chat.queue.queuedCount(messageQueue.length)}: &quot;{messageQueue[0]?.slice(0, 36)}...&quot;
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => useAgentStore.setState({ messageQueue: [] })}
+              className="ui-btn ui-btn-ghost ui-btn-sm"
+              style={{ fontSize: 10, padding: '1px 6px', height: 20 }}
+            >
+              {idID.chat.queue.clearQueue}
+            </button>
+          </div>
+        )}
+
+        {/* Input Textarea and Send/Queue/Stop Button */}
         <div className="composer-input-row">
           <textarea
             ref={(node) => {
@@ -266,26 +440,42 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             placeholder={
               selectedMode === 'research'
                 ? 'Tulis topik riset mendalam... (Enter untuk mulai riset)'
-                : idID.chat.composerPlaceholder
+                : chatStreaming
+                  ? 'Ketik pesan untuk dimasukkan ke antrean (Enter untuk Antre)...'
+                  : idID.chat.composerPlaceholder
             }
             value={chatDraft}
             onChange={(e) => setChatDraft(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            disabled={chatStreaming || isLoadingResearch}
+            disabled={isLoadingResearch}
             aria-label="Pesan Anda"
           />
 
           {chatStreaming ? (
-            <button
-              type="button"
-              className="ui-icon-btn ui-icon-btn-danger ui-icon-btn-md"
-              onClick={cancelChat}
-              title={idID.chat.stop}
-              aria-label={idID.chat.stop}
-            >
-              <Square size={16} fill="currentColor" />
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {chatDraft.trim().length > 0 && (
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-primary ui-btn-sm"
+                  onClick={() => void handleSubmit()}
+                  title={idID.chat.queue.action}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 32 }}
+                >
+                  <Clock size={13} />
+                  <span>{idID.chat.queue.action}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="ui-icon-btn ui-icon-btn-danger ui-icon-btn-md"
+                onClick={cancelChat}
+                title={idID.chat.stop}
+                aria-label={idID.chat.stop}
+              >
+                <Square size={16} fill="currentColor" />
+              </button>
+            </div>
           ) : (
             <button
               type="button"

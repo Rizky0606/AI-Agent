@@ -16,7 +16,7 @@ import {
   type TaskEventEnvelope,
   type TaskRecord,
 } from '@personal-ai-os/shared';
-import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem } from '../api/client.ts';
+import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem, type PromptTemplateRecord } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
@@ -134,19 +134,25 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  cancelled?: boolean;
-  model?: string | null;
-  resolvedModel?: string | null;
-  fallbackUsed?: boolean;
+  cancelled?: boolean | undefined;
+  model?: string | null | undefined;
+  resolvedModel?: string | null | undefined;
+  fallbackUsed?: boolean | undefined;
+  parentMessageId?: string | null | undefined;
+  isActiveBranch?: boolean | undefined;
+  branchIndex?: number | undefined;
+  branchCount?: number | undefined;
+  siblingMessageIds?: string[] | undefined;
 }
 export interface ChatConversation {
   id: string;
   title: string;
   messages: ChatMessage[];
-  projectId?: string;
-  createdAt?: string;
-  model?: string | null;
-  mode?: 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+  projectId?: string | undefined;
+  createdAt?: string | undefined;
+  model?: string | null | undefined;
+  mode?: ('auto' | 'fast' | 'coding' | 'complex' | 'research') | undefined;
+  compactedSummary?: string | null | undefined;
 }
 export type ChatStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
@@ -314,6 +320,20 @@ export interface AgentState {
   synthesizeCompare: (runId: string, synthesisModelId?: string) => Promise<void>;
   promoteCompare: (runId: string, options?: { target?: 'new' | 'existing'; conversationId?: string }) => Promise<PromoteCompareResponse>;
   deleteCompare: (runId: string) => Promise<void>;
+  // Sesi 27
+  promptTemplates: PromptTemplateRecord[];
+  promptTemplatesLoading: boolean;
+  messageQueue: string[];
+  fetchPromptTemplates: () => Promise<void>;
+  createPromptTemplate: (tpl: { name: string; title?: string; content: string; description?: string }) => Promise<void>;
+  deletePromptTemplate: (id: string) => Promise<void>;
+  switchMessageBranch: (messageId: string) => Promise<void>;
+  deleteMessageBranch: (messageId: string) => Promise<void>;
+  exportActiveConversation: (format: 'markdown' | 'html') => Promise<{ filename: string; content: string }>;
+  compactActiveConversation: () => Promise<{ compacted: boolean; reason?: string }>;
+  queueMessage: (content: string) => void;
+  dequeueAndSend: () => void;
+  cycleFavoriteModel: () => void;
 }
 
 export const createAgentStore = (
@@ -479,7 +499,11 @@ export const createAgentStore = (
     sendChat: () => {
       const state = get();
       const content = state.chatDraft.trim();
-      if (!content || state.chatStreaming) return;
+      if (!content) return;
+      if (state.chatStreaming) {
+        get().queueMessage(content);
+        return;
+      }
       if (!state.authToken.trim() || !activeChatConnection) { set({ chatError: 'Sign in to send a message.' }); return; }
       const id = state.activeConversationId || `draft-${crypto.randomUUID()}`;
       pendingChat = { content, conversationId: id };
@@ -1058,11 +1082,21 @@ export const createAgentStore = (
               model: resolvedModel,
               resolvedModel,
               fallbackUsed,
+              parentMessageId: incoming?.parentMessageId,
+              isActiveBranch: incoming?.isActiveBranch,
+              branchIndex: incoming?.branchIndex,
+              branchCount: incoming?.branchCount,
+              siblingMessageIds: incoming?.siblingMessageIds,
             } as ChatMessage;
             return { ...conversation, messages: existing ? conversation.messages.map((item) => item.id === id ? { ...item, ...message } : item) : [...conversation.messages, message] };
           });
           const done = frame.type === 'message.completed' || frame.type === 'message.cancelled';
-          if (done) pendingChat = null;
+          if (done) {
+            pendingChat = null;
+            setTimeout(() => {
+              get().dequeueAndSend();
+            }, 50);
+          }
           return { conversations, chatStreaming: !done };
         }),
       });
@@ -1097,9 +1131,15 @@ export const createAgentStore = (
                   model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : (typeof message.metadata?.['model'] === 'string' ? message.metadata['model'] : null),
                   resolvedModel: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null,
                   fallbackUsed: Boolean(message.metadata?.['fallbackUsed']),
+                  parentMessageId: message.parentMessageId,
+                  isActiveBranch: message.isActiveBranch,
+                  branchIndex: message.branchIndex,
+                  branchCount: message.branchCount,
+                  siblingMessageIds: message.siblingMessageIds,
                 }]
               : []
           ),
+          compactedSummary: item.compactedSummary,
         })));
         if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
         set((current) => {
@@ -1615,6 +1655,151 @@ export const createAgentStore = (
         compareHistory: state.compareHistory.filter((c) => c.id !== runId),
       }));
     }),
+
+    // --- Sesi 27 Implementations ---
+    promptTemplates: [],
+    promptTemplatesLoading: false,
+    messageQueue: [],
+
+    queueMessage: (content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed) return;
+      set((state) => ({
+        messageQueue: [...state.messageQueue, trimmed],
+        chatDraft: '',
+      }));
+    },
+
+    dequeueAndSend: () => {
+      const { messageQueue, chatStreaming } = get();
+      if (chatStreaming || messageQueue.length === 0) return;
+      const [nextContent, ...remainingQueue] = messageQueue;
+      if (!nextContent) return;
+      set({ messageQueue: remainingQueue, chatDraft: nextContent });
+      get().sendChat();
+    },
+
+    cycleFavoriteModel: () => {
+      const state = get();
+      const pool = state.favoriteModels.length > 0
+        ? state.favoriteModels
+        : state.models.map((m) => m.id);
+      if (pool.length === 0) return;
+      const currentIndex = pool.indexOf(state.selectedModel);
+      const nextIndex = (currentIndex + 1) % pool.length;
+      const nextModel = pool[nextIndex]!;
+      void get().setConversationModel(nextModel);
+    },
+
+    fetchPromptTemplates: async () => {
+      set({ promptTemplatesLoading: true });
+      try {
+        const { templates } = await api().listPromptTemplates();
+        set({ promptTemplates: templates, promptTemplatesLoading: false });
+      } catch {
+        set({ promptTemplatesLoading: false });
+      }
+    },
+
+    createPromptTemplate: async (tpl) => {
+      await api().createPromptTemplate(tpl);
+      await get().fetchPromptTemplates();
+    },
+
+    deletePromptTemplate: async (id: string) => {
+      await api().deletePromptTemplate(id);
+      await get().fetchPromptTemplates();
+    },
+
+    switchMessageBranch: async (messageId: string) => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) return;
+      try {
+        const { messages } = await api().switchMessageBranch(convId, messageId);
+        set((current) => ({
+          conversations: current.conversations.map((c) =>
+            c.id === convId
+              ? {
+                  ...c,
+                  messages: messages.map((m) => ({
+                    id: m.id,
+                    role: m.role === 'system' ? 'assistant' : m.role,
+                    content: m.content,
+                    cancelled: Boolean(m.cancelled),
+                    parentMessageId: m.parentMessageId ?? null,
+                    isActiveBranch: m.isActiveBranch,
+                    branchIndex: m.branchIndex,
+                    branchCount: m.branchCount,
+                    siblingMessageIds: m.siblingMessageIds,
+                  })),
+                }
+              : c
+          ),
+        }));
+      } catch (err) {
+        set({ chatError: err instanceof Error ? err.message : 'Gagal berpindah cabang pesan' });
+      }
+    },
+
+    deleteMessageBranch: async (messageId: string) => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) return;
+      try {
+        await api().deleteMessageBranch(convId, messageId);
+        // Refresh conversation messages after branch deletion
+        const { messages } = await api().listMessages(convId);
+        set((current) => ({
+          conversations: current.conversations.map((c) =>
+            c.id === convId
+              ? {
+                  ...c,
+                  messages: messages.map((m) => ({
+                    id: m.id,
+                    role: m.role === 'system' ? 'assistant' : m.role,
+                    content: m.content,
+                    cancelled: Boolean(m.cancelled),
+                    parentMessageId: m.parentMessageId ?? null,
+                    isActiveBranch: m.isActiveBranch,
+                    branchIndex: m.branchIndex,
+                    branchCount: m.branchCount,
+                    siblingMessageIds: m.siblingMessageIds,
+                  })),
+                }
+              : c
+          ),
+        }));
+      } catch (err) {
+        set({ chatError: err instanceof Error ? err.message : 'Gagal menghapus cabang pesan' });
+      }
+    },
+
+    exportActiveConversation: async (format: 'markdown' | 'html') => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) {
+        throw new Error('Percakapan aktif belum disimpan di server');
+      }
+      return api().exportConversation(convId, format);
+    },
+
+    compactActiveConversation: async () => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) {
+        return { compacted: false, reason: 'Percakapan belum tersimpan' };
+      }
+      try {
+        const res = await api().compactConversation(convId);
+        if (res.compacted && res.compactedSummary) {
+          set((current) => ({
+            conversations: current.conversations.map((c) =>
+              c.id === convId ? { ...c, compactedSummary: res.compactedSummary ?? null } : c
+            ),
+          }));
+        }
+        return res;
+      } catch (err) {
+        return { compacted: false, reason: err instanceof Error ? err.message : 'Gagal meringkas konteks' };
+      }
+    },
     };
   });
 };
