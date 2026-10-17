@@ -15,12 +15,14 @@ export interface ContextAssemblyInput {
   taskState?: Record<string, unknown> | undefined;
   toolOutputs?: readonly { toolName: string; output: string }[] | undefined;
   artifacts?: readonly { id: string; title: string; content: string }[] | undefined;
+  compactedSummary?: string | undefined;
   options?:
     | {
         tokenBudget?: number | undefined;
         toolOutputMaxChars?: number | undefined;
         maxHistoryMessages?: number | undefined;
         topK?: number | undefined;
+        compactionThreshold?: number | undefined;
       }
     | undefined;
 }
@@ -32,6 +34,8 @@ export interface ContextAssemblyResult {
   budgetRemaining: number;
   truncatedSections: readonly string[];
   summarizedHistoryCount: number;
+  isCompacted: boolean;
+  compactedSummary?: string | undefined;
   preservedSecurityPoliciesCount: number;
   usedMemories: readonly MemoryRecord[];
   usedMemoryIds: readonly string[];
@@ -164,19 +168,30 @@ export class ContextManager {
       }
     }
 
-    // 7. CONVERSATION HISTORY & SUMMARIZATION
+    // 7. CONVERSATION HISTORY & SUMMARIZATION / COMPACTION
     const history = input.conversationHistory ?? [];
     let summarizedHistoryCount = 0;
+    let isCompacted = Boolean(input.compactedSummary);
+    let resultingCompactedSummary: string | undefined = input.compactedSummary;
     const recentMessages: ChatMessage[] = [];
 
+    // Inject existing compactedSummary if provided
+    if (input.compactedSummary && input.compactedSummary.trim().length > 0) {
+      contextSections.push(`[RINGKASAN KONTEKS PERCAKAPAN TERDAHULU]:\n${input.compactedSummary.trim()}`);
+    }
+
     if (history.length > 0) {
-      // Keep recent messages, summarize older ones if history is long or budget tight
-      const recentWindow = 6;
+      const compactionThreshold = input.options?.compactionThreshold ?? 0.75;
+      const historyTokens = history.reduce((acc, m) => acc + estimateTokens(m.content), 0);
+      const isApproachingLimit = historyTokens > tokenBudget * compactionThreshold;
+      const recentWindow = isApproachingLimit ? 4 : 6;
+
       if (history.length > recentWindow) {
         summarizedHistoryCount = history.length - recentWindow;
         const older = history.slice(0, summarizedHistoryCount);
-        const olderSummary = `[RINGKASAN RIWAYAT LAMBAU (${older.length} pesan)]: Diskusi sebelumnya melibatkan topik terkait: ${older.map((m) => m.content.slice(0, 40)).join('; ')}...`;
-        contextSections.push(olderSummary);
+        resultingCompactedSummary = `[RINGKASAN RIWAYAT LAMBAU (${older.length} pesan)]: Diskusi sebelumnya melibatkan topik terkait: ${older.map((m) => `${m.role}: ${m.content.slice(0, 50)}`).join('; ')}...`;
+        contextSections.push(resultingCompactedSummary);
+        isCompacted = true;
       }
 
       const sliceToKeep = history.slice(summarizedHistoryCount);
@@ -234,6 +249,8 @@ export class ContextManager {
       budgetRemaining: Math.max(0, tokenBudget - totalTokens),
       truncatedSections,
       summarizedHistoryCount,
+      isCompacted,
+      compactedSummary: resultingCompactedSummary,
       preservedSecurityPoliciesCount: input.systemPolicies.length,
       usedMemories,
       usedMemoryIds: usedMemories.map((m) => m.id),

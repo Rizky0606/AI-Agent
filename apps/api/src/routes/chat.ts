@@ -11,6 +11,7 @@ import { ModelGatewayError } from '@personal-ai-os/model-gateway';
 import { MemoryCandidateExtractor } from '@personal-ai-os/memory';
 import { defaultTracer } from '@personal-ai-os/shared';
 import type { MemoryRepository } from '../db/memory-repository.ts';
+import { exportConversationToMarkdown, exportConversationToHtml } from '../services/conversation-exporter.ts';
 
 export type ChatRouteDependencies = {
   auth: AuthService;
@@ -38,6 +39,7 @@ type IncomingWsMessage =
       mode?: ChatMode;
       content: string;
       attachments?: Array<{ type: 'image'; url: string }>;
+      parentMessageId?: string | null;
     }
   | { type: 'chat.cancel'; messageId?: string }
   | { type: 'ping' };
@@ -58,11 +60,122 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
     if (!authHeader?.startsWith('Bearer ')) throw new AuthError('UNAUTHENTICATED', 'authentication required');
     const user = await deps.auth.authenticate(authHeader.slice(7));
     const { conversationId } = request.params as { conversationId: string };
+    const query = request.query as { allTree?: string };
     const conversation = await deps.chatRepo.getConversation(user.id, conversationId);
     if (!conversation) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
-    const messages = await deps.chatRepo.getMessages(user.id, conversationId);
-    return reply.send({ messages: messages.map((message) => ({ ...message, createdAt: message.createdAt.toISOString() })) });
+    const messages = await deps.chatRepo.getMessages(user.id, conversationId, {
+      allTree: query.allTree === 'true',
+    });
+    return reply.send({
+      messages: messages.map((message) => ({ ...message, createdAt: message.createdAt.toISOString() })),
+      compactedSummary: conversation.compactedSummary,
+    });
   });
+
+  // Switch active branch
+  app.post(
+    '/v1/conversations/:conversationId/messages/:messageId/switch',
+    async (request: FastifyRequest, reply) => {
+      const authHeader = request.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) throw new AuthError('UNAUTHENTICATED', 'authentication required');
+      const user = await deps.auth.authenticate(authHeader.slice(7));
+      const { conversationId, messageId } = request.params as { conversationId: string; messageId: string };
+      const updatedMessages = await deps.chatRepo.switchBranch(user.id, conversationId, messageId);
+      return reply.send({
+        messages: updatedMessages.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
+      });
+    },
+  );
+
+  // Delete message branch
+  app.delete(
+    '/v1/conversations/:conversationId/messages/:messageId',
+    async (request: FastifyRequest, reply) => {
+      const authHeader = request.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) throw new AuthError('UNAUTHENTICATED', 'authentication required');
+      const user = await deps.auth.authenticate(authHeader.slice(7));
+      const { conversationId, messageId } = request.params as { conversationId: string; messageId: string };
+      const success = await deps.chatRepo.deleteBranch(user.id, conversationId, messageId);
+      if (!success) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Pesan tidak ditemukan' } });
+      }
+      const remainingMessages = await deps.chatRepo.getMessages(user.id, conversationId);
+      return reply.send({
+        success: true,
+        messages: remainingMessages.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
+      });
+    },
+  );
+
+  // Export conversation to Markdown or Standalone HTML
+  app.get(
+    '/v1/conversations/:conversationId/export',
+    async (request: FastifyRequest, reply) => {
+      const authHeader = request.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) throw new AuthError('UNAUTHENTICATED', 'authentication required');
+      const user = await deps.auth.authenticate(authHeader.slice(7));
+      const { conversationId } = request.params as { conversationId: string };
+      const query = request.query as { format?: string };
+      const format = query.format === 'html' ? 'html' : 'markdown';
+
+      const conversation = await deps.chatRepo.getConversation(user.id, conversationId);
+      if (!conversation) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Percakapan tidak ditemukan' } });
+      }
+
+      const messages = await deps.chatRepo.getMessages(user.id, conversationId);
+      const title = conversation.title?.trim() || 'Percakapan';
+
+      if (format === 'markdown') {
+        const md = exportConversationToMarkdown(conversation, messages);
+        return reply
+          .header('Content-Type', 'text/markdown; charset=utf-8')
+          .header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.md"`)
+          .send(md);
+      } else {
+        const html = exportConversationToHtml(conversation, messages);
+        return reply
+          .header('Content-Type', 'text/html; charset=utf-8')
+          .header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.html"`)
+          .send(html);
+      }
+    },
+  );
+
+  // Manual or automatic context compaction
+  app.post(
+    '/v1/conversations/:conversationId/compact',
+    async (request: FastifyRequest, reply) => {
+      const authHeader = request.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) throw new AuthError('UNAUTHENTICATED', 'authentication required');
+      const user = await deps.auth.authenticate(authHeader.slice(7));
+      const { conversationId } = request.params as { conversationId: string };
+
+      const conversation = await deps.chatRepo.getConversation(user.id, conversationId);
+      if (!conversation) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Percakapan tidak ditemukan' } });
+      }
+
+      const messages = await deps.chatRepo.getMessages(user.id, conversationId);
+      if (messages.length <= 4) {
+        return reply.send({
+          compacted: false,
+          reason: 'Riwayat percakapan masih terlalu pendek untuk diringkas (minimum 5 pesan).',
+          compactedSummary: conversation.compactedSummary,
+        });
+      }
+
+      const olderMessages = messages.slice(0, messages.length - 3);
+      const summaryContent = `[Konteks Percakapan Terdahulu Diringkas (${olderMessages.length} pesan)]: Diskusi sebelumnya mencakup: ${olderMessages.map((m) => `${m.role}: ${m.content.slice(0, 50)}`).join('; ')}...`;
+
+      const updated = await deps.chatRepo.compactConversation(user.id, conversationId, summaryContent);
+      return reply.send({
+        compacted: true,
+        compactedSummary: updated?.compactedSummary,
+        compactedMessageCount: olderMessages.length,
+      });
+    },
+  );
 
   // HTTP REST chat completion endpoint
   app.post(
@@ -79,6 +192,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
             model: { type: 'string', minLength: 1, maxLength: 200 },
             mode: { type: 'string', enum: ['auto', 'fast', 'coding', 'complex', 'research'] },
             content: { type: 'string', minLength: 1, maxLength: 30000 },
+            parentMessageId: { type: 'string', format: 'uuid' },
             attachments: {
               type: 'array',
               items: {
@@ -108,6 +222,7 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         model?: string;
         mode?: ChatMode;
         content: string;
+        parentMessageId?: string | null;
         attachments?: Array<{ type: 'image'; url: string }>;
       };
       if (!body.content.trim()) return reply.code(400).send({ error: { code: 'INVALID_CONTENT', message: 'Message content cannot be blank' } });
@@ -131,12 +246,20 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
         }
       }
 
-      await deps.chatRepo.appendMessage(user.id, conversationId, 'user', body.content, {
-        attachments: body.attachments,
-        mode: body.mode ?? 'auto',
-        model: body.model ?? null,
-        workspaceId: body.workspaceId ?? null,
-      });
+      const savedUser = await deps.chatRepo.appendMessage(
+        user.id,
+        conversationId,
+        'user',
+        body.content,
+        {
+          attachments: body.attachments,
+          mode: body.mode ?? 'auto',
+          model: body.model ?? null,
+          workspaceId: body.workspaceId ?? null,
+        },
+        undefined,
+        body.parentMessageId,
+      );
       // Fetch history for context
       const history = await deps.chatRepo.getMessages(user.id, conversationId);
       const messages = history.map((m) => ({
@@ -220,6 +343,8 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
           model: body.model ?? null,
           workspaceId: body.workspaceId ?? null,
         },
+        undefined,
+        savedUser.id,
       );
 
       if (deps.memoryRepo) {
@@ -416,12 +541,20 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
           }
 
           // Persist and announce the user message so every client renders the same transcript.
-          const savedUser = await deps.chatRepo.appendMessage(user.id, conversationId, 'user', data.content, {
-            attachments: data.attachments,
-            mode: data.mode ?? 'auto',
-            model: data.model ?? null,
-            workspaceId: data.workspaceId ?? null,
-          });
+          const savedUser = await deps.chatRepo.appendMessage(
+            user.id,
+            conversationId,
+            'user',
+            data.content,
+            {
+              attachments: data.attachments,
+              mode: data.mode ?? 'auto',
+              model: data.model ?? null,
+              workspaceId: data.workspaceId ?? null,
+            },
+            undefined,
+            data.parentMessageId,
+          );
           send({
             type: 'message.created',
             conversationId,
@@ -505,17 +638,30 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
                 content: savedAssistant.content,
                 createdAt: savedAssistant.createdAt,
                 metadata: savedAssistant.metadata,
+                parentMessageId: savedAssistant.parentMessageId,
+                isActiveBranch: savedAssistant.isActiveBranch,
+                branchIndex: savedAssistant.branchIndex,
+                branchCount: savedAssistant.branchCount,
+                siblingMessageIds: savedAssistant.siblingMessageIds,
               },
             });
           } else {
-            const savedAssistant = await deps.chatRepo.appendMessage(user.id, conversationId, 'assistant', accumulated, {
-              usage: lastUsage,
-              resolvedModel,
-              fallbackUsed,
-              mode: effectiveMode,
-              model: data.model ?? null,
-              workspaceId: data.workspaceId ?? null,
-            }, assistantMessageId);
+            const savedAssistant = await deps.chatRepo.appendMessage(
+              user.id,
+              conversationId,
+              'assistant',
+              accumulated,
+              {
+                usage: lastUsage,
+                resolvedModel,
+                fallbackUsed,
+                mode: effectiveMode,
+                model: data.model ?? null,
+                workspaceId: data.workspaceId ?? null,
+              },
+              assistantMessageId,
+              savedUser.id,
+            );
 
             if (deps.memoryRepo) {
               try {
@@ -572,6 +718,11 @@ export const registerChatRoutes = (app: FastifyInstance, deps: ChatRouteDependen
                   content: savedAssistant.content,
                   createdAt: savedAssistant.createdAt,
                   metadata: savedAssistant.metadata,
+                  parentMessageId: savedAssistant.parentMessageId,
+                  isActiveBranch: savedAssistant.isActiveBranch,
+                  branchIndex: savedAssistant.branchIndex,
+                  branchCount: savedAssistant.branchCount,
+                  siblingMessageIds: savedAssistant.siblingMessageIds,
                 },
               });
             }
