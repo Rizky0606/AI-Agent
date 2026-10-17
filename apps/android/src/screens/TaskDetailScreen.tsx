@@ -18,8 +18,41 @@ import {
   useTaskEvents,
 } from '../hooks/use-queries.ts';
 import { TaskEventsWebSocketClient } from '../services/task-events-websocket.ts';
-import type { TaskEventEnvelope } from '@personal-ai-os/shared';
+import {
+  aggregateRuntimeSteps,
+  sortRuntimeEvents,
+  type TaskEventEnvelope,
+} from '@personal-ai-os/shared';
 import { getRuntimeOutputPreviews } from '../runtime-output.ts';
+
+interface DiffBlockProps {
+  diff: string;
+  path?: string | undefined;
+}
+
+export const DiffBlock: React.FC<DiffBlockProps> = ({ diff, path }) => {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = diff.length > 200 || diff.split('\n').length > 6;
+
+  return (
+    <View style={styles.diffContainer}>
+      {path ? <Text style={styles.diffPathText}>File: {path}</Text> : null}
+      <View style={{ maxHeight: isLong && !expanded ? 140 : undefined, overflow: 'hidden' }}>
+        <Text style={styles.diffCodeText}>{diff}</Text>
+      </View>
+      {isLong ? (
+        <TouchableOpacity
+          style={styles.diffExpandBtn}
+          onPress={() => setExpanded(!expanded)}
+          accessibilityRole="button"
+          accessibilityLabel={expanded ? 'Tutup diff' : 'Lihat semua'}
+        >
+          <Text style={styles.diffExpandText}>{expanded ? 'Tutup diff' : 'Lihat semua'}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+};
 
 export interface TaskDetailScreenProps {
   taskId: string;
@@ -42,7 +75,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
 
   useEffect(() => {
     if (initialEvents) {
-      setLiveEvents(initialEvents);
+      setLiveEvents(sortRuntimeEvents(initialEvents));
     }
   }, [initialEvents]);
 
@@ -53,7 +86,7 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
       onEvent: (evt) => {
         setLiveEvents((prev) => {
           if (prev.some((e) => e.id === evt.id)) return prev;
-          return [...prev, evt];
+          return sortRuntimeEvents([...prev, evt]);
         });
         void refetch();
       },
@@ -79,90 +112,146 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
   const pendingSteps = Math.max(0, totalSteps - currentStep);
   const runtimeOutputs = getRuntimeOutputPreviews(task.artifacts);
 
-  // Filter and transform events into clean human summaries, stripping raw runtime noise
-  const humanTimeline = liveEvents.map((evt) => {
-    let title = 'Pembaruan Tugas';
-    let detail = '';
-    let diff: string | undefined;
-    let path: string | undefined;
+  // Transform events into unified timeline items with runtime step aggregation
+  const runtimeSteps = aggregateRuntimeSteps(liveEvents);
 
-    switch (evt.eventType) {
-      case 'task.created':
-        title = 'Tugas Dibuat';
-        detail = 'Tugas dimasukkan ke dalam antrean eksekusi sistem.';
-        break;
-      case 'task.started':
-        title = 'Eksekusi Dimulai';
-        detail = 'Asisten AI mulai menganalisis rencana kerja.';
-        break;
-      case 'task.progress':
-        if (evt.payload?.action === 'file_edit') {
-          title = 'Modifikasi File (Diff)';
-          path = typeof evt.payload?.path === 'string' ? evt.payload.path : undefined;
-          diff = typeof evt.payload?.diff === 'string' ? evt.payload.diff : undefined;
-          detail = path ? `Mengubah file: ${path}` : 'Perubahan file diterapkan.';
-        } else if (evt.payload?.action === 'runtime_fallback') {
-          title = 'Pengalihan Runtime (Fallback)';
-          detail = String(evt.payload?.fallbackReason ?? 'Runtime dialihkan karena kendala kesiapan sistem.');
-        } else if (evt.payload?.action === 'runtime_stream') {
-          title = 'Output Runtime (Streaming)';
-          detail = String(evt.payload?.text ?? '');
-        } else {
-          title = `Progres: ${evt.payload?.progress ?? 0}%`;
-          detail =
-            typeof evt.payload?.action === 'string'
-              ? `Langkah: ${evt.payload.action.replace('_', ' ')}`
-              : 'Menjalankan instruksi berurutan...';
-        }
-        break;
-      case 'task.tool_call':
-        title = 'Penggunaan Alat: ' + (evt.payload?.action ?? evt.payload?.tool ?? 'tool');
-        detail =
-          typeof evt.payload?.output === 'string'
-            ? evt.payload.output.slice(0, 150)
-            : 'Pemeriksaan resource / alat selesai.';
-        break;
-      case 'task.waiting_approval':
-        title = 'Menunggu Persetujuan Anda ⚠️';
-        detail =
-          typeof evt.payload?.action === 'string'
-            ? `Operasi berisiko (${evt.payload?.riskLevel ?? 'HIGH'}): ${evt.payload.action}`
-            : 'Memerlukan otorisasi pengguna untuk melanjutkan.';
-        break;
-      case 'task.completed':
-        title = 'Tugas Selesai';
-        detail = 'Semua instruksi berhasil dieksekusi.';
-        break;
-      case 'task.failed':
-        title = 'Tugas Gagal';
-        detail =
-          typeof evt.payload?.error === 'string'
-            ? evt.payload.error
-            : 'Terjadi kendala saat mengeksekusi langkah.';
-        break;
-      case 'task.resumed':
-        title = 'Tugas Dilanjutkan';
-        detail = 'Persetujuan diberikan, eksekusi dilanjutkan.';
-        break;
-      case 'task.paused':
-        title = 'Tugas Dijeda';
-        detail = 'Eksekusi dihentikan sementara.';
-        break;
-      case 'task.cancelled':
-        title = 'Tugas Dibatalkan';
-        detail = 'Pengguna membatalkan proses pengerjaan.';
-        break;
+  const humanTimeline = (() => {
+    if (runtimeSteps.length > 0) {
+      // Map aggregated runtime steps
+      const stepItems = runtimeSteps.map((step) => ({
+        id: step.id,
+        title: `Langkah #${step.stepNumber}: ${step.toolName}`,
+        detail: step.summary,
+        diff: step.diff,
+        path: step.path,
+        status: step.status as 'running' | 'completed' | 'failed' | undefined,
+        runtime: step.runtime,
+        time: step.timestamp ? new Date(step.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+      }));
+
+      // Include high-level lifecycle events in timeline
+      const lifecycleItems = liveEvents
+        .filter((e) => ['task.created', 'task.waiting_approval', 'task.completed', 'task.failed', 'task.paused', 'task.resumed', 'task.cancelled'].includes(e.eventType))
+        .map((evt) => {
+          let title = 'Pembaruan Tugas';
+          let detail = '';
+          let status: 'running' | 'completed' | 'failed' | undefined;
+          if (evt.eventType === 'task.created') { title = 'Tugas Dibuat'; detail = 'Tugas dimasukkan ke dalam antrean eksekusi sistem.'; }
+          else if (evt.eventType === 'task.waiting_approval') { title = 'Menunggu Persetujuan Anda ⚠️'; detail = String(evt.payload?.action ?? 'Memerlukan otorisasi pengguna.'); }
+          else if (evt.eventType === 'task.completed') { title = 'Tugas Selesai'; detail = 'Semua instruksi berhasil dieksekusi.'; status = 'completed'; }
+          else if (evt.eventType === 'task.failed') { title = 'Tugas Gagal'; detail = String(evt.payload?.error ?? 'Terjadi kendala saat mengeksekusi.'); status = 'failed'; }
+          else if (evt.eventType === 'task.paused') { title = 'Tugas Dijeda'; detail = 'Eksekusi dihentikan sementara.'; }
+          else if (evt.eventType === 'task.resumed') { title = 'Tugas Dilanjutkan'; detail = 'Persetujuan diberikan, eksekusi dilanjutkan.'; }
+          else if (evt.eventType === 'task.cancelled') { title = 'Tugas Dibatalkan'; detail = 'Pengguna membatalkan proses pengerjaan.'; status = 'failed'; }
+          return {
+            id: evt.id,
+            title,
+            detail,
+            diff: undefined,
+            path: undefined,
+            status,
+            runtime: undefined,
+            time: new Date(evt.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          };
+        });
+
+      return [...lifecycleItems.filter((i) => i.title === 'Tugas Dibuat'), ...stepItems, ...lifecycleItems.filter((i) => i.title !== 'Tugas Dibuat')];
     }
 
-    return {
-      id: evt.id,
-      title,
-      detail,
-      diff,
-      path,
-      time: new Date(evt.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-  });
+    // Fallback mapping for non-runtime tasks
+    return liveEvents.map((evt) => {
+      let title = 'Pembaruan Tugas';
+      let detail = '';
+      let diff: string | undefined;
+      let path: string | undefined;
+      let status: 'running' | 'completed' | 'failed' | undefined;
+
+      switch (evt.eventType) {
+        case 'task.created':
+          title = 'Tugas Dibuat';
+          detail = 'Tugas dimasukkan ke dalam antrean eksekusi sistem.';
+          break;
+        case 'task.started':
+          title = 'Eksekusi Dimulai';
+          detail = 'Asisten AI mulai menganalisis rencana kerja.';
+          status = 'running';
+          break;
+        case 'task.progress':
+          if (evt.payload?.action === 'file_edit') {
+            title = 'Modifikasi File (Diff)';
+            path = typeof evt.payload?.path === 'string' ? evt.payload.path : undefined;
+            diff = typeof evt.payload?.diff === 'string' ? evt.payload.diff : undefined;
+            detail = path ? `Mengubah file: ${path}` : 'Perubahan file diterapkan.';
+            status = 'completed';
+          } else if (evt.payload?.action === 'runtime_fallback') {
+            title = 'Pengalihan Runtime (Fallback)';
+            detail = String(evt.payload?.fallbackReason ?? 'Runtime dialihkan karena kendala kesiapan sistem.');
+          } else if (evt.payload?.action === 'runtime_stream') {
+            title = 'Output Runtime (Streaming)';
+            detail = String(evt.payload?.text ?? '');
+          } else {
+            title = `Progres: ${evt.payload?.progress ?? 0}%`;
+            detail =
+              typeof evt.payload?.action === 'string'
+                ? `Langkah: ${evt.payload.action.replace('_', ' ')}`
+                : 'Menjalankan instruksi berurutan...';
+          }
+          break;
+        case 'task.tool_call':
+          title = 'Penggunaan Alat: ' + (evt.payload?.action ?? evt.payload?.tool ?? 'tool');
+          detail =
+            typeof evt.payload?.output === 'string'
+              ? evt.payload.output.slice(0, 150)
+              : 'Pemeriksaan resource / alat selesai.';
+          status = evt.payload?.output ? 'completed' : 'running';
+          break;
+        case 'task.waiting_approval':
+          title = 'Menunggu Persetujuan Anda ⚠️';
+          detail =
+            typeof evt.payload?.action === 'string'
+              ? `Operasi berisiko (${evt.payload?.riskLevel ?? 'HIGH'}): ${evt.payload.action}`
+              : 'Memerlukan otorisasi pengguna untuk melanjutkan.';
+          break;
+        case 'task.completed':
+          title = 'Tugas Selesai';
+          detail = 'Semua instruksi berhasil dieksekusi.';
+          status = 'completed';
+          break;
+        case 'task.failed':
+          title = 'Tugas Gagal';
+          detail =
+            typeof evt.payload?.error === 'string'
+              ? evt.payload.error
+              : 'Terjadi kendala saat mengeksekusi langkah.';
+          status = 'failed';
+          break;
+        case 'task.resumed':
+          title = 'Tugas Dilanjutkan';
+          detail = 'Persetujuan diberikan, eksekusi dilanjutkan.';
+          break;
+        case 'task.paused':
+          title = 'Tugas Dijeda';
+          detail = 'Eksekusi dihentikan sementara.';
+          break;
+        case 'task.cancelled':
+          title = 'Tugas Dibatalkan';
+          detail = 'Pengguna membatalkan proses pengerjaan.';
+          status = 'failed';
+          break;
+      }
+
+      return {
+        id: evt.id,
+        title,
+        detail,
+        diff,
+        path,
+        status,
+        runtime: typeof evt.payload?.runtime === 'string' ? evt.payload.runtime : undefined,
+        time: new Date(evt.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+    });
+  })();
 
   return (
     <View style={styles.container}>
@@ -301,18 +390,51 @@ export const TaskDetailScreen: React.FC<TaskDetailScreenProps> = ({
           ) : (
             humanTimeline.map((item, idx) => (
               <View key={item.id || idx} style={styles.timelineItem}>
-                <View style={styles.timelineDot} />
+                <View
+                  style={[
+                    styles.timelineDot,
+                    item.status === 'failed'
+                      ? styles.timelineDotFailed
+                      : item.status === 'completed'
+                        ? styles.timelineDotCompleted
+                        : null,
+                  ]}
+                />
                 <View style={styles.timelineBody}>
                   <View style={styles.timelineHeaderRow}>
-                    <Text style={styles.timelineTitle}>{item.title}</Text>
+                    <View style={styles.timelineTitleGroup}>
+                      <Text style={styles.timelineTitle}>{item.title}</Text>
+                      {item.runtime ? (
+                        <View style={styles.timelineRuntimeBadge}>
+                          <Text style={styles.timelineRuntimeBadgeText}>{item.runtime}</Text>
+                        </View>
+                      ) : null}
+                      {item.status ? (
+                        <View
+                          style={[
+                            styles.statusBadge,
+                            item.status === 'failed'
+                              ? styles.statusFailed
+                              : item.status === 'completed'
+                                ? styles.statusCompleted
+                                : styles.statusRunning,
+                          ]}
+                        >
+                          <Text style={styles.statusBadgeText}>
+                            {item.status === 'completed'
+                              ? 'Selesai'
+                              : item.status === 'failed'
+                                ? 'Gagal'
+                                : 'Berjalan'}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
                     <Text style={styles.timelineTime}>{item.time}</Text>
                   </View>
                   <Text style={styles.timelineDetail}>{item.detail}</Text>
                   {item.diff ? (
-                    <View style={{ marginTop: 6, padding: 8, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4 }}>
-                      {item.path ? <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>{item.path}</Text> : null}
-                      <Text style={{ fontFamily: 'monospace', fontSize: 11, color: theme.colors.textPrimary }}>{item.diff}</Text>
-                    </View>
+                    <DiffBlock diff={item.diff} path={item.path} />
                   ) : null}
                 </View>
               </View>
@@ -568,9 +690,95 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     fontSize: 11,
   },
+  timelineTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    flex: 1,
+    marginRight: 8,
+  },
   timelineDetail: {
     color: theme.colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
+  },
+  timelineDotCompleted: {
+    backgroundColor: theme.colors.success,
+  },
+  timelineDotFailed: {
+    backgroundColor: theme.colors.danger,
+  },
+  timelineRuntimeBadge: {
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.4)',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  timelineRuntimeBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#38bdf8',
+    textTransform: 'uppercase',
+  },
+  statusBadge: {
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  statusRunning: {
+    backgroundColor: 'rgba(234, 179, 8, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(234, 179, 8, 0.4)',
+  },
+  statusCompleted: {
+    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.4)',
+  },
+  statusFailed: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+  },
+  statusBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+  },
+  diffContainer: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+  },
+  diffPathText: {
+    color: theme.colors.primary,
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 4,
+    fontFamily: 'monospace',
+  },
+  diffCodeText: {
+    fontFamily: 'monospace',
+    fontSize: 11,
+    color: theme.colors.textPrimary,
+    lineHeight: 15,
+  },
+  diffExpandBtn: {
+    marginTop: 6,
+    paddingTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+  },
+  diffExpandText: {
+    color: theme.colors.primary,
+    fontSize: 11,
+    fontWeight: '600',
   },
 });
