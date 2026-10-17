@@ -12,6 +12,8 @@ export type RuntimeStepType =
   | 'tool_start'
   | 'tool_end'
   | 'file_edit'
+  | 'plan'
+  | 'subagent'
   | 'error'
   | 'done';
 
@@ -36,6 +38,9 @@ export interface RuntimeStepEvent {
   summary?: string | undefined;
   durationMs?: number | undefined;
   exitCode?: number | undefined;
+  planItems?: string[] | undefined;
+  isSubagent?: boolean | undefined;
+  subagentTask?: string | undefined;
 }
 
 export const MAX_RUNTIME_TEXT_LENGTH = 16_384; // 16 KB
@@ -141,9 +146,58 @@ export function normalizeOmpEvent(
     };
   }
 
-  // 2. Tool invocation start (tool_start)
+  // 2. Tool invocation start (tool_start) or dedicated plan/subagent
   if (rawType === 'tool_start') {
     const toolName = String(parsed['tool'] ?? parsed['name'] ?? 'tool');
+    const input = parsed['input'] ?? parsed['args'];
+
+    // Sub-agent launch detection (omp task tool)
+    if (toolName === 'task') {
+      const inputObj = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+      const subTask = typeof inputObj['task'] === 'string'
+        ? inputObj['task']
+        : typeof inputObj['prompt'] === 'string'
+          ? inputObj['prompt']
+          : 'Tugas sub-agent paralel';
+      return {
+        id,
+        taskId,
+        runtime,
+        urutan,
+        waktu,
+        type: 'subagent',
+        status: 'running',
+        toolName: 'task',
+        input,
+        isSubagent: true,
+        subagentTask: sanitizeRuntimeText(subTask),
+        summary: `Meluncurkan sub-agent: ${sanitizeRuntimeText(subTask)}`,
+      };
+    }
+
+    // Plan mode / todo tool detection
+    if (toolName === 'todo' || toolName === 'plan') {
+      const inputObj = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+      const rawTodos = inputObj['todos'] ?? inputObj['items'] ?? inputObj['plan'];
+      const planItems = Array.isArray(rawTodos)
+        ? rawTodos.map((it) => (typeof it === 'object' && it ? String((it as Record<string, unknown>)['text'] ?? (it as Record<string, unknown>)['task'] ?? JSON.stringify(it)) : String(it)))
+        : undefined;
+
+      return {
+        id,
+        taskId,
+        runtime,
+        urutan,
+        waktu,
+        type: 'plan',
+        status: 'running',
+        toolName,
+        input,
+        planItems,
+        summary: 'Menyusun rencana tindakan...',
+      };
+    }
+
     return {
       id,
       taskId,
@@ -153,7 +207,7 @@ export function normalizeOmpEvent(
       type: 'tool_start',
       status: 'running',
       toolName,
-      input: parsed['input'] ?? parsed['args'],
+      input,
     };
   }
 
@@ -165,6 +219,46 @@ export function normalizeOmpEvent(
       ? sanitizeRuntimeText(output)
       : output;
 
+    // Sub-agent completion
+    if (toolName === 'task') {
+      return {
+        id,
+        taskId,
+        runtime,
+        urutan,
+        waktu,
+        type: 'subagent',
+        status: 'completed',
+        toolName: 'task',
+        output: sanitizedOutput,
+        isSubagent: true,
+        summary: 'Sub-agent paralel selesai.',
+      };
+    }
+
+    // Plan completion
+    if (toolName === 'todo' || toolName === 'plan') {
+      const outputObj = typeof output === 'object' && output !== null ? (output as Record<string, unknown>) : {};
+      const rawTodos = outputObj['todos'] ?? outputObj['items'] ?? outputObj['plan'];
+      const planItems = Array.isArray(rawTodos)
+        ? rawTodos.map((it) => (typeof it === 'object' && it ? String((it as Record<string, unknown>)['text'] ?? (it as Record<string, unknown>)['task'] ?? JSON.stringify(it)) : String(it)))
+        : undefined;
+
+      return {
+        id,
+        taskId,
+        runtime,
+        urutan,
+        waktu,
+        type: 'plan',
+        status: 'completed',
+        toolName,
+        output: sanitizedOutput,
+        planItems,
+        summary: planItems ? `${planItems.length} langkah rencana ditetapkan.` : 'Rencana langkah selesai disusun.',
+      };
+    }
+
     return {
       id,
       taskId,
@@ -175,6 +269,27 @@ export function normalizeOmpEvent(
       status: 'completed',
       toolName,
       output: sanitizedOutput,
+    };
+  }
+
+  // 3b. Dedicated plan event
+  if (rawType === 'plan') {
+    const rawTodos = parsed['todos'] ?? parsed['items'] ?? parsed['plan'];
+    const planItems = Array.isArray(rawTodos)
+      ? rawTodos.map((it) => (typeof it === 'object' && it ? String((it as Record<string, unknown>)['text'] ?? (it as Record<string, unknown>)['task'] ?? JSON.stringify(it)) : String(it)))
+      : undefined;
+    return {
+      id,
+      taskId,
+      runtime,
+      urutan,
+      waktu,
+      type: 'plan',
+      status: 'completed',
+      toolName: 'plan',
+      planItems,
+      text: typeof parsed['text'] === 'string' ? sanitizeRuntimeText(parsed['text']) : undefined,
+      summary: planItems ? `${planItems.length} langkah rencana ditetapkan.` : 'Rencana eksekusi diterima.',
     };
   }
 
@@ -293,6 +408,9 @@ export function extractRuntimeStepFromEvent(envelope: {
       diff: sanitizeRuntimeDiff(stepObj['diff'] ?? stepObj['patch']),
       error: stepObj['error'] ? sanitizeRuntimeText(stepObj['error']) : undefined,
       summary: typeof stepObj['summary'] === 'string' ? sanitizeRuntimeText(stepObj['summary']) : undefined,
+      planItems: Array.isArray(stepObj['planItems']) ? (stepObj['planItems'] as unknown[]).map(String) : undefined,
+      isSubagent: stepObj['isSubagent'] === true || rawType === 'subagent',
+      subagentTask: typeof stepObj['subagentTask'] === 'string' ? sanitizeRuntimeText(stepObj['subagentTask']) : undefined,
     };
   }
 
@@ -421,10 +539,14 @@ export interface AggregatedRuntimeStep {
   details?: unknown | undefined;
   runtime?: string | undefined;
   timestamp?: string | undefined;
+  isPlan?: boolean | undefined;
+  planItems?: string[] | undefined;
+  isSubagent?: boolean | undefined;
+  subagentTask?: string | undefined;
 }
 
 /**
- * Aggregates individual runtime events (tool_start, tool_end, file_edit, message, error)
+ * Aggregates individual runtime events (tool_start, tool_end, file_edit, message, plan, subagent, error)
  * into high-level steps suitable for ToolStepCard and timeline views.
  */
 export function aggregateRuntimeSteps(
@@ -486,6 +608,32 @@ export function aggregateRuntimeSteps(
           timestamp: ev.waktu,
         });
       }
+    } else if (ev.type === 'plan') {
+      steps.push({
+        id: ev.id,
+        stepNumber: ev.urutan || seqCounter++,
+        toolName: 'Rencana Eksekusi',
+        status: ev.status ?? 'completed',
+        summary: ev.summary ?? (ev.planItems && ev.planItems.length > 0 ? `${ev.planItems.length} langkah rencana disusun` : 'Rencana tindakan disusun'),
+        details: ev.planItems ?? ev.text ?? ev.input ?? ev.output,
+        isPlan: true,
+        planItems: ev.planItems,
+        runtime: ev.runtime,
+        timestamp: ev.waktu,
+      });
+    } else if (ev.type === 'subagent') {
+      steps.push({
+        id: ev.id,
+        stepNumber: ev.urutan || seqCounter++,
+        toolName: ev.toolName ?? 'Sub-agent Paralel',
+        status: ev.status ?? 'running',
+        summary: ev.summary ?? (ev.subagentTask ? `Sub-agent: ${ev.subagentTask}` : 'Delegasi sub-agent paralel'),
+        details: ev.input ?? ev.output,
+        isSubagent: true,
+        subagentTask: ev.subagentTask,
+        runtime: ev.runtime,
+        timestamp: ev.waktu,
+      });
     } else if (ev.type === 'file_edit') {
       const activeRunning = [...toolMap.values()].find((s) => s.status === 'running');
       if (activeRunning) {

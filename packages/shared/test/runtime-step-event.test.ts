@@ -237,3 +237,71 @@ test('RuntimeStepEvent: Backward compatibility terhadap envelope legacy tanpa ru
   assert.equal(extracted.path, 'legacy.ts');
   assert.equal(extracted.diff, '+ const legacy = 1;');
 });
+
+test('RuntimeStepEvent: Normalisasi event plan (todo) dan subagent (task) OMP', () => {
+  const taskId = 'task-omp-advanced-01';
+
+  // 1. Tool start untuk subagent task
+  const subagentStart = {
+    type: 'tool_start',
+    tool: 'task',
+    input: { task: 'Jalankan analisis dependensi paket', prompt: 'Audit AST package.json' },
+    timestamp: '2026-10-18T00:10:00.000Z',
+  };
+  const normSubagent = normalizeOmpEvent(subagentStart, 1, taskId, 'omp');
+  assert.ok(normSubagent);
+  assert.equal(normSubagent.type, 'subagent');
+  assert.equal(normSubagent.isSubagent, true);
+  assert.equal(normSubagent.subagentTask, 'Jalankan analisis dependensi paket');
+  assert.equal(normSubagent.status, 'running');
+
+  // 2. Tool end untuk plan / todo
+  const planEnd = {
+    type: 'tool_end',
+    tool: 'todo',
+    output: {
+      todos: [
+        '1. Baca konfigurasi compiler',
+        '2. Perbaiki type error di AST',
+        '3. Jalankan test validasi',
+      ],
+    },
+    timestamp: '2026-10-18T00:10:05.000Z',
+  };
+  const normPlan = normalizeOmpEvent(planEnd, 2, taskId, 'omp');
+  assert.ok(normPlan);
+  assert.equal(normPlan.type, 'plan');
+  assert.equal(normPlan.status, 'completed');
+  assert.equal(normPlan.planItems?.length, 3);
+  assert.equal(normPlan.planItems?.[0], '1. Baca konfigurasi compiler');
+
+  // 3. Agregasi step plan dan subagent
+  const rawEnvelopes = [
+    {
+      id: 'env-subagent',
+      taskId,
+      eventType: 'runtime.step',
+      createdAt: '2026-10-18T00:10:00.000Z',
+      payload: {
+        runtimeStep: normSubagent,
+      },
+    },
+    {
+      id: 'env-plan',
+      taskId,
+      eventType: 'runtime.step',
+      createdAt: '2026-10-18T00:10:05.000Z',
+      payload: {
+        runtimeStep: normPlan,
+      },
+    },
+  ];
+
+  const aggregated = aggregateRuntimeSteps(rawEnvelopes);
+  assert.equal(aggregated.length, 2);
+  assert.equal(aggregated[0]?.isSubagent, true);
+  assert.equal(aggregated[0]?.subagentTask, 'Jalankan analisis dependensi paket');
+  assert.equal(aggregated[1]?.isPlan, true);
+  assert.equal(aggregated[1]?.planItems?.length, 3);
+});
+
