@@ -152,6 +152,11 @@ capabilities:
       Windows client bundles Inter WOFF2 fonts locally (zero CDN requests) compliant with Tauri CSP 'self'. Base components (Button, IconButton, Chip, Popover, Drawer, Dialog, Toast, EmptyState, Spinner, Skeleton, StatusDot) and MarkdownMessage implemented with zero inline styles. In Sesi 19, all 119 inline styles across SkillMcpView, LoginScreen, MemoryView, TaskCard, and ToolStepCard were refactored to shared design token CSS classes.
       Theme preference (system/light/dark) persisted in localStorage with dynamic OS media query synchronization.
       Android theme unified to consume @personal-ai-os/shared theme generator with lucide-react-native + react-native-svg.
+      Sesi 21 Design Audit & Language (2026-10-17):
+      - Created root DESIGN.md documenting evidenced design tokens (Inter fonts, Teal-Mint accent, surface elevation, radii, spacing, component patterns).
+      - Executed read-only audit across 8 surface areas producing prioritized improvement plans in design-plans/ (windows-shell, chat, activity, settings, android-navigation, android-chat, onboarding, deep-research).
+      - Established docs/design/skills-used.md tracking UI skills (ibelick/create-design-md, ibelick/improve-ui, pbakaus/shape, pbakaus/critique, kemiljk/subtractive-design, arla6ka/token-mapping, kemiljk/real-content-design, jakubkrehel/better-writing, pbakaus/clarify).
+      - Visual appearance on physical screens remains labeled "BELUM DIVERIFIKASI VISUAL" pending live hardware inspection.
   runtime_bridges_and_execution:
     status: partial
     code: apps/runtime-bridge/src/index.ts; packages/agent-core/src/runtimes/remote-adapter.ts; apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts; apps/api/src/routes/runtimes.ts; apps/api/src/routes/skills.ts; docs/adr/0014-integrasi-hermes-dan-runtime-picker.md; docs/adr/0020-pemetaan-fitur-runtime.md
