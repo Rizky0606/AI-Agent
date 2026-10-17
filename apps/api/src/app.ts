@@ -41,6 +41,8 @@ import { registerResearchRoutes } from './routes/research.ts';
 import type { DeepResearchEngine, ResearchEnvironment, CompareEngine } from '@personal-ai-os/agent-core';
 import type { CompareRepository } from './db/compare-repository.ts';
 import { registerCompareRoutes } from './routes/compare.ts';
+import type { PromptTemplateRepository } from './db/prompt-template-repository.ts';
+import { registerPromptTemplateRoutes } from './routes/prompt-templates.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
@@ -183,6 +185,11 @@ export type AppDependencies = {
         modelGateway?: ModelGateway | undefined;
         modelConfigs?: ModelConfigRepository | undefined;
         defaultSynthesisModel?: string | undefined;
+      }
+    | undefined;
+  promptTemplates?:
+    | {
+        promptTemplateRepo: PromptTemplateRepository;
       }
     | undefined;
 };
@@ -766,6 +773,13 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       modelGateway: dependencies.compare.modelGateway ?? dependencies.chat?.gateway,
       modelConfigs: dependencies.compare.modelConfigs ?? dependencies.chat?.modelConfigs,
       defaultSynthesisModel: dependencies.compare.defaultSynthesisModel,
+    });
+  }
+
+  if (dependencies.promptTemplates) {
+    registerPromptTemplateRoutes(app, {
+      auth: dependencies.auth,
+      promptTemplateRepo: dependencies.promptTemplates.promptTemplateRepo,
     });
   }
 

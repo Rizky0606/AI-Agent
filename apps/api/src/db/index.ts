@@ -13,4 +13,5 @@ export * from './schedule-repository.ts';
 export * from './notification-repository.ts';
 export * from './research-repository.ts';
 export * from './compare-repository.ts';
+export * from './prompt-template-repository.ts';
 
