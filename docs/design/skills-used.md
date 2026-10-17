@@ -103,4 +103,17 @@ Seluruh skill di bawah ini dijadikan panduan perancangan dan refaktorisasi antar
 | `jakubkrehel/better-accessibility` | 2026-10-17 | Pelabelan lengkap TalkBack (`accessibilityLabel`, `accessibilityRole`, `accessibilityHint`), urutan fokus logis, tombol aksi persetujuan yang tegas. |
 | `ibelick/fixing-accessibility` | 2026-10-17 | Rasio kontras teks WCAG AA (>4.5:1 untuk teks normal, >7:1 untuk teks utama pada tema gelap dan terang), transisi tanpa kedipan pada pergantian tema dinamis. |
 
+---
+
+## 5. Skill Yang Diterapkan pada Sesi 25 (Deep Research UI)
+
+Seluruh skill di bawah ini diakses dan diterapkan selama Sesi 25 untuk membangun antarmuka Deep Research yang responsif, tahan terhadap konten panjang, berorientasi aksi, dan memiliki keterjangkauan interaksi (*affordances*) yang jelas.
+
+| Skill | Tanggal Akses | Peran & Penerapan di Sesi 25 |
+|---|---|---|
+| `pbakaus/layout` | 2026-10-17 | URL: https://www.ui-skills.com/skills/pbakaus/layout/llms.txt. Mengatur hierarki tata letak dan ritme spasial: Windows menggunakan area tengah lebar untuk laporan Markdown dengan panel samping sumber rujukan; Android menggunakan area utama terfokus dengan daftar sumber di dalam bottom sheet yang mudah dijangkau satu tangan. Ritme jarak bertoken (skala 4px/8px/12px/16px/24px) memisahkan kartu rencana, progres, dan laporan tanpa tumpukan kotak berlebih. |
+| `kemiljk/real-content-design` | 2026-10-17 | URL: https://www.ui-skills.com/skills/kemiljk/real-content-design/llms.txt. Pengujian tata letak dengan laporan riset nyata yang panjang (>1000 kata), sitasi ganda ([src-1], [src-2]), URL sumber panjang, dan kutipan teknis berbobot. Menjamin tidak ada teks terpotong canggung, layout patah, atau scroll container bertumpuk. |
+| `jakubkrehel/better-writing` | 2026-10-17 | URL: https://www.ui-skills.com/skills/jakubkrehel/better-writing/llms.txt. Bahasa Indonesia konsisten, lugas, dan berorientasi aksi. Tombol tindakan jelas: "Mulai riset", "Berhenti", "Salin laporan", "Simpan sebagai .md", "Setujui rencana". Status galat instruktif: "Anggaran riset habis (laporan parsial disimpan)", "Koneksi terputus (memulihkan progres...)". |
+| `kemiljk/interface-affordances` | 2026-10-17 | URL: https://www.ui-skills.com/skills/kemiljk/interface-affordances/llms.txt. Memastikan isyarat interaktif nyata: chip Mode dan pemilih kedalaman (Cepat, Standar, Mendalam) memiliki status terpilih yang tegas; sitasi bernomor [src-X] dapat diklik/diketuk langsung untuk membuka popover/preview sumber (tidak bergantung hover semata); kartu sumber menampilkan inisial domain bergaya badge; tombol aksi memiliki feedback visual (status "Tersalin!", indikator memuat). |
+
 

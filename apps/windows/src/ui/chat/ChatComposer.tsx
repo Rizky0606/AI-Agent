@@ -15,10 +15,14 @@ import { idID } from '../locales/id-ID.ts';
 import { ModelSelectorPopover } from './ModelSelectorPopover.tsx';
 
 interface ChatComposerProps {
-  textareaRef?: React.Ref<HTMLTextAreaElement>;
+  textareaRef?: React.Ref<HTMLTextAreaElement> | undefined;
+  onNavigateToResearch?: (() => void) | undefined;
 }
 
-export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
+export const ChatComposer: React.FC<ChatComposerProps> = ({
+  textareaRef,
+  onNavigateToResearch,
+}) => {
   const {
     chatDraft,
     setChatDraft,
@@ -37,6 +41,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
     modelNotice,
     clearModelNotice,
     refreshModels,
+    researchDepth,
+    setResearchDepth,
+    researchBudgets,
+    fetchResearchConfig,
+    startResearch,
+    isLoadingResearch,
   } = useAgentStore();
 
   const [isModelPopoverOpen, setIsModelPopoverOpen] = useState(false);
@@ -49,6 +59,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
     }
   }, [runtimes.length, refreshRuntimes]);
 
+  useEffect(() => {
+    if (selectedMode === 'research') {
+      void fetchResearchConfig();
+    }
+  }, [selectedMode, fetchResearchConfig]);
+
   // Auto resize textarea height based on content up to 140px
   useEffect(() => {
     if (localRef.current) {
@@ -57,12 +73,28 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
     }
   }, [chatDraft]);
 
+  const handleSubmit = async () => {
+    if (!chatDraft.trim() || chatStreaming || isLoadingResearch) return;
+    if (selectedMode === 'research') {
+      const q = chatDraft.trim();
+      setChatDraft('');
+      try {
+        await startResearch(q, researchDepth);
+        if (onNavigateToResearch) {
+          onNavigateToResearch();
+        }
+      } catch {
+        // Error logged to store
+      }
+    } else {
+      sendChat();
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (chatDraft.trim() && !chatStreaming) {
-        sendChat();
-      }
+      void handleSubmit();
     }
   };
 
@@ -175,6 +207,50 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
           </div>
         </div>
 
+        {/* Research Depth Bar (when mode is research) */}
+        {selectedMode === 'research' && (
+          <div className="composer-research-depth-bar" role="radiogroup" aria-label={idID.research.depth.label}>
+            <div className="research-depth-chips">
+              <button
+                type="button"
+                className={`research-depth-chip-btn ${researchDepth === 'quick' ? 'active' : ''}`}
+                onClick={() => setResearchDepth('quick')}
+                role="radio"
+                aria-checked={researchDepth === 'quick'}
+              >
+                <span>{idID.research.depth.quick}</span>
+              </button>
+              <button
+                type="button"
+                className={`research-depth-chip-btn ${researchDepth === 'standard' ? 'active' : ''}`}
+                onClick={() => setResearchDepth('standard')}
+                role="radio"
+                aria-checked={researchDepth === 'standard'}
+              >
+                <span>{idID.research.depth.standard}</span>
+              </button>
+              <button
+                type="button"
+                className={`research-depth-chip-btn ${researchDepth === 'deep' ? 'active' : ''}`}
+                onClick={() => setResearchDepth('deep')}
+                role="radio"
+                aria-checked={researchDepth === 'deep'}
+              >
+                <span>{idID.research.depth.deep}</span>
+              </button>
+            </div>
+
+            <div className="research-depth-estimate-text">
+              {researchDepth === 'quick' &&
+                `Estimasi server: ~${researchBudgets.quick.maxSearches} pencarian, ~${researchBudgets.quick.maxPagesRead} halaman, maks ${Math.round(researchBudgets.quick.maxDurationMs / 1000)} dtk`}
+              {researchDepth === 'standard' &&
+                `Estimasi server: ~${researchBudgets.standard.maxSearches} pencarian, ~${researchBudgets.standard.maxPagesRead} halaman, maks ${Math.round(researchBudgets.standard.maxDurationMs / 60000)} mnt`}
+              {researchDepth === 'deep' &&
+                `Estimasi server: ~${researchBudgets.deep.maxSearches} pencarian, ~${researchBudgets.deep.maxPagesRead} halaman, maks ${Math.round(researchBudgets.deep.maxDurationMs / 60000)} mnt (tinjau rencana)`}
+            </div>
+          </div>
+        )}
+
         {/* Input Textarea and Send/Stop Button */}
         <div className="composer-input-row">
           <textarea
@@ -187,12 +263,16 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
               }
             }}
             className="composer-textarea"
-            placeholder={idID.chat.composerPlaceholder}
+            placeholder={
+              selectedMode === 'research'
+                ? 'Tulis topik riset mendalam... (Enter untuk mulai riset)'
+                : idID.chat.composerPlaceholder
+            }
             value={chatDraft}
             onChange={(e) => setChatDraft(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            disabled={chatStreaming}
+            disabled={chatStreaming || isLoadingResearch}
             aria-label="Pesan Anda"
           />
 
@@ -210,10 +290,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ textareaRef }) => {
             <button
               type="button"
               className="ui-icon-btn ui-icon-btn-primary ui-icon-btn-md"
-              onClick={sendChat}
-              disabled={!chatDraft.trim()}
-              title={idID.chat.send}
-              aria-label={idID.chat.send}
+              onClick={() => void handleSubmit()}
+              disabled={!chatDraft.trim() || isLoadingResearch}
+              title={selectedMode === 'research' ? 'Mulai riset' : idID.chat.send}
+              aria-label={selectedMode === 'research' ? 'Mulai riset' : idID.chat.send}
             >
               <ArrowUp size={16} />
             </button>

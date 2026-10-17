@@ -698,6 +698,53 @@
   gap: 2px;
 }
 
+/* Composer Research Depth Selector Bar (100% tokenized) */
+.composer-research-depth-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--bg-card-subtle);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.research-depth-chips {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.research-depth-chip-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-sub);
+  cursor: pointer;
+  transition: all 120ms ease-out;
+}
+
+.research-depth-chip-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-subtle);
+}
+
+.research-depth-chip-btn.active {
+  background-color: var(--accent-cyan-subtle);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+.research-depth-estimate-text {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .composer-input-row {
   display: flex;
   align-items: flex-end;

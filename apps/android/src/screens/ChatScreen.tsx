@@ -27,6 +27,8 @@ import {
   Zap,
 } from 'lucide-react-native';
 import type { ChatMessage, ChatMode, MessageAttachment } from '../api/types.ts';
+import { defaultApiClient } from '../api/client.ts';
+import { DEFAULT_BUDGET_ESTIMATES, type ResearchDepth } from '@personal-ai-os/shared';
 import { MarkdownView } from '../components/MarkdownView.tsx';
 import { ModelSelectorModal } from '../components/ModelSelectorModal.tsx';
 import { ScreenHeader } from '../components/ScreenHeader.tsx';
@@ -43,6 +45,7 @@ export interface ChatScreenProps {
   conversationId: string;
   conversationTitle?: string | undefined;
   onBack: () => void;
+  onNavigateToResearch?: ((runId: string) => void) | undefined;
 }
 
 const MODE_LABELS: Record<ChatMode, string> = {
@@ -195,10 +198,15 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   conversationId,
   conversationTitle,
   onBack,
+  onNavigateToResearch,
 }) => {
   const theme = useAppTheme();
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [selectedMessageForAction, setSelectedMessageForAction] = useState<ChatMessage | null>(null);
+
+  const [researchDepth, setResearchDepth] = useState<ResearchDepth>('standard');
+  const [researchBudgets, setResearchBudgets] = useState(DEFAULT_BUDGET_ESTIMATES);
+  const [isCreatingResearch, setIsCreatingResearch] = useState(false);
 
   const {
     messages,
@@ -231,6 +239,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   useEffect(() => {
     void loadCatalog();
   }, [loadCatalog]);
+
+  useEffect(() => {
+    if (selectedMode === 'research') {
+      void defaultApiClient
+        .getResearchConfig()
+        .then((cfg) => {
+          if (cfg.budgets) setResearchBudgets(cfg.budgets);
+        })
+        .catch(() => {});
+    }
+  }, [selectedMode]);
 
   const wsClientRef = useRef<ChatWebSocketClient | null>(null);
   const flatListRef = useRef<FlatList>(null);
@@ -266,9 +285,34 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     return () => ws.disconnect();
   }, [refetchConversationTasks]);
 
-  const handleSend = (textToSend?: string) => {
+  const handleSend = async (textToSend?: string) => {
     const content = (textToSend ?? draftText).trim();
-    if (!content || !wsClientRef.current) return;
+    if (!content) return;
+
+    if (selectedMode === 'research') {
+      if (isCreatingResearch) return;
+      setIsCreatingResearch(true);
+      try {
+        const res = await defaultApiClient.createResearch({
+          projectId: activeProjectId || '00000000-0000-0000-0000-000000000000',
+          query: content,
+          depth: researchDepth,
+        });
+        if (!textToSend) {
+          setDraftText('');
+        }
+        if (onNavigateToResearch) {
+          onNavigateToResearch(res.run.id);
+        }
+      } catch {
+        showToast('Gagal memulai riset mendalam.');
+      } finally {
+        setIsCreatingResearch(false);
+      }
+      return;
+    }
+
+    if (!wsClientRef.current) return;
     beginSend();
     try {
       wsClientRef.current.sendMessage({
@@ -724,6 +768,101 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           ) : null}
         </ScrollView>
 
+        {/* Research Depth Bar (when mode is research) */}
+        {selectedMode === 'research' && (
+          <View
+            style={[
+              styles.researchDepthBar,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
+            <View style={styles.researchDepthChipsRow}>
+              <TouchableOpacity
+                style={[
+                  styles.depthChip,
+                  {
+                    backgroundColor:
+                      researchDepth === 'quick' ? theme.colors.primary : theme.colors.surface,
+                    borderColor:
+                      researchDepth === 'quick' ? theme.colors.primary : theme.colors.surfaceBorder,
+                  },
+                ]}
+                onPress={() => setResearchDepth('quick')}
+              >
+                <Text
+                  style={[
+                    styles.depthChipText,
+                    { color: researchDepth === 'quick' ? '#ffffff' : theme.colors.textSecondary },
+                  ]}
+                >
+                  {idID.research.depth.quick}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.depthChip,
+                  {
+                    backgroundColor:
+                      researchDepth === 'standard' ? theme.colors.primary : theme.colors.surface,
+                    borderColor:
+                      researchDepth === 'standard'
+                        ? theme.colors.primary
+                        : theme.colors.surfaceBorder,
+                  },
+                ]}
+                onPress={() => setResearchDepth('standard')}
+              >
+                <Text
+                  style={[
+                    styles.depthChipText,
+                    {
+                      color:
+                        researchDepth === 'standard' ? '#ffffff' : theme.colors.textSecondary,
+                    },
+                  ]}
+                >
+                  {idID.research.depth.standard}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.depthChip,
+                  {
+                    backgroundColor:
+                      researchDepth === 'deep' ? theme.colors.primary : theme.colors.surface,
+                    borderColor:
+                      researchDepth === 'deep' ? theme.colors.primary : theme.colors.surfaceBorder,
+                  },
+                ]}
+                onPress={() => setResearchDepth('deep')}
+              >
+                <Text
+                  style={[
+                    styles.depthChipText,
+                    { color: researchDepth === 'deep' ? '#ffffff' : theme.colors.textSecondary },
+                  ]}
+                >
+                  {idID.research.depth.deep}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={[styles.researchDepthEstimate, { color: theme.colors.textMuted }]}>
+              {researchDepth === 'quick' &&
+                `Estimasi server: ~${researchBudgets.quick.maxSearches} pencarian, ~${researchBudgets.quick.maxPagesRead} halaman, maks ${Math.round(researchBudgets.quick.maxDurationMs / 1000)} dtk`}
+              {researchDepth === 'standard' &&
+                `Estimasi server: ~${researchBudgets.standard.maxSearches} pencarian, ~${researchBudgets.standard.maxPagesRead} halaman, maks ${Math.round(researchBudgets.standard.maxDurationMs / 60000)} mnt`}
+              {researchDepth === 'deep' &&
+                `Estimasi server: ~${researchBudgets.deep.maxSearches} pencarian, ~${researchBudgets.deep.maxPagesRead} halaman, maks ${Math.round(researchBudgets.deep.maxDurationMs / 60000)} mnt (tinjau rencana)`}
+            </Text>
+          </View>
+        )}
+
         {/* Text Input Row with Send / Stop buttons */}
         <View style={styles.inputControlsRow}>
           <TextInput
@@ -768,7 +907,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               disabled={
                 !draftText.trim() ||
                 isSending ||
-                connectionStatus !== 'connected'
+                isCreatingResearch ||
+                (selectedMode !== 'research' && connectionStatus !== 'connected')
               }
               style={[
                 styles.iconBtn,
@@ -776,17 +916,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                   backgroundColor:
                     !draftText.trim() ||
                     isSending ||
-                    connectionStatus !== 'connected'
+                    isCreatingResearch ||
+                    (selectedMode !== 'research' && connectionStatus !== 'connected')
                       ? theme.colors.surfaceElevated
                       : theme.colors.primary,
                   borderColor: theme.colors.surfaceBorder,
                 },
                 (!draftText.trim() ||
                   isSending ||
-                  connectionStatus !== 'connected') &&
+                  isCreatingResearch ||
+                  (selectedMode !== 'research' && connectionStatus !== 'connected')) &&
                   styles.btnDisabled,
               ]}
-              onPress={() => handleSend()}
+              onPress={() => void handleSend()}
             >
               <Send
                 size={18}
@@ -1244,5 +1386,28 @@ const styles = StyleSheet.create({
   actionModalCancelText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  researchDepthBar: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    gap: 6,
+  },
+  researchDepthChipsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  depthChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  depthChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  researchDepthEstimate: {
+    fontSize: 11,
   },
 });

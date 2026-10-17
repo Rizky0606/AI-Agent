@@ -23,6 +23,7 @@ import { MemoryScreen } from '../screens/MemoryScreen.tsx';
 import { ProjectsScreen } from '../screens/ProjectsScreen.tsx';
 import { SettingsScreen } from '../screens/SettingsScreen.tsx';
 import { TaskDetailScreen } from '../screens/TaskDetailScreen.tsx';
+import { ResearchScreen } from '../screens/ResearchScreen.tsx';
 import { DeepLinkService, type DeepLinkTarget } from '../services/deep-link.ts';
 import { defaultFcmService } from '../services/fcm-service.ts';
 import { useAuthStore } from '../state/auth-store.ts';
@@ -40,6 +41,7 @@ export const AppNavigator: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [activeConversationTitle, setActiveConversationTitle] = useState<string | undefined>(undefined);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [activeResearchId, setActiveResearchId] = useState<string | null>(null);
   const [activityInitialTab, setActivityInitialTab] = useState<'tasks' | 'approvals'>('tasks');
   const [moreSubscreen, setMoreSubscreen] = useState<'artifacts' | 'projects' | 'memory' | null>(null);
 
@@ -69,6 +71,10 @@ export const AppNavigator: React.FC = () => {
         setActiveTaskId(null);
         return true;
       }
+      if (activeResearchId !== null) {
+        setActiveResearchId(null);
+        return true;
+      }
       if (activeConversationId !== null) {
         setActiveConversationId(null);
         setActiveConversationTitle(undefined);
@@ -79,7 +85,7 @@ export const AppNavigator: React.FC = () => {
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [moreSubscreen, activeTaskId, activeConversationId]);
+  }, [moreSubscreen, activeTaskId, activeResearchId, activeConversationId]);
 
   const handleDeepLinkTarget = (target: DeepLinkTarget | null) => {
     if (!target) return;
@@ -103,6 +109,8 @@ export const AppNavigator: React.FC = () => {
       if (navigationRef.isReady()) {
         (navigationRef as { navigate: (name: string) => void }).navigate('MoreTab');
       }
+    } else if (target.screen === 'Research') {
+      setActiveResearchId(target.runId);
     }
   };
 
@@ -137,6 +145,15 @@ export const AppNavigator: React.FC = () => {
     return <LoginScreen />;
   }
 
+  if (activeResearchId) {
+    return (
+      <ResearchScreen
+        runId={activeResearchId}
+        onBack={() => setActiveResearchId(null)}
+      />
+    );
+  }
+
   // Subscreen renderers for tabs
   const renderChatStack = () => {
     if (activeConversationId) {
@@ -148,6 +165,7 @@ export const AppNavigator: React.FC = () => {
             setActiveConversationId(null);
             setActiveConversationTitle(undefined);
           }}
+          onNavigateToResearch={(runId) => setActiveResearchId(runId)}
         />
       );
     }

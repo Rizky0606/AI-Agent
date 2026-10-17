@@ -249,6 +249,13 @@ export const registerResearchRoutes = (
     },
   );
 
+  // 1b. GET /v1/research/config — Batas Anggaran & Konfigurasi Server
+  app.get('/v1/research/config', async (_request, reply) => {
+    return reply.send({
+      budgets: DEFAULT_BUDGET_BY_DEPTH,
+    });
+  });
+
   // 2. GET /v1/research/:id — Ambil Detail Research Run
   app.get(
     '/v1/research/:id',
@@ -450,6 +457,35 @@ export const registerResearchRoutes = (
       void executePipelineInBackground(user.id, runInput, abortController);
 
       return reply.send({ success: true, run: updated });
+    },
+  );
+
+  // 6. DELETE /v1/research/:id — Hapus Research Run dari Riwayat
+  app.delete(
+    '/v1/research/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', format: 'uuid' } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const user = await extractUser(request, deps.auth);
+      const controller = activeControllers.get(request.params.id);
+      if (controller) {
+        controller.abort();
+        activeControllers.delete(request.params.id);
+      }
+      const deleted = await deps.researchRepo.deleteRun(user.id, request.params.id);
+      if (!deleted) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Research run tidak ditemukan.' },
+        });
+      }
+      return reply.send({ success: true });
     },
   );
 };

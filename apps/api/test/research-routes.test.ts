@@ -398,3 +398,59 @@ test('POST /v1/research/:id/approve-plan rejects invalid status and approves wai
   assert.equal(plan.approved, true);
   assert.equal(plan.subQuestions[0]?.question, 'User updated sub question');
 });
+
+test('GET /v1/research/config returns server default budgets', async () => {
+  const { app } = await setupResearchTest();
+
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/research/config',
+  });
+
+  assert.equal(res.statusCode, 200);
+  const data = res.json();
+  assert.ok(data.budgets);
+  assert.ok(data.budgets.quick);
+  assert.ok(data.budgets.standard);
+  assert.ok(data.budgets.deep);
+  assert.equal(data.budgets.quick.maxSearches, 2);
+  assert.equal(data.budgets.standard.maxSearches, 5);
+  assert.equal(data.budgets.deep.maxSearches, 12);
+});
+
+test('DELETE /v1/research/:id deletes run and enforces tenant isolation', async () => {
+  const { app, alice, bob, project, researchRepo } = await setupResearchTest();
+
+  const run = await researchRepo.createRun({
+    userId: alice.user.id,
+    projectId: project.id,
+    query: 'Query to delete',
+    depth: 'quick',
+    budgetConfig: { maxSearches: 2, maxPagesRead: 2, maxModelTokens: 4000, maxDurationMs: 30000 },
+  });
+
+  // 1. Bob cannot delete Alice's run (returns 404)
+  const bobRes = await app.inject({
+    method: 'DELETE',
+    url: `/v1/research/${run.id}`,
+    headers: { authorization: `Bearer ${bob.accessToken}` },
+  });
+  assert.equal(bobRes.statusCode, 404);
+
+  // 2. Alice deletes her run
+  const deleteRes = await app.inject({
+    method: 'DELETE',
+    url: `/v1/research/${run.id}`,
+    headers: { authorization: `Bearer ${alice.accessToken}` },
+  });
+  assert.equal(deleteRes.statusCode, 200);
+  assert.equal(deleteRes.json().success, true);
+
+  // 3. Run is gone
+  const getRes = await app.inject({
+    method: 'GET',
+    url: `/v1/research/${run.id}`,
+    headers: { authorization: `Bearer ${alice.accessToken}` },
+  });
+  assert.equal(getRes.statusCode, 404);
+});

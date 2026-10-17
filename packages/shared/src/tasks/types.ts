@@ -77,6 +77,9 @@ export type TaskEventType =
   | 'research.draft'
   | 'research.verify'
   | 'research.done'
+  | 'research.plan_approved'
+  | 'research.completed'
+  | 'research.cancelled'
   | 'research.error';
 
 export interface TaskEventEnvelope {

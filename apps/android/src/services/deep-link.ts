@@ -3,6 +3,7 @@ export type DeepLinkTarget =
   | { screen: 'ApprovalDetail'; approvalId: string }
   | { screen: 'TaskDetail'; taskId: string }
   | { screen: 'ProjectDetail'; projectId: string }
+  | { screen: 'Research'; runId: string }
   | { screen: 'Unknown'; path: string };
 
 export class DeepLinkService {
@@ -30,6 +31,9 @@ export class DeepLinkService {
     }
     if ((section === 'projects' || section === 'project') && id) {
       return { screen: 'ProjectDetail', projectId: id };
+    }
+    if ((section === 'research' || section === 'riset') && id) {
+      return { screen: 'Research', runId: id };
     }
 
     return { screen: 'Unknown', path: normalized };

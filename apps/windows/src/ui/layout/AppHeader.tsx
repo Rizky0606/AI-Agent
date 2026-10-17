@@ -1,11 +1,11 @@
 import React from 'react';
-import { PanelLeft, MessageSquare, FolderGit2, Brain, Wrench, Settings, Bell } from 'lucide-react';
+import { PanelLeft, MessageSquare, FolderGit2, Brain, Wrench, BookOpen, Settings, Bell } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import { StatusDot, type StatusDotKind } from '../components/StatusDot.tsx';
 import { ThemeSwitcher } from '../components/ThemeSwitcher.tsx';
 import { idID } from '../locales/id-ID.ts';
 
-export type ActiveView = 'chat' | 'project' | 'memory' | 'skills' | 'settings';
+export type ActiveView = 'chat' | 'project' | 'memory' | 'skills' | 'research' | 'settings';
 
 interface AppHeaderProps {
   activeView: ActiveView;
@@ -71,6 +71,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           >
             <Wrench size={15} />
             <span>{idID.nav.skills}</span>
+          </button>
+          <button
+            className={`header-nav-btn ${activeView === 'research' ? 'active' : ''}`}
+            onClick={() => onChangeView('research')}
+            aria-current={activeView === 'research' ? 'page' : undefined}
+          >
+            <BookOpen size={15} />
+            <span>{idID.nav.research}</span>
           </button>
           <button
             className={`header-nav-btn ${activeView === 'settings' ? 'active' : ''}`}

@@ -1,5 +1,16 @@
 import { create } from 'zustand';
-import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
+import {
+  DEFAULT_BUDGET_ESTIMATES,
+  createInitialResearchProgressState,
+  reduceResearchProgress,
+  type ResearchBudgetConfig,
+  type ResearchDepth,
+  type ResearchProgressState,
+  type ResearchRunSummary,
+  type ResearchSubQuestionState,
+  type TaskEventEnvelope,
+  type TaskRecord,
+} from '@personal-ai-os/shared';
 import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
@@ -269,6 +280,21 @@ export interface AgentState {
     riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   }) => Promise<void>;
   deleteMcpServer: (id: string) => Promise<void>;
+  researchDepth: ResearchDepth;
+  setResearchDepth: (depth: ResearchDepth) => void;
+  researchBudgets: Record<ResearchDepth, ResearchBudgetConfig>;
+  fetchResearchConfig: () => Promise<void>;
+  activeResearchId: string | null;
+  activeResearchState: ResearchProgressState | null;
+  researchHistory: ResearchRunSummary[];
+  isLoadingResearch: boolean;
+  startResearch: (query: string, depth?: ResearchDepth) => Promise<string>;
+  openResearch: (runId: string) => Promise<void>;
+  closeActiveResearch: () => void;
+  refreshResearchHistory: () => Promise<void>;
+  approveResearchPlan: (runId: string, plan: { subQuestions: ResearchSubQuestionState[] }) => Promise<void>;
+  cancelResearch: (runId: string) => Promise<void>;
+  deleteResearch: (runId: string) => Promise<void>;
 }
 
 export const createAgentStore = (
@@ -322,6 +348,7 @@ export const createAgentStore = (
       });
     let eventsStream: TaskEventsStream | null = null;
     let chatEventsStream: TaskEventsStream | null = null;
+    let researchEventsStream: TaskEventsStream | null = null;
     const appendEvent = (event: TaskEventEnvelope): void => {
       set((state) => ({
         taskEvents: [
@@ -1227,6 +1254,203 @@ export const createAgentStore = (
         capabilities: getInitialCapabilities(),
       });
     },
+
+    researchDepth: 'standard',
+    setResearchDepth: (depth) => set({ researchDepth: depth }),
+    researchBudgets: DEFAULT_BUDGET_ESTIMATES,
+    fetchResearchConfig: () => run(async () => {
+      try {
+        const res = await api().getResearchConfig();
+        if (res.budgets) {
+          set({ researchBudgets: res.budgets });
+        }
+      } catch {
+        // Fallback default estimates
+      }
+    }),
+    activeResearchId: null,
+    activeResearchState: null,
+    researchHistory: [],
+    isLoadingResearch: false,
+
+    startResearch: async (query, depth) => {
+      const chosenDepth = depth ?? get().researchDepth;
+      set({ isLoadingResearch: true });
+      try {
+        const activeConv = get().conversations.find((c) => c.id === get().activeConversationId);
+        let projectId = activeConv?.projectId;
+        if (!projectId) {
+          try {
+            const pr = await api().listProjects();
+            projectId = pr.projects[0]?.id;
+          } catch {
+            // ignore
+          }
+        }
+        if (!projectId) {
+          projectId = '00000000-0000-0000-0000-000000000000';
+        }
+
+        const { run: runItem } = await api().createResearch({
+          projectId,
+          query,
+          depth: chosenDepth,
+        });
+
+        const initialProgress = createInitialResearchProgressState({
+          runId: runItem.id,
+          query: runItem.query,
+          depth: chosenDepth,
+          budgetConfig: runItem.budgetConfig,
+        });
+
+        set({
+          activeResearchId: runItem.id,
+          activeResearchState: initialProgress,
+          isLoadingResearch: false,
+        });
+
+        researchEventsStream?.disconnect();
+        researchEventsStream?.reset();
+        researchEventsStream = new TaskEventsStream({
+          serverUrl: () => get().serverUrl,
+          token: () => get().authToken,
+          taskId: () => get().activeResearchId,
+          onEvent: (event) => {
+            const current = get().activeResearchState;
+            if (!current) return;
+            const next = reduceResearchProgress(current, event);
+            set({ activeResearchState: next });
+            if (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled') {
+              void get().refreshResearchHistory();
+            }
+          },
+        });
+        researchEventsStream.connect();
+
+        void get().refreshResearchHistory();
+        return runItem.id;
+      } catch (err: unknown) {
+        set({ isLoadingResearch: false });
+        throw err;
+      }
+    },
+
+    openResearch: (runId) => run(async () => {
+      set({ isLoadingResearch: true, activeResearchId: runId });
+      try {
+        const details = await api().getResearch(runId);
+        const planObj = details.run.plan as { subQuestions?: ResearchSubQuestionState[] } | undefined;
+        const progressState: ResearchProgressState = {
+          runId: details.run.id,
+          status: details.run.status,
+          query: details.run.query,
+          depth: details.run.depth,
+          plan: planObj ? { subQuestions: planObj.subQuestions ?? [] } : undefined,
+          subQuestions: planObj?.subQuestions ?? [],
+          sources: details.sources ?? [],
+          evidence: details.evidence ?? [],
+          report: details.report ?? undefined,
+          budgetConfig: details.run.budgetConfig,
+          budgetUsed: details.run.budgetUsed,
+          seenEventIds: [],
+          updatedAt: Date.now(),
+        };
+
+        set({
+          activeResearchState: progressState,
+          isLoadingResearch: false,
+        });
+
+        if (
+          details.run.status === 'running' ||
+          details.run.status === 'planning' ||
+          details.run.status === 'waiting_plan_approval' ||
+          details.run.status === 'queued'
+        ) {
+          researchEventsStream?.disconnect();
+          researchEventsStream?.reset();
+          researchEventsStream = new TaskEventsStream({
+            serverUrl: () => get().serverUrl,
+            token: () => get().authToken,
+            taskId: () => get().activeResearchId,
+            onEvent: (event) => {
+              const current = get().activeResearchState;
+              if (!current) return;
+              const next = reduceResearchProgress(current, event);
+              set({ activeResearchState: next });
+              if (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled') {
+                void get().refreshResearchHistory();
+              }
+            },
+          });
+          researchEventsStream.connect();
+        }
+      } catch (err: unknown) {
+        set({ isLoadingResearch: false });
+        throw err;
+      }
+    }),
+
+    closeActiveResearch: () => {
+      researchEventsStream?.disconnect();
+      set({ activeResearchId: null, activeResearchState: null });
+    },
+
+    refreshResearchHistory: () => run(async () => {
+      try {
+        const res = await api().listResearch({ limit: 50 });
+        set({ researchHistory: res.runs });
+      } catch {
+        // ignore
+      }
+    }),
+
+    approveResearchPlan: (runId, plan) => run(async () => {
+      await api().approveResearchPlan(runId, plan);
+      set((state) => {
+        if (state.activeResearchState && state.activeResearchState.runId === runId) {
+          return {
+            activeResearchState: {
+              ...state.activeResearchState,
+              status: 'running',
+              plan: {
+                subQuestions: plan.subQuestions,
+                approved: true,
+              },
+              subQuestions: plan.subQuestions,
+            },
+          };
+        }
+        return state;
+      });
+    }),
+
+    cancelResearch: (runId) => run(async () => {
+      await api().cancelResearch(runId);
+      set((state) => {
+        if (state.activeResearchState && state.activeResearchState.runId === runId) {
+          return {
+            activeResearchState: {
+              ...state.activeResearchState,
+              status: 'cancelled',
+            },
+          };
+        }
+        return state;
+      });
+      void get().refreshResearchHistory();
+    }),
+
+    deleteResearch: (runId) => run(async () => {
+      await api().deleteResearch(runId);
+      if (get().activeResearchId === runId) {
+        get().closeActiveResearch();
+      }
+      set((state) => ({
+        researchHistory: state.researchHistory.filter((r) => r.id !== runId),
+      }));
+    }),
     };
   });
 };

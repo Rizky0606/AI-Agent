@@ -96,6 +96,7 @@ export interface ResearchRepository {
     evidence: ResearchEvidenceRow[];
     report: ResearchReportRow | null;
   } | null>;
+  deleteRun(userId: string, runId: string): Promise<boolean>;
 }
 
 export class DrizzleResearchRepository implements ResearchRepository {
@@ -369,6 +370,15 @@ export class DrizzleResearchRepository implements ResearchRepository {
 
     return { run, sources, evidence, report };
   }
+
+  async deleteRun(userId: string, runId: string): Promise<boolean> {
+    const run = await this.getRun(userId, runId);
+    if (!run) return false;
+    await this.db
+      .delete(researchRuns)
+      .where(and(eq(researchRuns.id, runId), eq(researchRuns.userId, userId)));
+    return true;
+  }
 }
 
 export class InMemoryResearchRepository implements ResearchRepository {
@@ -562,5 +572,15 @@ export class InMemoryResearchRepository implements ResearchRepository {
       evidence: await this.getEvidence(runId),
       report: await this.getReport(runId),
     };
+  }
+
+  async deleteRun(userId: string, runId: string): Promise<boolean> {
+    const run = await this.getRun(userId, runId);
+    if (!run) return false;
+    this.runs.delete(runId);
+    this.sources.delete(runId);
+    this.evidence.delete(runId);
+    this.reports.delete(runId);
+    return true;
   }
 }

@@ -20,7 +20,17 @@ import {
   type UserPreferences,
   type RuntimeDescriptor,
 } from './types.ts';
-import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
+import type {
+  ResearchBudgetConfig,
+  ResearchDepth,
+  ResearchEvidenceItem,
+  ResearchReportData,
+  ResearchRunSummary,
+  ResearchSourceItem,
+  ResearchSubQuestionState,
+  TaskEventEnvelope,
+  TaskRecord,
+} from '@personal-ai-os/shared';
 
 export interface ApiClientOptions {
   storage?: TokenStorage | undefined;
@@ -572,6 +582,80 @@ export class ApiClient {
     if (params?.limit) q.set('limit', String(params.limit));
     const qs = q.toString() ? `?${q.toString()}` : '';
     return this.request<{ logs: McpCallLogItem[] }>(`/v1/mcp/logs${qs}`);
+  }
+
+  async getResearchConfig(): Promise<{ budgets: Record<ResearchDepth, ResearchBudgetConfig> }> {
+    return this.request<{ budgets: Record<ResearchDepth, ResearchBudgetConfig> }>('/v1/research/config');
+  }
+
+  async createResearch(params: {
+    projectId: string;
+    query: string;
+    scope?: string | undefined;
+    language?: string | undefined;
+    depth?: ResearchDepth | undefined;
+    customBudget?: Partial<ResearchBudgetConfig> | undefined;
+    requirePlanApproval?: boolean | undefined;
+  }): Promise<{ run: ResearchRunSummary }> {
+    return this.request<{ run: ResearchRunSummary }>('/v1/research', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async getResearch(id: string): Promise<{
+    run: ResearchRunSummary;
+    sources: ResearchSourceItem[];
+    evidence: ResearchEvidenceItem[];
+    report: ResearchReportData | null;
+  }> {
+    return this.request<{
+      run: ResearchRunSummary;
+      sources: ResearchSourceItem[];
+      evidence: ResearchEvidenceItem[];
+      report: ResearchReportData | null;
+    }>(`/v1/research/${encodeURIComponent(id)}`);
+  }
+
+  async listResearch(params?: {
+    projectId?: string | undefined;
+    status?: string | undefined;
+    limit?: number | undefined;
+    offset?: number | undefined;
+  }): Promise<{ runs: ResearchRunSummary[]; total: number }> {
+    const q = new URLSearchParams();
+    if (params?.projectId) q.set('projectId', params.projectId);
+    if (params?.status) q.set('status', params.status);
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.offset) q.set('offset', String(params.offset));
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<{ runs: ResearchRunSummary[]; total: number }>(`/v1/research${qs}`);
+  }
+
+  async cancelResearch(id: string): Promise<{ success: boolean; run: ResearchRunSummary }> {
+    return this.request<{ success: boolean; run: ResearchRunSummary }>(
+      `/v1/research/${encodeURIComponent(id)}/cancel`,
+      { method: 'POST' },
+    );
+  }
+
+  async approveResearchPlan(
+    id: string,
+    plan?: { subQuestions?: ResearchSubQuestionState[] } | undefined,
+  ): Promise<{ success: boolean; run: ResearchRunSummary }> {
+    return this.request<{ success: boolean; run: ResearchRunSummary }>(
+      `/v1/research/${encodeURIComponent(id)}/approve-plan`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ plan }),
+      },
+    );
+  }
+
+  async deleteResearch(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/research/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
   }
 }
 

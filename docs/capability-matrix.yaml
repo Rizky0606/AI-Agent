@@ -237,7 +237,21 @@ capabilities:
       - Extended ResearchEvaluator: Single evaluator reused; added verbatim limit check (<= 200 chars), claim support verification, and information gaps criteria.
       - Concurrency & Resources: Max 3 concurrent fetches via ConcurrencyLimiter; 1 active run at a time per user to honor 2 OCPU / 12 GB ARM64 VPS constraints.
       - Clean-room AGPL compliance: Zero code from Odysseus (AGPL-3.0-or-later); built purely on existing repo abstractions and MIT/Apache dependencies.
-      - Remaining gaps: UI screens (chat deep research mode, report viewer, plan editor) deferred to frontend sessions (Sesi 25).
+      - Frontend integration: Complete in Sesi 25 across Windows desktop and Android mobile clients.
+  deep_research_ui:
+    status: implemented
+    code: packages/shared/src/research; apps/windows/src/ui/research; apps/android/src/screens/ResearchScreen.tsx; apps/android/src/components/SourceBottomSheet.tsx
+    clients: windows & android
+    proof: packages/shared/test/research-progress.test.ts; apps/windows/test/research-ui.test.ts; apps/android/test/research.test.ts
+    limitation: |
+      Deep Research UI implemented in Sesi 25 (ADR 0026, 2026-10-17):
+      - Chat Mode Switcher: Dedicated Deep Research toggle in chat composer with depth selector (quick, standard, deep) and upfront budget transparency (searches, pages, model tokens, duration).
+      - Interactive Plan Approval: Modal/screen for 'waiting_plan_approval' state allowing users to review, add, edit, or remove sub-questions before execution resumes.
+      - Real-Time Live Progress: Reactive timeline driven by WebSocket events (plan, search, page_read, extract, synthesize, verify) with deduplication and terminal-state protection.
+      - Interactive Report Viewer: Numbered citation pills ([1], [2]) triggering source preview drawer/bottom sheet with domain credibility, quote verification, and direct outbound links.
+      - Section Confidence & Gaps: Visual meters showing confidence score per section and explicit 'Yang Tidak Ditemukan' callouts for missing information.
+      - Shared State Architecture: Cross-platform pure reducer and citation parser in `@personal-ai-os/shared` consumed identically by React (Windows) and React Native (Android).
+      - Remaining gaps: Physical device validation on Android and Windows native tray notifications require manual verification.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

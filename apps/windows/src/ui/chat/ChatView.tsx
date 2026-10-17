@@ -5,7 +5,11 @@ import { EmptyChatState } from './EmptyChatState.tsx';
 import { ChatComposer } from './ChatComposer.tsx';
 import { idID } from '../locales/id-ID.ts';
 
-export const ChatView: React.FC = () => {
+interface ChatViewProps {
+  onNavigateToResearch?: (() => void) | undefined;
+}
+
+export const ChatView: React.FC<ChatViewProps> = ({ onNavigateToResearch }) => {
   const {
     conversations,
     activeConversationId,
@@ -75,7 +79,10 @@ export const ChatView: React.FC = () => {
         )}
 
         {/* Floating Composer */}
-        <ChatComposer textareaRef={composerTextareaRef} />
+        <ChatComposer
+          textareaRef={composerTextareaRef}
+          onNavigateToResearch={onNavigateToResearch}
+        />
       </div>
     </div>
   );
