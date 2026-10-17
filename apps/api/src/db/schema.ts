@@ -467,6 +467,7 @@ export const schedules = pgTable(
     taskPayload: jsonb('task_payload').notNull(),
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }),
+    lastBrief: text('last_brief'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     ...created,
   },
@@ -724,4 +725,38 @@ export const promptTemplates = pgTable(
 
 export type PromptTemplateRow = typeof promptTemplates.$inferSelect;
 export type NewPromptTemplateRow = typeof promptTemplates.$inferInsert;
+
+export const skillProposals = pgTable(
+  'skill_proposals',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    skillName: varchar('skill_name', { length: 120 }).notNull(),
+    title: varchar('title', { length: 200 }).notNull(),
+    description: text('description').notNull(),
+    proposedManifest: jsonb('proposed_manifest').notNull(),
+    promptInstructions: text('prompt_instructions'),
+    changeType: varchar('change_type', { length: 32 }).default('new_skill').notNull(),
+    targetSkillName: varchar('target_skill_name', { length: 120 }),
+    diff: text('diff'),
+    status: varchar('status', { length: 32 }).default('pending').notNull(),
+    reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    rejectionReason: text('rejection_reason'),
+    ...created,
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('skill_proposals_user_idx').on(table.userId),
+    index('skill_proposals_status_idx').on(table.status),
+    index('skill_proposals_skill_name_idx').on(table.skillName),
+  ],
+);
+
+export type SkillProposalRow = typeof skillProposals.$inferSelect;
+export type NewSkillProposalRow = typeof skillProposals.$inferInsert;
+
 
