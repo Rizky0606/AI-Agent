@@ -237,26 +237,51 @@ export class InMemoryMemoryStore implements MemoryStore {
     const results: SemanticSearchResult[] = [];
     const threshold = options.threshold ?? 0.0;
 
+    const mode = options.searchMode ?? (options.queryEmbedding ? 'hybrid' : 'text_fallback');
+
     for (const mem of candidates) {
+      // 1. Text keyword score
+      const qWords = options.query.toLowerCase().split(/\s+/).filter(Boolean);
+      const memText = mem.content.toLowerCase();
+      let matches = 0;
+      for (const w of qWords) {
+        if (memText.includes(w)) matches++;
+      }
+      const textScore = qWords.length > 0 ? matches / qWords.length : 0;
+
+      // 2. Vector cosine score
+      const vectorScore =
+        options.queryEmbedding && mem.embedding
+          ? Math.max(0, cosineSimilarity(options.queryEmbedding, mem.embedding))
+          : 0;
+
       let score = 0;
-      if (options.queryEmbedding && mem.embedding) {
-        score = cosineSimilarity(options.queryEmbedding, mem.embedding);
-      } else {
-        // Keyword fallback matching
-        const qWords = options.query.toLowerCase().split(/\s+/).filter(Boolean);
-        const memText = mem.content.toLowerCase();
-        let matches = 0;
-        for (const w of qWords) {
-          if (memText.includes(w)) matches++;
+      let effectiveMode: 'semantic' | 'text' | 'hybrid' | 'text_fallback' = 'text_fallback';
+
+      if (mode === 'text') {
+        score = textScore;
+        effectiveMode = 'text';
+      } else if (mode === 'semantic') {
+        score = options.queryEmbedding && mem.embedding ? vectorScore : textScore;
+        effectiveMode = options.queryEmbedding && mem.embedding ? 'semantic' : 'text_fallback';
+      } else if (mode === 'hybrid') {
+        if (options.queryEmbedding && mem.embedding) {
+          score = Number(((vectorScore * 0.65) + (textScore * 0.35)).toFixed(4));
+          effectiveMode = 'hybrid';
+        } else {
+          score = textScore;
+          effectiveMode = 'text_fallback';
         }
-        score = qWords.length > 0 ? matches / qWords.length : 0;
+      } else {
+        score = options.queryEmbedding && mem.embedding ? vectorScore : textScore;
+        effectiveMode = options.queryEmbedding && mem.embedding ? 'semantic' : 'text_fallback';
       }
 
       if (score >= threshold) {
         results.push({
           memory: mem,
           score,
-          searchMode: options.queryEmbedding ? 'semantic' : 'text_fallback',
+          searchMode: effectiveMode,
         });
       }
     }

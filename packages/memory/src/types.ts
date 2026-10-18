@@ -62,6 +62,7 @@ export interface SemanticSearchOptions {
   type?: MemoryType | undefined;
   limit?: number | undefined;
   threshold?: number | undefined;
+  searchMode?: 'semantic' | 'text' | 'hybrid' | undefined;
 }
 
 export type MemoryStatus = 'active' | 'proposed' | 'approved' | 'rejected';
@@ -69,7 +70,7 @@ export type MemoryStatus = 'active' | 'proposed' | 'approved' | 'rejected';
 export interface SemanticSearchResult {
   memory: MemoryRecord;
   score: number;
-  searchMode?: 'semantic' | 'text_fallback' | undefined;
+  searchMode?: 'semantic' | 'text_fallback' | 'text' | 'hybrid' | undefined;
 }
 
 export interface EmbeddingProvider {
