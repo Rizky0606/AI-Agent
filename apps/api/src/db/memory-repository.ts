@@ -12,7 +12,7 @@ import {
 } from '@personal-ai-os/memory';
 import type { Database } from './client.ts';
 import { auditLogs, memories, type MemoryRow } from './schema.ts';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql, type SQL } from 'drizzle-orm';
 
 export interface MemoryRepository {
   evaluateCandidate(candidate: MemoryCandidate): MemoryWriteEvaluation;
@@ -48,6 +48,7 @@ export interface MemoryRepository {
   backfillEmbeddings?(
     batchSize?: number,
     maxRows?: number,
+    rateLimitDelayMs?: number,
   ): Promise<{ processed: number; success: number; failed: number }>;
   isSemanticSearchActive?(): boolean;
 }
@@ -311,37 +312,122 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       baseConditions.push(eq(memories.type, options.type));
     }
 
-    // 1. Live semantic vector search if active
+    const requestedMode = options.searchMode ?? (this.isSemanticSearchActive() ? 'hybrid' : 'text');
+
+    // 1. Pure text search if explicitly requested
+    if (requestedMode === 'text') {
+      return this.executeTextSearch(baseConditions, q, options.limit ?? 10, 'text');
+    }
+
+    // 2. Pure semantic vector search
+    if (requestedMode === 'semantic') {
+      if (this.isSemanticSearchActive() && this.embeddingProvider) {
+        try {
+          return await this.executeVectorSearch(baseConditions, options);
+        } catch {
+          return this.executeTextSearch(baseConditions, q, options.limit ?? 10, 'text_fallback');
+        }
+      }
+      return this.executeTextSearch(baseConditions, q, options.limit ?? 10, 'text_fallback');
+    }
+
+    // 3. Hybrid search (default when semantic is active): combines vector similarity and full-text ranking
     if (this.isSemanticSearchActive() && this.embeddingProvider) {
       try {
-        const queryVector =
-          options.queryEmbedding ?? (await this.embeddingProvider.embed(options.query));
-        if (queryVector && queryVector.length > 0) {
-          const vectorSql = sql.raw(`'[${queryVector.join(',')}]'::vector`);
-          const similarityExpr = sql<number>`1 - (${memories.embedding} <=> ${vectorSql})`;
+        const fetchLimit = Math.max(10, (options.limit ?? 10) * 2);
+        const [vectorResults, textResults] = await Promise.all([
+          this.executeVectorSearch(baseConditions, { ...options, limit: fetchLimit }),
+          this.executeTextSearch(baseConditions, q, fetchLimit, 'text'),
+        ]);
 
-          const rows = await this.db
-            .select({
-              row: memories,
-              score: similarityExpr,
-            })
-            .from(memories)
-            .where(and(...baseConditions, sql`${memories.embedding} IS NOT NULL`))
-            .orderBy(desc(similarityExpr))
-            .limit(options.limit ?? 10);
+        // Reciprocal Rank Fusion (RRF) with k=60
+        const RRF_K = 60;
+        const memoryMap = new Map<string, { memory: MemoryRecord; vectorScore: number; textScore: number; rrfScore: number }>();
 
-          return rows.map((r) => ({
-            memory: r.row as unknown as MemoryRecord,
-            score: Number(Math.max(0, Math.min(1.0, r.score || 0)).toFixed(2)),
-            searchMode: 'semantic' as const,
-          }));
+        for (let rank = 0; rank < vectorResults.length; rank++) {
+          const item = vectorResults[rank]!;
+          const id = item.memory.id;
+          const entry = memoryMap.get(id) ?? { memory: item.memory, vectorScore: 0, textScore: 0, rrfScore: 0 };
+          entry.vectorScore = item.score;
+          entry.rrfScore += 1 / (RRF_K + rank + 1);
+          memoryMap.set(id, entry);
+        }
+
+        for (let rank = 0; rank < textResults.length; rank++) {
+          const item = textResults[rank]!;
+          const id = item.memory.id;
+          const entry = memoryMap.get(id) ?? { memory: item.memory, vectorScore: 0, textScore: 0, rrfScore: 0 };
+          entry.textScore = item.score;
+          entry.rrfScore += 1 / (RRF_K + rank + 1);
+          memoryMap.set(id, entry);
+        }
+
+        const sorted = Array.from(memoryMap.values()).sort((a, b) => b.rrfScore - a.rrfScore);
+        const finalResults = sorted.slice(0, options.limit ?? 10).map((entry) => {
+          // Weighted composite score: 65% vector similarity + 35% text relevance
+          const compositeScore = entry.vectorScore > 0 && entry.textScore > 0
+            ? Number(((entry.vectorScore * 0.65) + (entry.textScore * 0.35)).toFixed(2))
+            : entry.vectorScore > 0
+              ? entry.vectorScore
+              : entry.textScore;
+
+          return {
+            memory: entry.memory,
+            score: Math.min(1.0, Math.max(0.01, compositeScore)),
+            searchMode: 'hybrid' as const,
+          };
+        });
+
+        if (finalResults.length > 0) {
+          return finalResults;
         }
       } catch {
-        // Fall through to PostgreSQL full-text fallback on provider error
+        // Fall through to text fallback on provider failure
       }
     }
 
-    // 2. Truthful non-semantic fallback: PostgreSQL full-text search (tsvector) + ILIKE
+    // Fallback: PostgreSQL full-text search (tsvector) + ILIKE
+    return this.executeTextSearch(baseConditions, q, options.limit ?? 10, 'text_fallback');
+  }
+
+  private async executeVectorSearch(
+    baseConditions: SQL[],
+    options: SemanticSearchOptions,
+  ): Promise<SemanticSearchResult[]> {
+    if (!this.db || !this.embeddingProvider) return [];
+
+    const queryVector =
+      options.queryEmbedding ?? (await this.embeddingProvider.embed(options.query));
+    if (!queryVector || queryVector.length === 0) return [];
+
+    const vectorSql = sql.raw(`'[${queryVector.join(',')}]'::vector`);
+    const similarityExpr = sql<number>`1 - (${memories.embedding} <=> ${vectorSql})`;
+
+    const rows = await this.db
+      .select({
+        row: memories,
+        score: similarityExpr,
+      })
+      .from(memories)
+      .where(and(...baseConditions, sql`${memories.embedding} IS NOT NULL`))
+      .orderBy(desc(similarityExpr))
+      .limit(options.limit ?? 10);
+
+    return rows.map((r) => ({
+      memory: r.row as unknown as MemoryRecord,
+      score: Number(Math.max(0, Math.min(1.0, r.score || 0)).toFixed(2)),
+      searchMode: 'semantic' as const,
+    }));
+  }
+
+  private async executeTextSearch(
+    baseConditions: SQL[],
+    q: string,
+    limit: number,
+    mode: 'text' | 'text_fallback',
+  ): Promise<SemanticSearchResult[]> {
+    if (!this.db) return [];
+
     const rankExpr = sql<number>`ts_rank(to_tsvector('simple', ${memories.content}), plainto_tsquery('simple', ${q}))`;
     const searchFilter = sql`(
       to_tsvector('simple', ${memories.content}) @@ plainto_tsquery('simple', ${q})
@@ -356,7 +442,7 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       .from(memories)
       .where(and(...baseConditions, searchFilter))
       .orderBy(desc(rankExpr), desc(memories.createdAt))
-      .limit(options.limit ?? 10);
+      .limit(limit);
 
     return textRows.map((r) => {
       const rawScore = Number(r.rank);
@@ -364,7 +450,7 @@ export class DrizzleMemoryRepository implements MemoryRepository {
       return {
         memory: r.row as unknown as MemoryRecord,
         score,
-        searchMode: 'text_fallback' as const,
+        searchMode: mode,
       };
     });
   }
@@ -414,6 +500,7 @@ export class DrizzleMemoryRepository implements MemoryRepository {
   async backfillEmbeddings(
     batchSize = 20,
     maxRows = 100,
+    rateLimitDelayMs = 250,
   ): Promise<{ processed: number; success: number; failed: number }> {
     if (!this.isSemanticSearchActive() || !this.embeddingProvider || !this.db) {
       return { processed: 0, success: 0, failed: 0 };
@@ -446,6 +533,11 @@ export class DrizzleMemoryRepository implements MemoryRepository {
         }
       } catch {
         failed += batch.length;
+      }
+
+      // Respect rate limits between consecutive batches
+      if (rateLimitDelayMs > 0 && i + batchSize < rows.length) {
+        await new Promise((resolve) => setTimeout(resolve, rateLimitDelayMs));
       }
     }
 

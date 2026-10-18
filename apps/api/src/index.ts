@@ -2,11 +2,18 @@ import { fileURLToPath } from 'node:url';
 import { Redis } from 'ioredis';
 import {
   NineRouterGateway,
+  NineRouterEmbeddingProvider,
   MockModelGateway,
+  MockEmbeddingProvider,
   type ModelGateway,
 } from '@personal-ai-os/model-gateway';
 import { ManifestValidator, SkillLoader } from '@personal-ai-os/agent-core';
-import { InactiveEmbeddingProvider } from '@personal-ai-os/memory';
+import {
+  InactiveEmbeddingProvider,
+  CachedEmbeddingProvider,
+  GatewayEmbeddingAdapter,
+  type EmbeddingProvider,
+} from '@personal-ai-os/memory';
 import { ArtifactManager, DiskArtifactStorage, createDefaultToolRegistry } from '@personal-ai-os/tools';
 import {
   EventEngine,
@@ -171,10 +178,35 @@ await modelConfigRepository.upsertModelConfig(
 
 const modelRouter = new ModelRouter(modelConfigRepository, gateway);
 
-// Durable memory store. Semantic search stays inactive because 9Router exposes no embedding
-// provider (`POST /v1/embeddings` returns "No credentials for provider: openai"), so vectors
-// cannot be generated and `isSemanticSearchActive()` reports false honestly.
-const memoryRepository = new DrizzleMemoryRepository(db, new InactiveEmbeddingProvider());
+// Durable memory store with CachedEmbeddingProvider and SHA-256 hash caching.
+// When 9Router is configured with an embedding provider (e.g. OpenAI text-embedding-3-small),
+// vectors are stored into pgvector. In mock mode or if 9Router credentials are not yet provisioned,
+// requests gracefully fall back to PostgreSQL full-text search (tsvector + ILIKE).
+let rawEmbeddingProvider: EmbeddingProvider;
+if (modelGatewaySetting === 'mock') {
+  rawEmbeddingProvider = new GatewayEmbeddingAdapter(
+    new MockEmbeddingProvider({ dimensions: 1536 }),
+  );
+} else if (nineRouterKey && nineRouterKey.trim() !== '') {
+  rawEmbeddingProvider = new GatewayEmbeddingAdapter(
+    new NineRouterEmbeddingProvider({
+      baseUrl: process.env.NINEROUTER_BASE_URL ?? 'https://9router.ojixx.my.id/v1',
+      apiKey: nineRouterKey,
+      model: process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small',
+      dimensions: 1536,
+      timeoutMs: Number(process.env.EMBEDDING_TIMEOUT_MS ?? 30000),
+    }),
+  );
+} else {
+  rawEmbeddingProvider = new InactiveEmbeddingProvider();
+}
+
+const embeddingProvider = new CachedEmbeddingProvider(rawEmbeddingProvider, {
+  maxEntries: Number(process.env.EMBEDDING_CACHE_MAX_ENTRIES ?? 10000),
+  sanitizeInput: true,
+});
+
+const memoryRepository = new DrizzleMemoryRepository(db, embeddingProvider);
 
 // Artifacts Subsystem with DiskArtifactStorage and quota
 const artifactsDir =

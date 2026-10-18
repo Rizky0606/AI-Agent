@@ -180,6 +180,16 @@ export class DeepResearchEngine {
               const count = domainCount.get(domain) ?? 0;
               if (count >= 2) continue;
 
+              // Near-duplicate snippet suppression across different URLs (threshold: 0.88)
+              const hitText = `${hit.title} ${hit.snippet}`.trim();
+              if (hitText.length > 20) {
+                const isNearDuplicate = candidateUrls.some((c) => {
+                  const cText = `${c.title} ${c.snippet}`.trim();
+                  return computeTextOverlapSimilarity(cText, hitText) >= 0.88;
+                });
+                if (isNearDuplicate) continue;
+              }
+
               seenUrls.add(hit.url);
               domainCount.set(domain, count + 1);
               candidateUrls.push({
@@ -582,3 +592,16 @@ export class DeepResearchEngine {
     return md;
   }
 }
+
+function computeTextOverlapSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
