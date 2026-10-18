@@ -4,6 +4,72 @@ Semua perubahan penting pada proyek **Personal AI OS** didokumentasikan di berka
 
 ---
 
+## [0.4.0] - 2026-10-18
+
+### 🚀 QA Akhir dan Rilis 0.4.0 (Sesi 31)
+- **Gerbang Kualitas Monorepo 100% Lulus**: Seluruh suite pengujian monorepo lulus:
+  - `pnpm -r typecheck`: 14 paket lulus 100% tanpa error kompilasi TypeScript strict.
+  - `pnpm -r lint`: 14 paket lulus 100% tanpa pelanggaran atau warning ESLint (`--max-warnings=0`).
+  - `pnpm -r test`: Seluruh pengujian paket berhasil (API 114 passed / 1 skipped, Windows 88 passed, Agent Worker 58 passed, Android 54 passed, MCP 21 passed, Scheduler 10 passed, Memori, Tools, Evaluator, Model Gateway, Permissions, Agent Core, Shared, Runtime Bridge).
+  - `pnpm test:live`: 7 skenario live API Fastify & fake 9Router, 21 pengujian live worker (17 passed, 4 skipped live database), live scheduler (2 passed, 3 skipped live database).
+  - `pnpm check:tokens`: 7 file CSS Windows UI lulus audit tanpa un-tokenized hardcoded colors.
+  - `pnpm verify:audit`: 100% referensi audit valid di filesystem.
+  - `pnpm -r build`: Bundel Windows Vite (455.31 kB JS, 109.62 kB CSS) dan bundel Android Expo (3.79 MB) selesai tanpa error.
+- **Audit Desain & Aksesibilitas**: Kontras WCAG AA/AAA terverifikasi pada tema gelap (14.8:1) dan tema terang (15.6:1), dukungan `prefers-reduced-motion` pada seluruh animasi CSS, label TalkBack / accessibilityLabel pada seluruh layar Android, responsivitas pada resolusi desktop 1366x768 dan display scale 150%.
+- **Audit Keamanan & Integritas Lisensi**: Pengujian fail-closed pada registrasi MCP server tidak dikenal/gagal jalan, pelindung SSRF untuk Deep Research dan remote MCP, sanitasi tag `<untrusted_content>` untuk output eksternal/MCP, sensor otomatis data kredensial/token pada tracing dan log, pembatasan izin Android minimal, dan verifikasi independensi lisensi (0 kode disalin dari proyek AGPL Odysseus).
+- **Rekonsiliasi ADR**: Perbaikan penomoran dokumen ADR yang unnumbered/bertabrakan menjadi `0019-host-runtime-bridge.md`, penambahan ADR 0032.
+
+### 🧠 Pencarian Memori Hibrida Sejati & Caching Embedding SHA-256 (Sesi 30)
+- **Pencarian Hibrida RRF (Reciprocal Rank Fusion)**: Menggabungkan skor vektor pgvector dan skor teks PostgreSQL full-text search (`tsvector` & `websearch_to_tsquery`) dengan pembobotan $k=60$ (65% vektor, 35% teks).
+- **Tolok Ukur Evaluasi Memori**: Evaluasi benchmark pada 35 query pasangan menunjukkan keunggulan pencarian hibrida dengan MRR 0.8905 dan Recall@3 97.14% dibandingkan pencarian teks murni (MRR 0.6748, Recall@3 77.14%).
+- **Cache Embedding SHA-256 & Sanitasi PII**: `CachedEmbeddingProvider` dengan LRU cache (1.000 entri) dan fungsi `redactSensitiveData` yang otomatis membersihkan secret sebelum pengiriman request embedding.
+- **Probe Empiris 9Router**: Pengujian langsung pada endpoint VPS 9Router mendokumentasikan ketiadaan kredensial OpenAI bawaan (HTTP 400), diatasi dengan pemisahan adapter gateway dan fallback teks yang aman.
+- **Peredaman Duplikasi Deep Research**: Ambang batas cosine similarity $\ge 0.88$ untuk mereduksi redundansi ringkasan riset mendalam.
+
+### 🖥️ Investigasi Runtime OMP, Hermes, & Usulan pi.dev (Sesi 29)
+- **Probe CLI Read-Only VPS**: Verifikasi empiris flag CLI `omp` v18.6.1 (`--model`, `--smol`, `--slow`, `--plan`, `--prewalk`, `--goal`) dan hermes-agent v0.4.0 (`--tools`, `--max-steps`).
+- **Analisis pi.dev RPC Protocol**: Desain arsitektur integrasi JSON-RPC headless sub-agent tanpa dependensi biner tidak tepercaya (ADR 0030).
+
+### ⚡ Streaming Eksekusi Runtime & Diff Viewer (Sesi 28)
+- **Agregasi Acara Runtime**: Komponen `ToolStep` mengagregasi streaming event `tool_start`, `tool_finish`, `file_edit`, dan `task_progress` secara realtime.
+- **Inline Unified Diff Viewer**: Penampil visual baris diff kode dengan pewarnaan token, penanda hunk, dan tombol salin.
+- **Badge Status & Runtime Pill**: Penanda visual runtime aktif (`Native`, `OMP`, `Hermes`) dan status eksekusi langkah.
+
+### 🌐 Pengalaman Offline & Ketahanan Jaringan (Sesi 27)
+- **Antrean Mutasi Offline**: Klien Windows dan Android menyimpan aksi/pesan saat offline dan menyinkronkan kembali secara otomatis saat koneksi pulih.
+- **Indikator Status Koneksi**: Banner offline non-intrusif dan penanganan graceful error di setiap layar.
+
+### 🛡️ Dasbor Admin MCP & Manajemen Kredensial (Sesi 26)
+- **Manajemen Server MCP**: Dasbor visual status server MCP (active, starting, failed, stopped) dengan isolasi kredensial di server.
+- **SSRF Guard & Fail-Closed Policy**: Larangan akses loopback, link-local, private network, dan metadata cloud pada remote MCP endpoint.
+
+### ⏰ Scheduler Berulang Lanjutan & Ringkasan Harian (Sesi 25)
+- **Parser Cron & Kebijakan Missed-Run**: Dukungan ekspresi cron 5-field dengan kebijakan `skip`, `run_once`, dan `catch_up`.
+- **Integrasi Ringkasan Harian**: Penjadwalan task backup sistem dan brief harian dengan ringkasan otomatis.
+
+### 🧪 Blind Model Comparison & Mode A/B (Sesi 24)
+- **Mode Evaluasi Buta**: Eksekusi paralel dua respons model acak tanpa menampilkan nama model ke pengguna.
+- **Tombol Ungkap (Reveal)**: Penilaian objektif preferensi jawaban sebelum identitas model diungkap.
+
+### 🌳 Cabang Percakapan, Ekspor, & Template (Sesi 23)
+- **Pencabangan Obrolan (Branching)**: Kemampuan mengedit pesan lama dan membuat cabang alternatif tanpa merusak riwayat utama.
+- **Ekspor Dokumen**: Fitur ekspor riwayat obrolan ke format Markdown dan JSON terstruktur.
+- **Template Slash Command**: Dukungan shortcut cepat `/plan`, `/summarize`, `/code`, `/fix`.
+
+### 🔍 Deep Research Standar & Mendalam (Sesi 22)
+- **Mesin Riset Multi-Langkah**: Siklus pencarian web, crawling guarded, ekstraksi fakta, sintesis terstruktur, dan sitasi transparan.
+- **Pembatalan & Pemulihan Riset**: Penghentian aman di tengah pencarian tanpa kehilangan riwayat temuan yang telah terkumpul.
+
+### 💡 Usulan Skill Dinamis (Sesi 21)
+- **Deteksi Alur Kerja Berulang**: Evaluasi otomatis riwayat aksi worker untuk menyarankan pembentukan skill kustom baru kepada pengguna.
+- **Editor Manifes Skill**: Formulir peninjauan instruksi dan tool allowlist sebelum skill diaktifkan.
+
+### 🔄 Auto-Updater Windows Tauri 2 (Sesi 20)
+- **Pembaruan Aman Terverifikasi**: Integrasi `tauri-plugin-updater` dengan tanda tangan kriptografi Ed25519 dan verifikasi hash sha256 rilis.
+- **Indikator UI Non-Intrusif**: Notifikasi ketersediaan versi baru di antarmuka Windows dengan opsi tunda atau instal saat restart.
+
+---
+
 ## [0.3.0] - 2026-10-16
 
 ### 🚀 QA Akhir dan Kesiapan Rilis (Sesi 17)
