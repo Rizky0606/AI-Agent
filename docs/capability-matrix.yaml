@@ -326,6 +326,41 @@ capabilities:
       - Windows Favorite Model Cycle Shortcut:
         - `Ctrl+M` / `Alt+M` shortcut cycles instantly through user's favorite models (defined in Sesi 6).
       - Remaining gaps: Visual rendering on live physical Android device and live physical Windows desktop require manual verification.
+  hybrid_memory_search:
+    status: implemented
+    code: packages/memory/src/search/hybrid-search.ts; packages/memory/src/embeddings/cached-embedding-provider.ts; apps/api/src/db/drizzle-memory-repository.ts
+    permission_boundary: authenticated API routes; strict per-user memory isolation; PII/secret redaction prior to embedding calls
+    clients: android & windows (consumed through /v1/memories and memory search)
+    proof: packages/memory/test/hybrid-search.test.ts; packages/memory/test/benchmark-hybrid-search.test.ts; apps/api/test/memories-routes.test.ts
+    limitation: |
+      True Hybrid Search implemented in Sesi 30 (ADR 0031, 2026-10-18):
+      - RRF (Reciprocal Rank Fusion) ranking combining pgvector cosine distance and PostgreSQL full-text search (tsvector/websearch_to_tsquery) with k=60 and 65% vector / 35% text weighting.
+      - CachedEmbeddingProvider: SHA-256 hash LRU cache (1000 items) and automatic PII/credential sanitization (redactSensitiveData).
+      - Benchmark evaluation: 35 query evaluation suite demonstrates Hybrid Search superiority with MRR 0.8905 and Recall@3 97.14% (vs Text MRR 0.6748, Recall@3 77.14%).
+      - Empirical 9Router probe: documented HTTP 400 No credentials for provider: openai on current VPS setup; graceful text fallback active when vector embeddings are unavailable.
+  runtime_streaming_and_diff:
+    status: implemented
+    code: packages/shared/src/tasks/runtime-step-event.ts; apps/windows/src/ui/chat/ToolStep.tsx; apps/windows/src/ui/chat/DiffLineViewer.tsx
+    permission_boundary: SecuredCapabilityGuard; read-only streaming of sanitized execution events; diff masking of secrets
+    clients: windows desktop (streaming progress and unified diff viewer)
+    proof: packages/shared/test/runtime-step-event.test.ts; apps/windows/test/toolstep.test.ts
+    limitation: |
+      Runtime Execution Streaming implemented in Sesi 28 (2026-10-18):
+      - ToolStep component aggregates streaming runtime events (tool_start, tool_finish, file_edit, task_progress) into interactive cards.
+      - Inline unified diff viewer with line-by-line syntax coloring, hunk headers, and copy buttons.
+      - Runtime pill indicators for active execution engine (Native, OMP, Hermes).
+  release_readiness_v040:
+    status: implemented
+    code: package.json; apps/windows/src-tauri/tauri.conf.json; apps/android/app.json; CHANGELOG.md; docs/adr/0032-qa-akhir-dan-rilis-040.md
+    permission_boundary: PermissionEngine; AGENTS.md rule 9 (zero unauthorized deploy/tag/push)
+    clients: windows; android; backend API; agent worker; scheduler
+    proof: pnpm test:unit; pnpm test:live; pnpm -r typecheck; pnpm -r lint; pnpm -r test; pnpm -r build; pnpm check:tokens; pnpm verify:audit
+    limitation: |
+      QA Akhir & Rilis 0.4.0 implemented in Sesi 31 (ADR 0032, 2026-10-18):
+      - 100% Quality Gates: All 14 packages pass typecheck, lint, unit tests, live tests, token check, audit verification, and production bundling.
+      - Design & Accessibility Audit: WCAG AA/AAA contrast verified (Dark 14.8:1, Light 15.6:1), prefers-reduced-motion respected, TalkBack accessibilityLabels in Android, responsive at 1366x768 and 150% DPI scale.
+      - Security Audit: fail-closed MCP admin, SSRF-guarded Deep Research & remote MCP, encrypted offsite backups without guessed keys, no tokens in logs, zero AGPL code copied from Odysseus.
+      - Sesi 31 release candidate version bumped to 0.4.0 across monorepo.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

@@ -49,6 +49,14 @@ before(async () => {
   }
 
   if (isPostgresAvailable && testSql) {
+    // Clean up any stale test data from prior aborted runs
+    try {
+      await testSql`DELETE FROM schedules WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@scheduler-test.local')`;
+      await testSql`DELETE FROM tasks WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@scheduler-test.local')`;
+    } catch {
+      // Best effort pre-clean
+    }
+
     // Seed test user and project for foreign keys
     await testSql`
       INSERT INTO users (id, email, password_hash)
@@ -122,7 +130,8 @@ test('Live Postgres & Redis: Recurring schedule executes exactly once per slot a
 
     // 1. Tick at due time -> Executes exactly once
     const now1 = new Date('2026-10-10T14:00:01.000Z');
-    const runs1 = await handle.tick(now1);
+    const allRuns1 = await handle.tick(now1);
+    const runs1 = allRuns1.filter((r) => r.jobId === job.id);
 
     assert.equal(runs1.length, 1);
     const expectedIdempotencyKey = `sched:${job.id}:${targetSlot.toISOString()}`;
@@ -152,7 +161,8 @@ test('Live Postgres & Redis: Recurring schedule executes exactly once per slot a
     assert.equal(new Date(scheduleInDb.next_run_at).toISOString(), nextSlot.toISOString());
 
     // 2. Second tick at same time -> Does NOT re-execute (no duplicate run)
-    const runs2 = await handle.tick(now1);
+    const allRuns2 = await handle.tick(now1);
+    const runs2 = allRuns2.filter((r) => r.jobId === job.id);
     assert.equal(runs2.length, 0);
 
     // Verify task count in database remains exactly 1
@@ -225,7 +235,8 @@ test('Live Postgres & Redis: Restarting scheduler does NOT duplicate executions 
     // 4. Tick immediately after restart at the same time:
     // MUST NOT execute duplicate run!
     const restartNow = new Date('2026-10-10T15:00:05.000Z');
-    const duplicateRuns = await handle2.tick(restartNow);
+    const allDuplicateRuns = await handle2.tick(restartNow);
+    const duplicateRuns = allDuplicateRuns.filter((r) => r.jobId === scheduleId);
     assert.equal(duplicateRuns.length, 0);
 
     // 5. Even if nextRunAt was forced back to the past slot (simulating crash before schedule DB update),
