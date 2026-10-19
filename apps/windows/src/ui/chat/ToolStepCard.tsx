@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, Terminal, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import { ChevronDown, ChevronRight, Terminal, CheckCircle2, AlertCircle, Clock, XCircle, ListTodo, GitFork } from 'lucide-react';
 import { idID } from '../locales/id-ID.ts';
 
 export interface ToolStepData {
@@ -10,14 +10,21 @@ export interface ToolStepData {
   summary: string;
   diff?: string | undefined;
   path?: string | undefined;
-  details?: string | Record<string, unknown> | undefined;
+  details?: unknown | undefined;
+  runtime?: string | undefined;
+  timestamp?: string | undefined;
+  isPlan?: boolean | undefined;
+  planItems?: string[] | undefined;
+  isSubagent?: boolean | undefined;
+  subagentTask?: string | undefined;
 }
 
 interface ToolStepCardProps {
   step: ToolStepData;
+  onStop?: (() => void) | undefined;
 }
 
-export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
+export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step, onStop }) => {
   const [expanded, setExpanded] = useState(false);
 
   const getStatusIcon = () => {
@@ -44,13 +51,28 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
     }
   };
 
+  const getStepIcon = () => {
+    if (step.isPlan) {
+      return <ListTodo size={14} color="var(--accent-mint)" />;
+    }
+    if (step.isSubagent) {
+      return <GitFork size={14} color="var(--accent-teal)" />;
+    }
+    return <Terminal size={14} color="var(--accent-cyan)" />;
+  };
+
   const formattedDetails =
     typeof step.details === 'object' && step.details !== null
       ? JSON.stringify(step.details, null, 2)
       : String(step.details ?? '');
 
+  const isOneShotRuntime = step.runtime === 'omp' || step.runtime === 'hermes';
+
   return (
-    <div className="tool-step-card" aria-label={`Langkah ${step.stepNumber}: ${step.toolName}`}>
+    <div
+      className={`tool-step-card ${step.isPlan ? 'tool-step-card-plan' : ''} ${step.isSubagent ? 'tool-step-card-subagent' : ''}`}
+      aria-label={`Langkah ${step.stepNumber}: ${step.toolName}`}
+    >
       <div
         className="tool-step-header"
         onClick={() => setExpanded(!expanded)}
@@ -64,44 +86,86 @@ export const ToolStepCard: React.FC<ToolStepCardProps> = ({ step }) => {
           }
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Terminal size={14} color="var(--accent-cyan)" />
-          <span style={{ fontWeight: 600 }}>
-            {idID.chat.toolStep.title} #{step.stepNumber}: {step.toolName}
+        <div className="tool-step-header-left">
+          {getStepIcon()}
+          <span className="tool-step-title">
+            {step.isPlan ? idID.chat.toolStep.planTitle : `${idID.chat.toolStep.title} #${step.stepNumber}: ${step.toolName}`}
           </span>
-          <span style={{ fontSize: 11, color: 'var(--text-sub)', fontWeight: 400 }}>
+          {step.isSubagent && (
+            <span className="task-subagent-pill">
+              {idID.chat.toolStep.subagentBadge}
+            </span>
+          )}
+          {step.runtime && (
+            <span className="task-runtime-pill">
+              {step.runtime}
+            </span>
+          )}
+          <span className="tool-step-summary">
             — {step.summary}
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div className="tool-step-header-right">
+          {onStop && step.status === 'running' && (
+            <button
+              type="button"
+              className="ui-btn ui-btn-danger ui-btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStop();
+              }}
+              title="Hentikan Langkah Ini"
+            >
+              <XCircle size={12} />
+              <span>Stop</span>
+            </button>
+          )}
           {getStatusIcon()}
-          <span style={{ fontSize: 11 }}>{getStatusLabel()}</span>
+          <span className="tool-step-status-text">{getStatusLabel()}</span>
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </div>
       </div>
 
       {expanded && (
         <div className="tool-step-content">
+          {step.isPlan && step.planItems && step.planItems.length > 0 && (
+            <div className="tool-step-plan-box">
+              <div className="tool-step-plan-title">{idID.chat.toolStep.planSteps}</div>
+              <ol className="tool-step-plan-list">
+                {step.planItems.map((item, idx) => (
+                  <li key={idx} className="tool-step-plan-item">{item}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           {step.diff && (
-            <div style={{ marginBottom: 8, padding: 8, backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11, overflowX: 'auto' }}>
-              {step.path && <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--accent-cyan)' }}>File: {step.path}</div>}
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+            <div className="tool-step-diff-box">
+              {step.path && <div className="tool-step-diff-path">File: {step.path}</div>}
+              <pre className="tool-step-pre">
                 {step.diff.split('\n').map((line, idx) => {
-                  let color = 'inherit';
-                  if (line.startsWith('+')) color = 'var(--accent-emerald, #10b981)';
-                  else if (line.startsWith('-')) color = 'var(--accent-rose, #ef4444)';
-                  else if (line.startsWith('@@')) color = 'var(--accent-cyan, #06b6d4)';
-                  return <div key={idx} style={{ color }}>{line}</div>;
+                  let lineClass = '';
+                  if (line.startsWith('+')) lineClass = 'diff-line-add';
+                  else if (line.startsWith('-')) lineClass = 'diff-line-del';
+                  else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
+                  return <div key={idx} className={lineClass}>{line}</div>;
                 })}
               </pre>
             </div>
           )}
-          {formattedDetails ? (
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+
+          {formattedDetails && !step.planItems ? (
+            <pre className="tool-step-pre-wrap">
               {formattedDetails}
             </pre>
           ) : null}
+
+          {isOneShotRuntime && (
+            <div className="tool-step-oneshot-note">
+              {idID.chat.toolStep.oneShotNote}
+            </div>
+          )}
         </div>
       )}
     </div>

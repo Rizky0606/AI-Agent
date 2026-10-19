@@ -36,6 +36,15 @@ import { EventEngine, NotificationEngine, SchedulerEngine } from '@personal-ai-o
 import { registerSchedulesRoutes } from './routes/schedules.ts';
 import { registerModelRoutes } from './routes/models.ts';
 import { registerRuntimeRoutes } from './routes/runtimes.ts';
+import type { ResearchRepository } from './db/research-repository.ts';
+import { registerResearchRoutes } from './routes/research.ts';
+import type { DeepResearchEngine, ResearchEnvironment, CompareEngine } from '@personal-ai-os/agent-core';
+import type { CompareRepository } from './db/compare-repository.ts';
+import { registerCompareRoutes } from './routes/compare.ts';
+import type { PromptTemplateRepository } from './db/prompt-template-repository.ts';
+import { registerPromptTemplateRoutes } from './routes/prompt-templates.ts';
+import type { SkillProposalRepository } from './db/skill-proposal-repository.ts';
+import { registerSkillProposalsRoutes } from './routes/skill-proposals.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
@@ -158,6 +167,39 @@ export type AppDependencies = {
       }
     | undefined;
   runtimeBridgeUrl?: string | undefined;
+  research?:
+    | {
+        researchRepo: ResearchRepository;
+        broadcaster?: TaskEventBroadcaster | undefined;
+        engine?: DeepResearchEngine | undefined;
+        environment?: ResearchEnvironment | undefined;
+        modelGateway?: ModelGateway | undefined;
+        fastModel?: string | undefined;
+        complexModel?: string | undefined;
+      }
+    | undefined;
+  compare?:
+    | {
+        compareRepo: CompareRepository;
+        chatRepo?: ChatRepository | undefined;
+        broadcaster?: TaskEventBroadcaster | undefined;
+        engine?: CompareEngine | undefined;
+        modelGateway?: ModelGateway | undefined;
+        modelConfigs?: ModelConfigRepository | undefined;
+        defaultSynthesisModel?: string | undefined;
+      }
+    | undefined;
+  promptTemplates?:
+    | {
+        promptTemplateRepo: PromptTemplateRepository;
+      }
+    | undefined;
+  skillProposals?:
+    | {
+        proposalRepo: SkillProposalRepository;
+        skillRepo?: SkillRepository | undefined;
+      }
+    | undefined;
 };
 
 const requestId = (request: { headers: Record<string, string | string[] | undefined> }): string => {
@@ -715,6 +757,48 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
     runtimeBridgeUrl: dependencies.runtimeBridgeUrl ?? process.env.RUNTIME_BRIDGE_URL,
     runtimeBridgeToken: dependencies.internalBridgeToken ?? process.env.RUNTIME_BRIDGE_TOKEN,
   });
+
+  if (dependencies.research) {
+    registerResearchRoutes(app, {
+      auth: dependencies.auth,
+      researchRepo: dependencies.research.researchRepo,
+      broadcaster: dependencies.research.broadcaster ?? dependencies.task?.broadcaster,
+      engine: dependencies.research.engine,
+      environment: dependencies.research.environment,
+      modelGateway: dependencies.research.modelGateway ?? dependencies.chat?.gateway,
+      fastModel: dependencies.research.fastModel,
+      complexModel: dependencies.research.complexModel,
+    });
+  }
+
+  if (dependencies.compare) {
+    registerCompareRoutes(app, {
+      auth: dependencies.auth,
+      compareRepo: dependencies.compare.compareRepo,
+      chatRepo: dependencies.compare.chatRepo ?? dependencies.chat?.chatRepo,
+      broadcaster: dependencies.compare.broadcaster ?? dependencies.task?.broadcaster,
+      engine: dependencies.compare.engine,
+      modelGateway: dependencies.compare.modelGateway ?? dependencies.chat?.gateway,
+      modelConfigs: dependencies.compare.modelConfigs ?? dependencies.chat?.modelConfigs,
+      defaultSynthesisModel: dependencies.compare.defaultSynthesisModel,
+    });
+  }
+
+  if (dependencies.promptTemplates) {
+    registerPromptTemplateRoutes(app, {
+      auth: dependencies.auth,
+      promptTemplateRepo: dependencies.promptTemplates.promptTemplateRepo,
+    });
+  }
+
+  if (dependencies.skillProposals && (dependencies.skillProposals.skillRepo || dependencies.skills?.skillRepo)) {
+    registerSkillProposalsRoutes(app, {
+      auth: dependencies.auth,
+      proposalRepo: dependencies.skillProposals.proposalRepo,
+      skillRepo: dependencies.skillProposals.skillRepo ?? dependencies.skills!.skillRepo,
+      auditRepo: dependencies.approval?.auditRepo,
+    });
+  }
 
   return app;
 };

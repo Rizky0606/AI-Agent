@@ -1,6 +1,22 @@
 import { create } from 'zustand';
-import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
-import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem } from '../api/client.ts';
+import {
+  DEFAULT_BUDGET_ESTIMATES,
+  compareReducer,
+  createInitialResearchProgressState,
+  reduceResearchProgress,
+  type CompareRunDetail,
+  type CompareRunSummary,
+  type CreateCompareRequest,
+  type PromoteCompareResponse,
+  type ResearchBudgetConfig,
+  type ResearchDepth,
+  type ResearchProgressState,
+  type ResearchRunSummary,
+  type ResearchSubQuestionState,
+  type TaskEventEnvelope,
+  type TaskRecord,
+} from '@personal-ai-os/shared';
+import { ApiClient, ApiError, type ApprovalRecord, type ArtifactItem, type ArtifactPreview, type AuthSession, type ModelDescriptor, type RuntimeDescriptor, type RuntimeId, type SkillItem, type McpServerItem, type McpCallLogItem, type PromptTemplateRecord, type ScheduleJobRecord, type CreateScheduleInput, type SkillProposalRecord, type CreateSkillProposalInput } from '../api/client.ts';
 import { AgentConnection, ChatConnection, type ConnectionStatus } from '../connection/agent-connection.ts';
 import { TaskEventsStream, type StreamStatus } from '../connection/events-stream.ts';
 import { type CapabilityName, CapabilityRegistry } from '../security/capability-registry.ts';
@@ -118,19 +134,25 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  cancelled?: boolean;
-  model?: string | null;
-  resolvedModel?: string | null;
-  fallbackUsed?: boolean;
+  cancelled?: boolean | undefined;
+  model?: string | null | undefined;
+  resolvedModel?: string | null | undefined;
+  fallbackUsed?: boolean | undefined;
+  parentMessageId?: string | null | undefined;
+  isActiveBranch?: boolean | undefined;
+  branchIndex?: number | undefined;
+  branchCount?: number | undefined;
+  siblingMessageIds?: string[] | undefined;
 }
 export interface ChatConversation {
   id: string;
   title: string;
   messages: ChatMessage[];
-  projectId?: string;
-  createdAt?: string;
-  model?: string | null;
-  mode?: 'auto' | 'fast' | 'coding' | 'complex' | 'research';
+  projectId?: string | undefined;
+  createdAt?: string | undefined;
+  model?: string | null | undefined;
+  mode?: ('auto' | 'fast' | 'coding' | 'complex' | 'research') | undefined;
+  compactedSummary?: string | null | undefined;
 }
 export type ChatStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
@@ -269,6 +291,63 @@ export interface AgentState {
     riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   }) => Promise<void>;
   deleteMcpServer: (id: string) => Promise<void>;
+  researchDepth: ResearchDepth;
+  setResearchDepth: (depth: ResearchDepth) => void;
+  researchBudgets: Record<ResearchDepth, ResearchBudgetConfig>;
+  fetchResearchConfig: () => Promise<void>;
+  activeResearchId: string | null;
+  activeResearchState: ResearchProgressState | null;
+  researchHistory: ResearchRunSummary[];
+  isLoadingResearch: boolean;
+  startResearch: (query: string, depth?: ResearchDepth) => Promise<string>;
+  openResearch: (runId: string) => Promise<void>;
+  closeActiveResearch: () => void;
+  refreshResearchHistory: () => Promise<void>;
+  approveResearchPlan: (runId: string, plan: { subQuestions: ResearchSubQuestionState[] }) => Promise<void>;
+  cancelResearch: (runId: string) => Promise<void>;
+  deleteResearch: (runId: string) => Promise<void>;
+  activeCompareId: string | null;
+  activeCompareState: CompareRunDetail | null;
+  compareHistory: CompareRunSummary[];
+  isLoadingCompare: boolean;
+  compareError: string | null;
+  startCompare: (payload: CreateCompareRequest) => Promise<string>;
+  openCompare: (runId: string) => Promise<void>;
+  closeActiveCompare: () => void;
+  refreshCompareHistory: () => Promise<void>;
+  revealCompare: (runId: string) => Promise<void>;
+  selectCompareWinner: (runId: string, winnerModelId: string) => Promise<void>;
+  synthesizeCompare: (runId: string, synthesisModelId?: string) => Promise<void>;
+  promoteCompare: (runId: string, options?: { target?: 'new' | 'existing'; conversationId?: string }) => Promise<PromoteCompareResponse>;
+  deleteCompare: (runId: string) => Promise<void>;
+  // Sesi 27
+  promptTemplates: PromptTemplateRecord[];
+  promptTemplatesLoading: boolean;
+  messageQueue: string[];
+  fetchPromptTemplates: () => Promise<void>;
+  createPromptTemplate: (tpl: { name: string; title?: string; content: string; description?: string }) => Promise<void>;
+  deletePromptTemplate: (id: string) => Promise<void>;
+  switchMessageBranch: (messageId: string) => Promise<void>;
+  deleteMessageBranch: (messageId: string) => Promise<void>;
+  exportActiveConversation: (format: 'markdown' | 'html') => Promise<{ filename: string; content: string }>;
+  compactActiveConversation: () => Promise<{ compacted: boolean; reason?: string }>;
+  queueMessage: (content: string) => void;
+  dequeueAndSend: () => void;
+  cycleFavoriteModel: () => void;
+  // Sesi 28: Tugas Terjadwal & Usulan Skill
+  schedules: ScheduleJobRecord[];
+  schedulesLoading: boolean;
+  skillProposals: SkillProposalRecord[];
+  skillProposalsLoading: boolean;
+  fetchSchedules: () => Promise<void>;
+  createSchedule: (input: CreateScheduleInput) => Promise<ScheduleJobRecord>;
+  pauseSchedule: (id: string) => Promise<void>;
+  resumeSchedule: (id: string) => Promise<void>;
+  cancelSchedule: (id: string) => Promise<void>;
+  fetchSkillProposals: (status?: string) => Promise<void>;
+  createSkillProposal: (input: CreateSkillProposalInput) => Promise<SkillProposalRecord>;
+  approveSkillProposal: (id: string) => Promise<SkillProposalRecord>;
+  rejectSkillProposal: (id: string, reason: string) => Promise<SkillProposalRecord>;
 }
 
 export const createAgentStore = (
@@ -322,6 +401,8 @@ export const createAgentStore = (
       });
     let eventsStream: TaskEventsStream | null = null;
     let chatEventsStream: TaskEventsStream | null = null;
+    let researchEventsStream: TaskEventsStream | null = null;
+    let compareEventsStream: TaskEventsStream | null = null;
     const appendEvent = (event: TaskEventEnvelope): void => {
       set((state) => ({
         taskEvents: [
@@ -432,7 +513,11 @@ export const createAgentStore = (
     sendChat: () => {
       const state = get();
       const content = state.chatDraft.trim();
-      if (!content || state.chatStreaming) return;
+      if (!content) return;
+      if (state.chatStreaming) {
+        get().queueMessage(content);
+        return;
+      }
       if (!state.authToken.trim() || !activeChatConnection) { set({ chatError: 'Sign in to send a message.' }); return; }
       const id = state.activeConversationId || `draft-${crypto.randomUUID()}`;
       pendingChat = { content, conversationId: id };
@@ -1011,11 +1096,21 @@ export const createAgentStore = (
               model: resolvedModel,
               resolvedModel,
               fallbackUsed,
+              parentMessageId: incoming?.parentMessageId,
+              isActiveBranch: incoming?.isActiveBranch,
+              branchIndex: incoming?.branchIndex,
+              branchCount: incoming?.branchCount,
+              siblingMessageIds: incoming?.siblingMessageIds,
             } as ChatMessage;
             return { ...conversation, messages: existing ? conversation.messages.map((item) => item.id === id ? { ...item, ...message } : item) : [...conversation.messages, message] };
           });
           const done = frame.type === 'message.completed' || frame.type === 'message.cancelled';
-          if (done) pendingChat = null;
+          if (done) {
+            pendingChat = null;
+            setTimeout(() => {
+              get().dequeueAndSend();
+            }, 50);
+          }
           return { conversations, chatStreaming: !done };
         }),
       });
@@ -1050,9 +1145,15 @@ export const createAgentStore = (
                   model: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : (typeof message.metadata?.['model'] === 'string' ? message.metadata['model'] : null),
                   resolvedModel: typeof message.metadata?.['resolvedModel'] === 'string' ? message.metadata['resolvedModel'] : null,
                   fallbackUsed: Boolean(message.metadata?.['fallbackUsed']),
+                  parentMessageId: message.parentMessageId,
+                  isActiveBranch: message.isActiveBranch,
+                  branchIndex: message.branchIndex,
+                  branchCount: message.branchCount,
+                  siblingMessageIds: message.siblingMessageIds,
                 }]
               : []
           ),
+          compactedSummary: item.compactedSummary,
         })));
         if (`${get().serverUrl}\n${get().authToken}` !== scope) return;
         set((current) => {
@@ -1226,6 +1327,560 @@ export const createAgentStore = (
       set({
         capabilities: getInitialCapabilities(),
       });
+    },
+
+    researchDepth: 'standard',
+    setResearchDepth: (depth) => set({ researchDepth: depth }),
+    researchBudgets: DEFAULT_BUDGET_ESTIMATES,
+    fetchResearchConfig: () => run(async () => {
+      try {
+        const res = await api().getResearchConfig();
+        if (res.budgets) {
+          set({ researchBudgets: res.budgets });
+        }
+      } catch {
+        // Fallback default estimates
+      }
+    }),
+    activeResearchId: null,
+    activeResearchState: null,
+    researchHistory: [],
+    isLoadingResearch: false,
+
+    startResearch: async (query, depth) => {
+      const chosenDepth = depth ?? get().researchDepth;
+      set({ isLoadingResearch: true });
+      try {
+        const activeConv = get().conversations.find((c) => c.id === get().activeConversationId);
+        let projectId = activeConv?.projectId;
+        if (!projectId) {
+          try {
+            const pr = await api().listProjects();
+            projectId = pr.projects[0]?.id;
+          } catch {
+            // ignore
+          }
+        }
+        if (!projectId) {
+          projectId = '00000000-0000-0000-0000-000000000000';
+        }
+
+        const { run: runItem } = await api().createResearch({
+          projectId,
+          query,
+          depth: chosenDepth,
+        });
+
+        const initialProgress = createInitialResearchProgressState({
+          runId: runItem.id,
+          query: runItem.query,
+          depth: chosenDepth,
+          budgetConfig: runItem.budgetConfig,
+        });
+
+        set({
+          activeResearchId: runItem.id,
+          activeResearchState: initialProgress,
+          isLoadingResearch: false,
+        });
+
+        researchEventsStream?.disconnect();
+        researchEventsStream?.reset();
+        researchEventsStream = new TaskEventsStream({
+          serverUrl: () => get().serverUrl,
+          token: () => get().authToken,
+          taskId: () => get().activeResearchId,
+          onEvent: (event) => {
+            const current = get().activeResearchState;
+            if (!current) return;
+            const next = reduceResearchProgress(current, event);
+            set({ activeResearchState: next });
+            if (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled') {
+              void get().refreshResearchHistory();
+            }
+          },
+        });
+        researchEventsStream.connect();
+
+        void get().refreshResearchHistory();
+        return runItem.id;
+      } catch (err: unknown) {
+        set({ isLoadingResearch: false });
+        throw err;
+      }
+    },
+
+    openResearch: (runId) => run(async () => {
+      set({ isLoadingResearch: true, activeResearchId: runId });
+      try {
+        const details = await api().getResearch(runId);
+        const planObj = details.run.plan as { subQuestions?: ResearchSubQuestionState[] } | undefined;
+        const progressState: ResearchProgressState = {
+          runId: details.run.id,
+          status: details.run.status,
+          query: details.run.query,
+          depth: details.run.depth,
+          plan: planObj ? { subQuestions: planObj.subQuestions ?? [] } : undefined,
+          subQuestions: planObj?.subQuestions ?? [],
+          sources: details.sources ?? [],
+          evidence: details.evidence ?? [],
+          report: details.report ?? undefined,
+          budgetConfig: details.run.budgetConfig,
+          budgetUsed: details.run.budgetUsed,
+          seenEventIds: [],
+          updatedAt: Date.now(),
+        };
+
+        set({
+          activeResearchState: progressState,
+          isLoadingResearch: false,
+        });
+
+        if (
+          details.run.status === 'running' ||
+          details.run.status === 'planning' ||
+          details.run.status === 'waiting_plan_approval' ||
+          details.run.status === 'queued'
+        ) {
+          researchEventsStream?.disconnect();
+          researchEventsStream?.reset();
+          researchEventsStream = new TaskEventsStream({
+            serverUrl: () => get().serverUrl,
+            token: () => get().authToken,
+            taskId: () => get().activeResearchId,
+            onEvent: (event) => {
+              const current = get().activeResearchState;
+              if (!current) return;
+              const next = reduceResearchProgress(current, event);
+              set({ activeResearchState: next });
+              if (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled') {
+                void get().refreshResearchHistory();
+              }
+            },
+          });
+          researchEventsStream.connect();
+        }
+      } catch (err: unknown) {
+        set({ isLoadingResearch: false });
+        throw err;
+      }
+    }),
+
+    closeActiveResearch: () => {
+      researchEventsStream?.disconnect();
+      set({ activeResearchId: null, activeResearchState: null });
+    },
+
+    refreshResearchHistory: () => run(async () => {
+      try {
+        const res = await api().listResearch({ limit: 50 });
+        set({ researchHistory: res.runs });
+      } catch {
+        // ignore
+      }
+    }),
+
+    approveResearchPlan: (runId, plan) => run(async () => {
+      await api().approveResearchPlan(runId, plan);
+      set((state) => {
+        if (state.activeResearchState && state.activeResearchState.runId === runId) {
+          return {
+            activeResearchState: {
+              ...state.activeResearchState,
+              status: 'running',
+              plan: {
+                subQuestions: plan.subQuestions,
+                approved: true,
+              },
+              subQuestions: plan.subQuestions,
+            },
+          };
+        }
+        return state;
+      });
+    }),
+
+    cancelResearch: (runId) => run(async () => {
+      await api().cancelResearch(runId);
+      set((state) => {
+        if (state.activeResearchState && state.activeResearchState.runId === runId) {
+          return {
+            activeResearchState: {
+              ...state.activeResearchState,
+              status: 'cancelled',
+            },
+          };
+        }
+        return state;
+      });
+      void get().refreshResearchHistory();
+    }),
+
+    deleteResearch: (runId) => run(async () => {
+      await api().deleteResearch(runId);
+      if (get().activeResearchId === runId) {
+        get().closeActiveResearch();
+      }
+      set((state) => ({
+        researchHistory: state.researchHistory.filter((r) => r.id !== runId),
+      }));
+    }),
+
+    activeCompareId: null,
+    activeCompareState: null,
+    compareHistory: [],
+    isLoadingCompare: false,
+    compareError: null,
+
+    startCompare: async (payload) => {
+      set({ isLoadingCompare: true, compareError: null });
+      try {
+        const summary = await api().createCompare(payload);
+        const detail = await api().getCompare(summary.id);
+
+        set({
+          activeCompareId: summary.id,
+          activeCompareState: detail,
+          isLoadingCompare: false,
+        });
+
+        compareEventsStream?.disconnect();
+        compareEventsStream?.reset();
+        compareEventsStream = new TaskEventsStream({
+          serverUrl: () => get().serverUrl,
+          token: () => get().authToken,
+          taskId: () => get().activeCompareId,
+          onEvent: (event) => {
+            const current = get().activeCompareState;
+            if (!current) return;
+            const next = compareReducer(current, event);
+            set({ activeCompareState: next });
+            if (next.status === 'completed' || next.status === 'failed') {
+              void get().refreshCompareHistory();
+            }
+          },
+        });
+        compareEventsStream.connect();
+
+        void get().refreshCompareHistory();
+        return summary.id;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        set({ isLoadingCompare: false, compareError: msg });
+        throw err;
+      }
+    },
+
+    openCompare: async (runId) => {
+      set({ isLoadingCompare: true, activeCompareId: runId, compareError: null });
+      try {
+        const detail = await api().getCompare(runId);
+        set({
+          activeCompareState: detail,
+          isLoadingCompare: false,
+        });
+
+        if (detail.status === 'running' || detail.status === 'queued') {
+          compareEventsStream?.disconnect();
+          compareEventsStream?.reset();
+          compareEventsStream = new TaskEventsStream({
+            serverUrl: () => get().serverUrl,
+            token: () => get().authToken,
+            taskId: () => get().activeCompareId,
+            onEvent: (event) => {
+              const current = get().activeCompareState;
+              if (!current) return;
+              const next = compareReducer(current, event);
+              set({ activeCompareState: next });
+              if (next.status === 'completed' || next.status === 'failed') {
+                void get().refreshCompareHistory();
+              }
+            },
+          });
+          compareEventsStream.connect();
+        }
+      } catch (err: unknown) {
+        set({ isLoadingCompare: false });
+        throw err;
+      }
+    },
+
+    closeActiveCompare: () => {
+      compareEventsStream?.disconnect();
+      set({ activeCompareId: null, activeCompareState: null, compareError: null });
+    },
+
+    refreshCompareHistory: () => run(async () => {
+      try {
+        const items = await api().listCompares();
+        set({ compareHistory: items });
+      } catch {
+        // ignore
+      }
+    }),
+
+    revealCompare: (runId) => run(async () => {
+      const updated = await api().revealCompare(runId);
+      set((state) => {
+        if (state.activeCompareState && state.activeCompareState.id === runId) {
+          return { activeCompareState: updated };
+        }
+        return state;
+      });
+      void get().refreshCompareHistory();
+    }),
+
+    selectCompareWinner: (runId, winnerModelId) => run(async () => {
+      const updated = await api().selectCompareWinner(runId, winnerModelId);
+      set((state) => {
+        if (state.activeCompareState && state.activeCompareState.id === runId) {
+          return { activeCompareState: updated };
+        }
+        return state;
+      });
+      void get().refreshCompareHistory();
+    }),
+
+    synthesizeCompare: (runId, synthesisModelId) => run(async () => {
+      const updated = await api().synthesizeCompare(runId, synthesisModelId);
+      set((state) => {
+        if (state.activeCompareState && state.activeCompareState.id === runId) {
+          return { activeCompareState: updated };
+        }
+        return state;
+      });
+      void get().refreshCompareHistory();
+    }),
+
+    promoteCompare: async (runId, options) => {
+      const res = await api().promoteCompare(runId, options);
+      if (res.conversationId) {
+        void get().refreshChat();
+      }
+      return res;
+    },
+
+    deleteCompare: (runId) => run(async () => {
+      await api().deleteCompare(runId);
+      if (get().activeCompareId === runId) {
+        get().closeActiveCompare();
+      }
+      set((state) => ({
+        compareHistory: state.compareHistory.filter((c) => c.id !== runId),
+      }));
+    }),
+
+    // --- Sesi 27 Implementations ---
+    promptTemplates: [],
+    promptTemplatesLoading: false,
+    messageQueue: [],
+
+    queueMessage: (content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed) return;
+      set((state) => ({
+        messageQueue: [...state.messageQueue, trimmed],
+        chatDraft: '',
+      }));
+    },
+
+    dequeueAndSend: () => {
+      const { messageQueue, chatStreaming } = get();
+      if (chatStreaming || messageQueue.length === 0) return;
+      const [nextContent, ...remainingQueue] = messageQueue;
+      if (!nextContent) return;
+      set({ messageQueue: remainingQueue, chatDraft: nextContent });
+      get().sendChat();
+    },
+
+    cycleFavoriteModel: () => {
+      const state = get();
+      const pool = state.favoriteModels.length > 0
+        ? state.favoriteModels
+        : state.models.map((m) => m.id);
+      if (pool.length === 0) return;
+      const currentIndex = pool.indexOf(state.selectedModel);
+      const nextIndex = (currentIndex + 1) % pool.length;
+      const nextModel = pool[nextIndex]!;
+      void get().setConversationModel(nextModel);
+    },
+
+    fetchPromptTemplates: async () => {
+      set({ promptTemplatesLoading: true });
+      try {
+        const { templates } = await api().listPromptTemplates();
+        set({ promptTemplates: templates, promptTemplatesLoading: false });
+      } catch {
+        set({ promptTemplatesLoading: false });
+      }
+    },
+
+    createPromptTemplate: async (tpl) => {
+      await api().createPromptTemplate(tpl);
+      await get().fetchPromptTemplates();
+    },
+
+    deletePromptTemplate: async (id: string) => {
+      await api().deletePromptTemplate(id);
+      await get().fetchPromptTemplates();
+    },
+
+    switchMessageBranch: async (messageId: string) => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) return;
+      try {
+        const { messages } = await api().switchMessageBranch(convId, messageId);
+        set((current) => ({
+          conversations: current.conversations.map((c) =>
+            c.id === convId
+              ? {
+                  ...c,
+                  messages: messages.map((m) => ({
+                    id: m.id,
+                    role: m.role === 'system' ? 'assistant' : m.role,
+                    content: m.content,
+                    cancelled: Boolean(m.cancelled),
+                    parentMessageId: m.parentMessageId ?? null,
+                    isActiveBranch: m.isActiveBranch,
+                    branchIndex: m.branchIndex,
+                    branchCount: m.branchCount,
+                    siblingMessageIds: m.siblingMessageIds,
+                  })),
+                }
+              : c
+          ),
+        }));
+      } catch (err) {
+        set({ chatError: err instanceof Error ? err.message : 'Gagal berpindah cabang pesan' });
+      }
+    },
+
+    deleteMessageBranch: async (messageId: string) => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) return;
+      try {
+        await api().deleteMessageBranch(convId, messageId);
+        // Refresh conversation messages after branch deletion
+        const { messages } = await api().listMessages(convId);
+        set((current) => ({
+          conversations: current.conversations.map((c) =>
+            c.id === convId
+              ? {
+                  ...c,
+                  messages: messages.map((m) => ({
+                    id: m.id,
+                    role: m.role === 'system' ? 'assistant' : m.role,
+                    content: m.content,
+                    cancelled: Boolean(m.cancelled),
+                    parentMessageId: m.parentMessageId ?? null,
+                    isActiveBranch: m.isActiveBranch,
+                    branchIndex: m.branchIndex,
+                    branchCount: m.branchCount,
+                    siblingMessageIds: m.siblingMessageIds,
+                  })),
+                }
+              : c
+          ),
+        }));
+      } catch (err) {
+        set({ chatError: err instanceof Error ? err.message : 'Gagal menghapus cabang pesan' });
+      }
+    },
+
+    exportActiveConversation: async (format: 'markdown' | 'html') => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) {
+        throw new Error('Percakapan aktif belum disimpan di server');
+      }
+      return api().exportConversation(convId, format);
+    },
+
+    compactActiveConversation: async () => {
+      const convId = get().activeConversationId;
+      if (!convId || convId.startsWith('draft-')) {
+        return { compacted: false, reason: 'Percakapan belum tersimpan' };
+      }
+      try {
+        const res = await api().compactConversation(convId);
+        if (res.compacted && res.compactedSummary) {
+          set((current) => ({
+            conversations: current.conversations.map((c) =>
+              c.id === convId ? { ...c, compactedSummary: res.compactedSummary ?? null } : c
+            ),
+          }));
+        }
+        return res;
+      } catch (err) {
+        return { compacted: false, reason: err instanceof Error ? err.message : 'Gagal meringkas konteks' };
+      }
+    },
+
+    // --- Sesi 28: Tugas Terjadwal & Usulan Skill ---
+    schedules: [],
+    schedulesLoading: false,
+    skillProposals: [],
+    skillProposalsLoading: false,
+
+    fetchSchedules: async () => {
+      set({ schedulesLoading: true });
+      try {
+        const schedules = await api().listSchedules();
+        set({ schedules, schedulesLoading: false });
+      } catch {
+        set({ schedulesLoading: false });
+      }
+    },
+
+    createSchedule: async (input: CreateScheduleInput) => {
+      const schedule = await api().createSchedule(input);
+      await get().fetchSchedules();
+      return schedule;
+    },
+
+    pauseSchedule: async (id: string) => {
+      await api().pauseSchedule(id);
+      await get().fetchSchedules();
+    },
+
+    resumeSchedule: async (id: string) => {
+      await api().resumeSchedule(id);
+      await get().fetchSchedules();
+    },
+
+    cancelSchedule: async (id: string) => {
+      await api().cancelSchedule(id);
+      await get().fetchSchedules();
+    },
+
+    fetchSkillProposals: async (status?: string) => {
+      set({ skillProposalsLoading: true });
+      try {
+        const proposals = await api().listSkillProposals(status);
+        set({ skillProposals: proposals, skillProposalsLoading: false });
+      } catch {
+        set({ skillProposalsLoading: false });
+      }
+    },
+
+    createSkillProposal: async (input: CreateSkillProposalInput) => {
+      const proposal = await api().createSkillProposal(input);
+      await get().fetchSkillProposals();
+      return proposal;
+    },
+
+    approveSkillProposal: async (id: string) => {
+      const res = await api().approveSkillProposal(id);
+      await Promise.all([
+        get().fetchSkillProposals(),
+        get().fetchSkills(),
+      ]);
+      return res.proposal;
+    },
+
+    rejectSkillProposal: async (id: string, reason: string) => {
+      const res = await api().rejectSkillProposal(id, reason);
+      await get().fetchSkillProposals();
+      return res.proposal;
     },
     };
   });

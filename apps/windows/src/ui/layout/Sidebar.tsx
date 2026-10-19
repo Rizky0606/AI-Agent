@@ -101,14 +101,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* New chat button */}
+        {/* New chat button with secondary subtractive affordance and shortcut kbd */}
         <button
-          className="ui-btn ui-btn-primary ui-btn-sm sidebar-new-chat-btn"
+          className="ui-btn ui-btn-secondary ui-btn-sm sidebar-new-chat-btn"
           onClick={newConversation}
           title={`${idID.sidebar.newChat} (${idID.sidebar.newChatShortcut})`}
         >
-          <Plus size={16} />
+          <Plus size={15} />
           <span>{idID.sidebar.newChat}</span>
+          <kbd className="sidebar-shortcut-kbd">Ctrl+N</kbd>
         </button>
 
         {/* Search input */}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SsrfGuard, SsrfViolationError, type DnsResolver } from '../src/index.ts';
+import { createWebFetchTool, SsrfGuard, SsrfViolationError, type DnsResolver } from '../src/index.ts';
 
 test('SSRF Guard strictly blocks loopback and private IPv4 addresses', async () => {
   const guard = new SsrfGuard({ resolveDns: false });
@@ -192,3 +192,30 @@ test('SSRF Guard detects DNS rebinding using injected fake DNS resolver (zero-ne
   assert.equal(unresolvableRes.safe, false);
   assert.match(unresolvableRes.reason ?? '', /Gagal menyelesaikan DNS/i);
 });
+
+test('web_fetch: strictly blocks redirect to private IP or metadata (SSRF redirect protection)', async () => {
+  const ssrfGuard = new SsrfGuard({ resolveDns: false });
+
+  // Custom fetch mock simulating a 302 redirect from a public address to loopback/private
+  const redirectFetchMock = async () => {
+    return {
+      status: 200,
+      url: 'http://127.0.0.1:8080/admin/secrets',
+      headers: new Headers({ 'content-type': 'text/html' }),
+      text: async () => 'leaked data',
+    } as unknown as Response;
+  };
+
+  const fetchTool = createWebFetchTool(ssrfGuard, redirectFetchMock);
+
+  await assert.rejects(
+    async () =>
+      fetchTool.execute(
+        { url: 'https://public-service.com/redirect' },
+        { actor: { id: 'user-1' } },
+      ),
+    (err: unknown) => err instanceof SsrfViolationError,
+    'web_fetch harus melempar SsrfViolationError jika redirect mengarah ke IP privat',
+  );
+});
+

@@ -2,14 +2,19 @@
   "name": "@personal-ai-os/shared",
   "private": true,
   "type": "module",
+  "browser": "src/index.browser.ts",
   "react-native": "src/index.rn.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "browser": "./src/index.browser.ts",
+      "default": "./src/index.ts"
+    }
   },
   "scripts": {
     "build": "tsc --build",
     "lint": "eslint src test --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test:unit": "node --test --experimental-strip-types test/*.test.ts"
   }
 }

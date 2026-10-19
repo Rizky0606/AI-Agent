@@ -11,3 +11,8 @@ export * from './skill-repository.ts';
 export * from './memory-repository.ts';
 export * from './schedule-repository.ts';
 export * from './notification-repository.ts';
+export * from './research-repository.ts';
+export * from './compare-repository.ts';
+export * from './prompt-template-repository.ts';
+export * from './skill-proposal-repository.ts';
+

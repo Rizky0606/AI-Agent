@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,7 +10,8 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
-import { theme } from './Theme.ts';
+import { Eye, Star, Wrench, X, Zap } from 'lucide-react-native';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useChatStore } from '../state/chat-store.ts';
 import type { ModelDescriptor } from '../api/types.ts';
 
@@ -22,6 +24,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   visible,
   onClose,
 }) => {
+  const theme = useAppTheme();
   const {
     models,
     selectedModel,
@@ -97,32 +100,47 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
       <View style={styles.badgeRow}>
         {isStream && (
           <View style={[styles.badge, styles.badgeVerified]}>
-            <Text style={styles.badgeVerifiedText}>⚡ Stream</Text>
+            <Zap size={10} color="#10b981" />
+            <Text style={styles.badgeVerifiedText} allowFontScaling>
+              Stream
+            </Text>
           </View>
         )}
         {isTool && (
           <View style={[styles.badge, styles.badgeVerified]}>
-            <Text style={styles.badgeVerifiedText}>🛠 Tools</Text>
+            <Wrench size={10} color="#10b981" />
+            <Text style={styles.badgeVerifiedText} allowFontScaling>
+              Tools
+            </Text>
           </View>
         )}
         {isVision && (
           <View style={[styles.badge, styles.badgeVerified]}>
-            <Text style={styles.badgeVerifiedText}>👁 Vision</Text>
+            <Eye size={10} color="#10b981" />
+            <Text style={styles.badgeVerifiedText} allowFontScaling>
+              Vision
+            </Text>
           </View>
         )}
         {hasUnknown && (
           <View style={[styles.badge, styles.badgeUnknown]}>
-            <Text style={styles.badgeUnknownText}>? Unknown</Text>
+            <Text style={styles.badgeUnknownText} allowFontScaling>
+              ? Unknown
+            </Text>
           </View>
         )}
         {model.contextWindow ? (
           <View style={[styles.badge, styles.badgeContext]}>
-            <Text style={styles.badgeContextText}>{formatContext(model.contextWindow)}</Text>
+            <Text style={styles.badgeContextText} allowFontScaling>
+              {formatContext(model.contextWindow)}
+            </Text>
           </View>
         ) : null}
         {typeof model.lastLatencyMs === 'number' && model.lastLatencyMs > 0 ? (
           <View style={[styles.badge, styles.badgeLatency]}>
-            <Text style={styles.badgeLatencyText}>{model.lastLatencyMs}ms</Text>
+            <Text style={styles.badgeLatencyText} allowFontScaling>
+              {model.lastLatencyMs}ms
+            </Text>
           </View>
         ) : null}
       </View>
@@ -135,21 +153,37 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
     const isDefault = userDefaultModel === model.id || model.isDefault;
 
     return (
-      <TouchableOpacity
+      <Pressable
         key={model.id}
+        android_ripple={{ color: 'rgba(128, 128, 128, 0.15)' }}
         accessibilityRole="button"
         accessibilityLabel={`Pilih model ${model.id}`}
-        style={[styles.modelRow, isSelected && styles.modelRowSelected]}
+        style={[
+          styles.modelRow,
+          {
+            backgroundColor: theme.colors.surfaceElevated,
+            borderColor: isSelected ? theme.colors.primary : 'transparent',
+          },
+          isSelected && {
+            backgroundColor: theme.scheme === 'dark' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)',
+          },
+        ]}
         onPress={() => handleSelect(model.id)}
       >
         <View style={styles.modelInfo}>
           <View style={styles.modelHeaderRow}>
-            <Text style={styles.modelName} numberOfLines={1}>
+            <Text
+              style={[styles.modelName, { color: theme.colors.textPrimary }]}
+              numberOfLines={1}
+              allowFontScaling
+            >
               {model.id}
             </Text>
             {isDefault && (
-              <View style={styles.defaultBadge}>
-                <Text style={styles.defaultBadgeText}>Default</Text>
+              <View style={[styles.defaultBadge, { backgroundColor: theme.colors.surfaceBorder }]}>
+                <Text style={[styles.defaultBadgeText, { color: theme.colors.primary }]} allowFontScaling>
+                  Default
+                </Text>
               </View>
             )}
           </View>
@@ -157,31 +191,47 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
         </View>
 
         <View style={styles.modelActions}>
-          <TouchableOpacity
+          <Pressable
+            android_ripple={{ color: 'rgba(128, 128, 128, 0.2)', borderless: true }}
             accessibilityRole="button"
             accessibilityLabel={isFav ? 'Hapus favorit' : 'Sematkan favorit'}
             style={styles.actionBtnTouch}
             onPress={() => toggleFavoriteModel(model.id)}
           >
-            <Text style={[styles.favStar, isFav && styles.favStarActive]}>
-              {isFav ? '★' : '☆'}
-            </Text>
-          </TouchableOpacity>
+            <Star
+              size={18}
+              color={isFav ? '#f59e0b' : theme.colors.textMuted}
+              fill={isFav ? '#f59e0b' : 'transparent'}
+            />
+          </Pressable>
 
           {!isDefault && (
-            <TouchableOpacity
+            <Pressable
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
               accessibilityRole="button"
               accessibilityLabel={`Jadikan ${model.id} default`}
-              style={styles.setDefaultTouch}
+              style={[
+                styles.setDefaultTouch,
+                { borderColor: theme.colors.surfaceBorder },
+              ]}
               onPress={() => void setUserDefaultModel(model.id)}
             >
-              <Text style={styles.setDefaultText}>Set Default</Text>
-            </TouchableOpacity>
+              <Text
+                style={[styles.setDefaultText, { color: theme.colors.textSecondary }]}
+                allowFontScaling
+              >
+                Set Default
+              </Text>
+            </Pressable>
           )}
 
-          {isSelected && <Text style={styles.checkMark}>✓</Text>}
+          {isSelected && (
+            <Text style={[styles.checkMark, { color: theme.colors.primary }]} allowFontScaling>
+              ✓
+            </Text>
+          )}
         </View>
-      </TouchableOpacity>
+      </Pressable>
     );
   };
 
@@ -197,49 +247,87 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
           <View style={styles.scrim} />
         </TouchableWithoutFeedback>
 
-        <View style={styles.sheetContainer}>
+        <View
+          style={[
+            styles.sheetContainer,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.surfaceBorder,
+            },
+          ]}
+        >
           {/* Drag Handle */}
-          <View style={styles.handleBar} />
+          <View
+            style={[styles.handleBar, { backgroundColor: theme.colors.surfaceBorder }]}
+          />
 
           {/* Header */}
-          <View style={styles.headerRow}>
-            <Text style={styles.headerTitle}>Pilih Model AI</Text>
-            <TouchableOpacity
+          <View
+            style={[styles.headerRow, { borderBottomColor: theme.colors.surfaceBorder }]}
+          >
+            <Text
+              style={[styles.headerTitle, { color: theme.colors.textPrimary }]}
+              allowFontScaling
+            >
+              Pilih Model AI
+            </Text>
+            <Pressable
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.2)', borderless: true }}
               accessibilityRole="button"
               accessibilityLabel="Tutup dialog"
               style={styles.closeBtn}
               onPress={onClose}
             >
-              <Text style={styles.closeBtnText}>✕</Text>
-            </TouchableOpacity>
+              <X size={20} color={theme.colors.textSecondary} />
+            </Pressable>
           </View>
 
           {/* Search Box */}
-          <View style={styles.searchBox}>
+          <View
+            style={[
+              styles.searchBox,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
             <TextInput
               accessibilityLabel="Cari model"
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: theme.colors.textPrimary }]}
               placeholder="Cari model atau provider..."
               placeholderTextColor={theme.colors.textMuted}
               value={search}
               onChangeText={setSearch}
             />
             {search ? (
-              <TouchableOpacity
+              <Pressable
+                android_ripple={{ color: 'rgba(128, 128, 128, 0.2)', borderless: true }}
                 accessibilityRole="button"
                 accessibilityLabel="Hapus pencarian"
                 style={styles.clearSearchBtn}
                 onPress={() => setSearch('')}
               >
-                <Text style={styles.clearSearchText}>✕</Text>
-              </TouchableOpacity>
+                <X size={16} color={theme.colors.textMuted} />
+              </Pressable>
             ) : null}
           </View>
 
           {/* Catalog Error Banner */}
           {modelCatalogUnavailable && (
-            <View style={styles.catalogAlert}>
-              <Text style={styles.catalogAlertText}>
+            <View
+              style={[
+                styles.catalogAlert,
+                {
+                  backgroundColor: theme.colors.riskMediumBg,
+                  borderColor: theme.colors.riskMedium,
+                },
+              ]}
+            >
+              <Text
+                style={[styles.catalogAlertText, { color: theme.colors.riskMedium }]}
+                allowFontScaling
+              >
                 {modelCatalogError || 'Katalog model tidak dapat dihubungi (503).'}
               </Text>
               <TouchableOpacity
@@ -248,40 +336,84 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 style={styles.retryBtn}
                 onPress={() => void loadCatalog()}
               >
-                <Text style={styles.retryBtnText}>Coba lagi</Text>
+                <Text
+                  style={[styles.retryBtnText, { color: theme.colors.riskMedium }]}
+                  allowFontScaling
+                >
+                  Coba lagi
+                </Text>
               </TouchableOpacity>
             </View>
           )}
 
           {/* Content Scroll */}
-          <ScrollView style={styles.scrollList} contentContainerStyle={styles.scrollContent}>
+          <ScrollView
+            style={styles.scrollList}
+            contentContainerStyle={styles.scrollContent}
+            nestedScrollEnabled
+          >
             {/* Auto (Direkomendasikan) */}
-            {(!search || 'auto'.includes(search.toLowerCase()) || 'disarankan'.includes(search.toLowerCase())) && (
-              <TouchableOpacity
+            {(!search ||
+              'auto'.includes(search.toLowerCase()) ||
+              'disarankan'.includes(search.toLowerCase())) && (
+              <Pressable
+                android_ripple={{ color: 'rgba(59, 130, 246, 0.15)' }}
                 accessibilityRole="button"
                 accessibilityLabel="Pilih mode Auto"
-                style={[styles.modelRow, styles.autoRow, selectedModel === 'auto' && styles.modelRowSelected]}
+                style={[
+                  styles.modelRow,
+                  styles.autoRow,
+                  {
+                    backgroundColor: theme.colors.surfaceElevated,
+                    borderColor:
+                      selectedModel === 'auto' ? theme.colors.primary : theme.colors.surfaceBorder,
+                  },
+                ]}
                 onPress={() => handleSelect('auto')}
               >
                 <View style={styles.modelInfo}>
                   <View style={styles.modelHeaderRow}>
-                    <Text style={styles.autoTitle}>✦ Auto (Direkomendasikan)</Text>
-                    <View style={styles.recommendedBadge}>
-                      <Text style={styles.recommendedBadgeText}>Disarankan</Text>
+                    <Text
+                      style={[styles.autoTitle, { color: theme.colors.primary }]}
+                      allowFontScaling
+                    >
+                      ✦ Auto (Direkomendasikan)
+                    </Text>
+                    <View
+                      style={[
+                        styles.recommendedBadge,
+                        { backgroundColor: theme.colors.primary },
+                      ]}
+                    >
+                      <Text style={styles.recommendedBadgeText} allowFontScaling>
+                        Disarankan
+                      </Text>
                     </View>
                   </View>
-                  <Text style={styles.autoSubtitle}>
+                  <Text
+                    style={[styles.autoSubtitle, { color: theme.colors.textSecondary }]}
+                    allowFontScaling
+                  >
                     Model optimal dipilih otomatis sesuai mode & konteks tugas.
                   </Text>
                 </View>
-                {selectedModel === 'auto' && <Text style={styles.checkMark}>✓</Text>}
-              </TouchableOpacity>
+                {selectedModel === 'auto' && (
+                  <Text style={[styles.checkMark, { color: theme.colors.primary }]} allowFontScaling>
+                    ✓
+                  </Text>
+                )}
+              </Pressable>
             )}
 
             {/* Favorit Section */}
             {favorites.length > 0 && (
               <View style={styles.sectionContainer}>
-                <Text style={styles.sectionTitle}>★ FAVORIT DIENYEMATKAN</Text>
+                <Text
+                  style={[styles.sectionTitle, { color: theme.colors.textMuted }]}
+                  allowFontScaling
+                >
+                  ★ FAVORIT DIENYEMATKAN
+                </Text>
                 {favorites.map((m) => renderModelRow(m))}
               </View>
             )}
@@ -292,7 +424,12 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               if (list.length === 0) return null;
               return (
                 <View key={provider} style={styles.sectionContainer}>
-                  <Text style={styles.sectionTitle}>{provider.toUpperCase()} ({list.length})</Text>
+                  <Text
+                    style={[styles.sectionTitle, { color: theme.colors.textMuted }]}
+                    allowFontScaling
+                  >
+                    {provider.toUpperCase()} ({list.length})
+                  </Text>
                   {list.map((m) => renderModelRow(m))}
                 </View>
               );
@@ -300,22 +437,40 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
             {filteredModels.length === 0 && search ? (
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>Tidak ada model yang cocok dengan &quot;{search}&quot;</Text>
+                <Text
+                  style={[styles.emptyText, { color: theme.colors.textMuted }]}
+                  allowFontScaling
+                >
+                  Tidak ada model yang cocok dengan &quot;{search}&quot;
+                </Text>
               </View>
             ) : null}
           </ScrollView>
 
           {/* Footer Info */}
-          <View style={styles.footerRow}>
-            <Text style={styles.footerText}>{models.length} model tersedia</Text>
-            <TouchableOpacity
+          <View
+            style={[styles.footerRow, { borderTopColor: theme.colors.surfaceBorder }]}
+          >
+            <Text
+              style={[styles.footerText, { color: theme.colors.textMuted }]}
+              allowFontScaling
+            >
+              {models.length} model tersedia
+            </Text>
+            <Pressable
+              android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
               accessibilityRole="button"
               accessibilityLabel="Segarkan katalog model"
               style={styles.refreshTouch}
               onPress={() => void loadCatalog()}
             >
-              <Text style={styles.refreshText}>Segarkan</Text>
-            </TouchableOpacity>
+              <Text
+                style={[styles.refreshText, { color: theme.colors.primary }]}
+                allowFontScaling
+              >
+                Segarkan
+              </Text>
+            </Pressable>
           </View>
         </View>
       </View>
@@ -333,19 +488,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sheetContainer: {
-    backgroundColor: theme.colors.surface,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '85%',
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
     paddingBottom: 20,
   },
   handleBar: {
     width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: theme.colors.surfaceBorder,
     alignSelf: 'center',
     marginTop: 8,
     marginBottom: 4,
@@ -354,80 +506,62 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceBorder,
   },
   headerTitle: {
-    color: theme.colors.textPrimary,
-    ...theme.typography.title,
+    fontSize: 18,
     fontWeight: '700',
   },
   closeBtn: {
-    width: theme.controls.minTouchTarget,
-    height: theme.controls.minTouchTarget,
+    width: 48,
+    height: 48,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  closeBtnText: {
-    color: theme.colors.textSecondary,
-    fontSize: 18,
-    fontWeight: '600',
   },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.background,
-    marginHorizontal: theme.spacing.md,
-    marginVertical: theme.spacing.sm,
-    borderRadius: theme.borderRadius.md,
+    marginHorizontal: 16,
+    marginVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    minHeight: theme.controls.minTouchTarget,
-    paddingHorizontal: theme.spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: 12,
   },
   searchInput: {
     flex: 1,
-    color: theme.colors.textPrimary,
     fontSize: 14,
     paddingVertical: 8,
   },
   clearSearchBtn: {
-    width: theme.controls.minTouchTarget,
-    height: theme.controls.minTouchTarget,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  clearSearchText: {
-    color: theme.colors.textMuted,
-    fontSize: 14,
-  },
   catalogAlert: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-    borderRadius: theme.borderRadius.sm,
-    marginHorizontal: theme.spacing.md,
-    marginBottom: theme.spacing.sm,
-    padding: theme.spacing.sm,
+    borderRadius: 8,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    padding: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   catalogAlertText: {
-    color: theme.colors.warning,
     fontSize: 12,
     flex: 1,
     marginRight: 8,
   },
   retryBtn: {
-    minHeight: theme.controls.minTouchTarget,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 8,
   },
   retryBtnText: {
-    color: theme.colors.warning,
     fontWeight: '700',
     fontSize: 12,
   },
@@ -435,30 +569,22 @@ const styles = StyleSheet.create({
     maxHeight: 400,
   },
   scrollContent: {
-    paddingHorizontal: theme.spacing.md,
-    paddingBottom: theme.spacing.lg,
+    paddingHorizontal: 16,
+    paddingBottom: 20,
   },
   modelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: theme.controls.minTouchTarget,
+    minHeight: 48,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: theme.borderRadius.md,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'transparent',
-    marginBottom: 6,
-    backgroundColor: theme.colors.surfaceElevated,
-  },
-  modelRowSelected: {
-    borderColor: theme.colors.primary,
-    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+    marginBottom: 8,
   },
   autoRow: {
-    backgroundColor: 'rgba(6, 182, 212, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.25)',
   },
   modelInfo: {
     flex: 1,
@@ -471,119 +597,105 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   modelName: {
-    color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '600',
   },
   autoTitle: {
-    color: theme.colors.primary,
     fontSize: 14,
     fontWeight: '700',
   },
   autoSubtitle: {
-    color: theme.colors.textSecondary,
     fontSize: 11,
     marginTop: 2,
   },
   recommendedBadge: {
-    backgroundColor: 'rgba(6, 182, 212, 0.2)',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: theme.borderRadius.full,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
   },
   recommendedBadgeText: {
-    color: '#06b6d4',
+    color: '#fff',
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '800',
     textTransform: 'uppercase',
   },
   defaultBadge: {
-    backgroundColor: 'rgba(59, 130, 246, 0.2)',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: theme.borderRadius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   defaultBadgeText: {
-    color: theme.colors.primary,
     fontSize: 9,
     fontWeight: '600',
   },
   badgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
     flexWrap: 'wrap',
     marginTop: 4,
   },
   badge: {
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   badgeVerified: {
     backgroundColor: 'rgba(16, 185, 129, 0.15)',
   },
   badgeVerifiedText: {
     color: '#10b981',
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '600',
   },
   badgeUnknown: {
     backgroundColor: 'rgba(156, 163, 175, 0.15)',
   },
   badgeUnknownText: {
-    color: theme.colors.textMuted,
-    fontSize: 9,
+    color: '#9ca3af',
+    fontSize: 10,
   },
   badgeContext: {
     backgroundColor: 'rgba(168, 85, 247, 0.15)',
   },
   badgeContextText: {
     color: '#a855f7',
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '600',
   },
   badgeLatency: {
     backgroundColor: 'rgba(59, 130, 246, 0.15)',
   },
   badgeLatencyText: {
-    color: theme.colors.primary,
-    fontSize: 9,
+    color: '#3b82f6',
+    fontSize: 10,
   },
   modelActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
   },
   actionBtnTouch: {
-    width: theme.controls.minTouchTarget,
-    height: theme.controls.minTouchTarget,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  favStar: {
-    fontSize: 18,
-    color: theme.colors.textMuted,
-  },
-  favStarActive: {
-    color: '#f59e0b',
-  },
   setDefaultTouch: {
-    minHeight: theme.controls.minTouchTarget,
+    minHeight: 40,
     justifyContent: 'center',
-    paddingHorizontal: 6,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    borderRadius: 6,
   },
   setDefaultText: {
-    color: theme.colors.textSecondary,
     fontSize: 10,
-    borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: theme.borderRadius.sm,
+    fontWeight: '600',
   },
   checkMark: {
-    color: theme.colors.primary,
     fontSize: 16,
     fontWeight: '700',
     marginLeft: 4,
@@ -592,7 +704,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   sectionTitle: {
-    color: theme.colors.textMuted,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
@@ -603,30 +714,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyText: {
-    color: theme.colors.textMuted,
     fontSize: 13,
   },
   footerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.md,
-    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: theme.colors.surfaceBorder,
   },
   footerText: {
-    color: theme.colors.textMuted,
     fontSize: 11,
   },
   refreshTouch: {
-    minHeight: theme.controls.minTouchTarget,
+    minHeight: 44,
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
   },
   refreshText: {
-    color: theme.colors.primary,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
   },
 });

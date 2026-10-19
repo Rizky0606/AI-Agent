@@ -54,8 +54,8 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onDecide }
 
   return (
     <>
-      <div className={`activity-card ${isHighRisk ? 'high-risk' : ''}`}>
-        {/* Header: Action name and Risk Badge */}
+      <div className={`activity-card ${isHighRisk ? 'high-risk' : ''} approval-card--${riskClass(approval.riskLevel)}`}>
+        {/* Header: Action name, Waiting Duration, and Risk Badge */}
         <div className="card-header-row">
           <div className="conversation-item-inner">
             {isHighRisk ? (
@@ -65,9 +65,16 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onDecide }
             )}
             <strong className="card-title-text">{approval.action}</strong>
           </div>
-          <span className={`risk-pill ${riskClass(approval.riskLevel)}`}>
-            {approval.riskLevel}
-          </span>
+          <div className="card-header-right-badges">
+            {approval.createdAt && (
+              <span className="approval-waiting-badge" title={`Dibuat pada ${new Date(approval.createdAt).toLocaleTimeString()}`}>
+                Menunggu {Math.max(1, Math.round((Date.now() - new Date(approval.createdAt).getTime()) / 60000))}m
+              </span>
+            )}
+            <span className={`risk-pill ${riskClass(approval.riskLevel)}`}>
+              {approval.riskLevel}
+            </span>
+          </div>
         </div>
 
         {/* Consequences and Risk Details */}

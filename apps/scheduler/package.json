@@ -2,7 +2,7 @@
   "name": "@personal-ai-os/scheduler",
   "private": true,
   "type": "module",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -11,7 +11,9 @@
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src test --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test:unit": "node --test --experimental-strip-types \"test/!(scheduler-live-*)*.test.ts\"",
+    "test:live": "node --test --experimental-strip-types test/scheduler-live-*.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

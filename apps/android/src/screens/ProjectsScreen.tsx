@@ -3,13 +3,15 @@ import {
   ActivityIndicator,
   FlatList,
   Modal,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { theme } from '../components/Theme.ts';
+import { ScreenHeader } from '../components/ScreenHeader.tsx';
+import { useAppTheme } from '../hooks/use-theme.ts';
 import { useCreateProject, useProjects } from '../hooks/use-queries.ts';
 import { useUiStore } from '../state/ui-store.ts';
 
@@ -18,6 +20,7 @@ export interface ProjectsScreenProps {
 }
 
 export const ProjectsScreen: React.FC<ProjectsScreenProps> = ({ onBack }) => {
+  const theme = useAppTheme();
   const { data: projects, isLoading, refetch } = useProjects();
   const { activeProjectId, setActiveProjectId } = useUiStore();
   const createProject = useCreateProject();
@@ -38,23 +41,24 @@ export const ProjectsScreen: React.FC<ProjectsScreenProps> = ({ onBack }) => {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        {onBack ? (
-          <TouchableOpacity
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <ScreenHeader
+        title="Workspaces & Projects"
+        onBack={onBack}
+        rightElement={
+          <Pressable
+            android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+            style={[styles.addButton, { backgroundColor: theme.colors.primary }]}
+            onPress={() => setModalVisible(true)}
             accessibilityRole="button"
-            accessibilityLabel="Kembali"
-            style={{ width: 48, height: 48, justifyContent: 'center', alignItems: 'center', marginRight: 4 }}
-            onPress={onBack}
+            accessibilityLabel="Buat workspace baru"
           >
-            <Text style={{ color: theme.colors.primary, fontSize: 24, fontWeight: '700' }}>‹</Text>
-          </TouchableOpacity>
-        ) : null}
-        <Text style={[styles.headerTitle, { flex: 1 }]}>Workspaces & Projects</Text>
-        <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
-          <Text style={styles.addButtonText}>+ Buat Baru</Text>
-        </TouchableOpacity>
-      </View>
+            <Text style={styles.addButtonText} allowFontScaling>
+              + Buat Baru
+            </Text>
+          </Pressable>
+        }
+      />
 
       {isLoading ? (
         <View style={styles.centerContainer}>
@@ -62,8 +66,16 @@ export const ProjectsScreen: React.FC<ProjectsScreenProps> = ({ onBack }) => {
         </View>
       ) : projects?.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyTitle}>Belum Ada Project</Text>
-          <Text style={styles.emptySubtitle}>
+          <Text
+            style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}
+            allowFontScaling
+          >
+            Belum Ada Project
+          </Text>
+          <Text
+            style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+            allowFontScaling
+          >
             Kelompokkan task dan percakapan Anda dalam workspace
           </Text>
         </View>
@@ -77,30 +89,71 @@ export const ProjectsScreen: React.FC<ProjectsScreenProps> = ({ onBack }) => {
           renderItem={({ item }) => {
             const isActive = activeProjectId === item.id;
             return (
-              <View style={[styles.projectCard, isActive && styles.activeCard]}>
+              <View
+                style={[
+                  styles.projectCard,
+                  {
+                    backgroundColor: theme.colors.surface,
+                    borderColor: isActive ? theme.colors.primary : theme.colors.surfaceBorder,
+                  },
+                ]}
+              >
                 <View style={styles.cardHeader}>
-                  <Text style={styles.projectName}>{item.name}</Text>
+                  <Text
+                    style={[styles.projectName, { color: theme.colors.textPrimary }]}
+                    allowFontScaling
+                  >
+                    {item.name}
+                  </Text>
                   {isActive ? (
-                    <View style={styles.activeBadge}>
-                      <Text style={styles.activeBadgeText}>AKTIF</Text>
+                    <View style={[styles.activeBadge, { backgroundColor: theme.colors.primary }]}>
+                      <Text style={styles.activeBadgeText} allowFontScaling>
+                        AKTIF
+                      </Text>
                     </View>
                   ) : null}
                 </View>
                 {item.description ? (
-                  <Text style={styles.projectDesc}>{item.description}</Text>
+                  <Text
+                    style={[styles.projectDesc, { color: theme.colors.textSecondary }]}
+                    allowFontScaling
+                  >
+                    {item.description}
+                  </Text>
                 ) : null}
                 <View style={styles.cardFooter}>
-                  <Text style={styles.dateText}>
+                  <Text
+                    style={[styles.dateText, { color: theme.colors.textMuted }]}
+                    allowFontScaling
+                  >
                     Dibuat: {new Date(item.createdAt).toLocaleDateString('id-ID')}
                   </Text>
-                  <TouchableOpacity
-                    style={[styles.selectBtn, isActive && styles.selectBtnActive]}
+                  <Pressable
+                    android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                    style={[
+                      styles.selectBtn,
+                      {
+                        backgroundColor: isActive
+                          ? 'transparent'
+                          : theme.colors.surfaceElevated,
+                        borderColor: theme.colors.primary,
+                        borderWidth: isActive ? 1 : 0,
+                      },
+                    ]}
                     onPress={() => setActiveProjectId(isActive ? null : item.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={isActive ? 'Batal Pilih Workspace' : 'Pilih Workspace'}
                   >
-                    <Text style={[styles.selectBtnText, isActive && styles.selectBtnTextActive]}>
+                    <Text
+                      style={[
+                        styles.selectBtnText,
+                        { color: isActive ? theme.colors.textSecondary : theme.colors.primary },
+                      ]}
+                      allowFontScaling
+                    >
                       {isActive ? 'Batal Pilih' : 'Pilih Workspace'}
                     </Text>
-                  </TouchableOpacity>
+                  </Pressable>
                 </View>
               </View>
             );
@@ -111,34 +164,83 @@ export const ProjectsScreen: React.FC<ProjectsScreenProps> = ({ onBack }) => {
       {/* Create Project Modal */}
       <Modal visible={modalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Buat Workspace Baru</Text>
+          <View
+            style={[
+              styles.modalContent,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.surfaceBorder,
+              },
+            ]}
+          >
+            <Text
+              style={[styles.modalTitle, { color: theme.colors.textPrimary }]}
+              allowFontScaling
+            >
+              Buat Workspace Baru
+            </Text>
             <TextInput
-              style={styles.modalInput}
+              style={[
+                styles.modalInput,
+                {
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderColor: theme.colors.surfaceBorder,
+                  color: theme.colors.textPrimary,
+                },
+              ]}
               placeholder="Nama Project"
               placeholderTextColor={theme.colors.textMuted}
               value={name}
               onChangeText={setName}
+              accessibilityLabel="Nama Project"
             />
             <TextInput
-              style={[styles.modalInput, styles.textArea]}
+              style={[
+                styles.modalInput,
+                styles.textArea,
+                {
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderColor: theme.colors.surfaceBorder,
+                  color: theme.colors.textPrimary,
+                },
+              ]}
               placeholder="Deskripsi (opsional)"
               placeholderTextColor={theme.colors.textMuted}
               value={description}
               onChangeText={setDescription}
               multiline
+              accessibilityLabel="Deskripsi Project"
             />
             <View style={styles.modalButtons}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
-                <Text style={styles.cancelBtnText}>Batal</Text>
-              </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.saveBtn, !name.trim() && styles.btnDisabled]}
+                style={styles.cancelBtn}
+                onPress={() => setModalVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Batal"
+              >
+                <Text
+                  style={[styles.cancelBtnText, { color: theme.colors.textSecondary }]}
+                  allowFontScaling
+                >
+                  Batal
+                </Text>
+              </TouchableOpacity>
+              <Pressable
+                android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+                style={[
+                  styles.saveBtn,
+                  { backgroundColor: theme.colors.primary },
+                  !name.trim() && styles.btnDisabled,
+                ]}
                 disabled={!name.trim()}
                 onPress={handleCreate}
+                accessibilityRole="button"
+                accessibilityLabel="Simpan workspace"
               >
-                <Text style={styles.saveBtnText}>Simpan</Text>
-              </TouchableOpacity>
+                <Text style={styles.saveBtnText} allowFontScaling>
+                  Simpan
+                </Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -150,28 +252,13 @@ export const ProjectsScreen: React.FC<ProjectsScreenProps> = ({ onBack }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    backgroundColor: theme.colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceBorder,
-  },
-  headerTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
   },
   addButton: {
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 6,
-    borderRadius: theme.borderRadius.sm,
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   addButtonText: {
     color: '#fff',
@@ -182,48 +269,39 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: theme.spacing.xl,
+    padding: 24,
   },
   emptyTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: theme.spacing.xs,
+    marginBottom: 6,
   },
   emptySubtitle: {
-    color: theme.colors.textSecondary,
     fontSize: 14,
     textAlign: 'center',
   },
   listContent: {
-    padding: theme.spacing.md,
+    padding: 16,
   },
   projectCard: {
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
+    padding: 16,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    marginBottom: theme.spacing.md,
-  },
-  activeCard: {
-    borderColor: theme.colors.primary,
+    marginBottom: 14,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: theme.spacing.xs,
+    marginBottom: 6,
   },
   projectName: {
-    color: theme.colors.textPrimary,
     fontSize: 16,
     fontWeight: '700',
   },
   activeBadge: {
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 4,
   },
   activeBadgeText: {
@@ -232,90 +310,78 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   projectDesc: {
-    color: theme.colors.textSecondary,
     fontSize: 13,
-    marginBottom: theme.spacing.sm,
+    marginBottom: 10,
+    lineHeight: 18,
   },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: theme.spacing.xs,
+    marginTop: 6,
   },
   dateText: {
-    color: theme.colors.textMuted,
     fontSize: 11,
   },
   selectBtn: {
-    backgroundColor: theme.colors.surfaceElevated,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 6,
-    borderRadius: theme.borderRadius.sm,
-  },
-  selectBtnActive: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: theme.colors.primary,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   selectBtnText: {
-    color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: '600',
-  },
-  selectBtnTextActive: {
-    color: theme.colors.textSecondary,
+    fontWeight: '700',
   },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
-    padding: theme.spacing.lg,
+    padding: 20,
   },
   modalContent: {
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.xl,
-    borderRadius: theme.borderRadius.md,
+    padding: 20,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
   },
   modalTitle: {
-    color: theme.colors.textPrimary,
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: theme.spacing.md,
+    marginBottom: 14,
   },
   modalInput: {
-    backgroundColor: theme.colors.surfaceElevated,
-    color: theme.colors.textPrimary,
-    padding: 10,
-    borderRadius: theme.borderRadius.sm,
+    padding: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    marginBottom: theme.spacing.md,
+    marginBottom: 14,
     fontSize: 14,
+    minHeight: 48,
   },
   textArea: {
-    height: 80,
+    minHeight: 80,
     textAlignVertical: 'top',
   },
   modalButtons: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    gap: 10,
   },
   cancelBtn: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 8,
-    marginRight: theme.spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   cancelBtnText: {
-    color: theme.colors.textSecondary,
     fontSize: 14,
   },
   saveBtn: {
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: 8,
-    borderRadius: theme.borderRadius.sm,
+    minHeight: 48,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   btnDisabled: {
     opacity: 0.5,

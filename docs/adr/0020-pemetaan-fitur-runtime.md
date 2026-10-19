@@ -1,10 +1,10 @@
-# ADR 0004: Pemetaan Fitur Runtime Eksternal (omp, Hermes, pi.dev, Odysseus) & Strategi Integrasi Personal AI OS
+# ADR 0020: Pemetaan Fitur Runtime Eksternal (omp, Hermes, pi.dev, Odysseus) & Strategi Integrasi Personal AI OS
 
 **Status**: Diusulkan (Proposed)  
-**Tanggal**: 15 Oktober 2026 (Sesi 11)  
+**Tanggal**: 15 Oktober 2026 (Sesi 11; Direvisi Sesi 19)  
 **Pengambil Keputusan**: Principal Software Architect & DevOps Engineer  
-**Konteks**: Sesi 11 — Riset dan ADR Pemetaan Fitur (Tanpa Kode Produk)  
-*Catatan Penomoran: Dinamai sesuai penugasan `0004-pemetaan-fitur-runtime.md` (mengikuti urutan keputusan arsitektur #0013).*
+**Konteks**: Sesi 11 — Riset dan ADR Pemetaan Fitur; Sesi 19 — Koreksi Penomoran dan Verifikasi Fakta  
+*Catatan Penomoran: Dinamai ulang menjadi ADR 0020 untuk menyelesaikan duplikasi penomoran ADR 0004 (ADR 0004 asli adalah Design System & Client Dependencies).*
 
 ---
 
@@ -40,10 +40,10 @@ Setiap klaim dalam dokumen ini didasarkan pada dokumentasi resmi dan verifikasi 
 
 | Runtime | Sumber Resmi (URL) | Versi Terdokumentasi | Tanggal Akses | Status di VPS Oracle (`servernic`) | Lisensi | Kebutuhan Memori (RSS) di ARM64 |
 |---|---|---|---|---|---|---|
-| **omp** | [omp.sh](https://omp.sh/)<br>[github.com/oh-my-pi/pi-coding-agent](https://github.com/oh-my-pi/pi-coding-agent) | `18.6.1` (Host)<br>`18.6.1` (Upstream) | 15 Okt 2026 (Web)<br>11 Okt 2026 (Host) | **TERPASANG** (`/home/ubuntu/.local/bin/omp`) | MIT | **~388 MB** (uji live probe VPS, max ~403 MB) |
+| **omp** | [omp.sh](https://omp.sh/)<br>[github.com/can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) | `18.6.1` (Host)<br>`18.6.1` (Upstream) | 16 Okt 2026 (Web)<br>11 Okt 2026 (Host) | **TERPASANG** (`/home/ubuntu/.local/bin/omp`) | MIT | **~388 MB** (uji live probe VPS, max ~403 MB) |
 | **Hermes** | [hermes-agent.nousresearch.com](https://hermes-agent.nousresearch.com/)<br>[github.com/NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | `0.20.5` (2026.8.19) | 15 Okt 2026 (Web)<br>11 Okt 2026 (Host) | **TERPASANG & AKTIF** (`/home/ubuntu/.local/bin/hermes`, Daemon PID 613535 di `0.0.0.0:9119`) | MIT | **~160 MB** (CLI probe VPS, Python 3.11.15) |
-| **pi.dev** | [pi.dev](https://pi.dev/)<br>[github.com/earendil-works/pi](https://github.com/earendil-works/pi) | `1.0` (dengan Pi Durable) | 15 Okt 2026 (Web) | **TIDAK TERPASANG DI VPS** (`which pi` kosong; ada di workstation lokal v1.1.0) | MIT | **~150–250 MB** (estimasi Node.js runtime) |
-| **Odysseus** | [odysseus-dev.github.io/odysseus](https://odysseus-dev.github.io/odysseus/)<br>[github.com/odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus) | `0.1.x` (Latest release) | 15 Okt 2026 (Web) | **TIDAK TERPASANG DI VPS** (tanpa referensi di repo) | MIT | **~200–400 MB** (Web/Node footprint, *tanpa local model*) |
+| **pi.dev** | [pi.dev](https://pi.dev/)<br>[github.com/earendil-works/pi](https://github.com/earendil-works/pi) | `1.0` (dengan Pi Durable) | 16 Okt 2026 (Web) | **TIDAK TERPASANG DI VPS** (`which pi` kosong; ada di workstation lokal v1.1.0) | MIT | **~150–250 MB** (estimasi Node.js runtime) |
+| **Odysseus** | [odysseus-dev.github.io/odysseus](https://odysseus-dev.github.io/odysseus/)<br>[github.com/odysseus-ai/odysseus](https://github.com/odysseus-ai/odysseus) | `1.0.2` (Release tag resmi) | 16 Okt 2026 (Web) | **TIDAK TERPASANG DI VPS** (tanpa referensi di repo) | AGPL-3.0 (Koreksi Lisensi: dilarang salin kode) | **~200–400 MB** (Web/Node footprint, *tanpa local model*) |
 | **Personal AI OS** | Repo Lokal (`pnpm workspace`) | `0.2.0` | 15 Okt 2026 | **BERJALAN** (Docker Compose + Tauri + Expo) | Proprietary / MIT | **~1.8–2.2 GB** (Postgres + Redis + API + Worker + Caddy) |
 
 *Catatan Verifikasi*: Endpoint HTTP daemon Hermes di port 9119 terbukti aktif, namun rute OpenAPI 3.1.0 yang diprobe pada 2026-10-11 tidak mengekspos endpoint pengiriman prompt teks yang terotentikasi. Status HTTP prompt execution diberi label **TIDAK TERVERIFIKASI**.
@@ -63,7 +63,7 @@ Keputusan:
 | **1. Mode RPC Dua Arah** | NDJSON via stdin/stdout (`--mode rpc`) | Python RPC script & subagents | JSONL via stdin/stdout (`docs/rpc.md`) | Tidak ada (Web API only) | One-shot CLI spawn (`node:child_process`) | **Bridge** (Adopsi protokol NDJSON omp/pi pada runtime-bridge) | **M** | Rendah (stdin/stdout pipe terisolasi) | **Tinggi** (Streaming realtime token, interupsi instan) |
 | **2. Sesi Persisten & Resume** | Built-in session store | `--resume <session>` / SQLite FTS5 | Tree session (`/tree`, branch any turn) | Local session history | DB Postgres (`conversations`, `messages`, BullMQ checkpoints) | **Native** (Pertahankan Postgres + Checkpoint Drizzle) | **S** | Rendah (Sudah di-sandbox) | **Tinggi** (Konsistensi data antar platform) |
 | **3. Subagent Paralel** | Roles: scout, reviewer, librarian | `delegate_task` (max 10 concurrent, flat/orchestrator) | Extension sub-agent example | Background agents | Generic track single-worker | **Native + Bridge** (Worker spawn subagent via BullMQ / omp role) | **M** | Sedang (Wajib kuota & batasan kedalaman spawn) | **Tinggi** (Penyelesaian tugas kompleks tanpa blocking) |
-| **4. Edit File Presisi** | Hashline edits (line-anchored hash) | Python workspace tools | Line diff / Patch tool | File edit tools | `multi_replace_file_content` & `replace_file_content` | **Native + Skill** (Standarisasi hashline edit pattern) | **S** | Rendah (Validasi path traversal tetap aktif) | **Tinggi** (Hemat token drastis, anti-hallucination diff) |
+| **4. Edit File Presisi** | Hashline edits (line-anchored hash) | Python workspace tools | 4 core tools (read, write, edit, bash); string replace | File edit tools | `multi_replace_file_content` & `replace_file_content` | **Native + Skill** (Standarisasi hashline edit pattern) | **S** | Rendah (Validasi path traversal tetap aktif) | **Tinggi** (Hemat token drastis, anti-hallucination diff) |
 | **5. LSP & Diagnostik** | In-process LSP (`dlv`, `debugpy`, `lldb-dap`) | External linters via bash | TypeScript extension hooks | Tidak ada | Evaluator checks (lint, typecheck, build) | **Bridge (ke omp)** | **M** | Sedang (Akses filesystem repo host) | **Tinggi** (Deteksi syntax/type error sebelum commit) |
 | **6. Memori Jangka Panjang** | Project rules & system prompt | `MEMORY.md`, `USER.md`, SQLite FTS5 | Context compaction, extensions | Semantic recall | PostgreSQL tsvector hybrid search + proposals queue | **Native** (Pertahankan Drizzle Memory Sesi 10) | **S** (Selesai) | Sangat Rendah (Zero silent storage) | **Tinggi** (Kedaulatan pengguna & kontrol persetujuan) |
 | **7. Self-Evolving Skills** | Skill directory loader | Autonomous skill creation | On-demand skill folders | Tool self-writing | `packages/tools` registry statis + custom skills | **Skill / Native** (Pola Hermes: simpan skill baru sebagai proposal) | **M** | Tinggi (Eksekusi kode asing wajib approval) | **Tinggi** (Agen semakin pintar seiring pemakaian) |
@@ -104,7 +104,7 @@ Keputusan:
   - Kita menggunakan `replace_file_content` dan `multi_replace_file_content` berbasis pencocokan substring unik (`TargetContent` -> `ReplacementContent`).
 - **Analisis & Komparasi**:
   - `omp` mengimplementasikan **Hashline Edits**: baris target diidentifikasi dengan nomor baris + hash pendek konten baris tersebut (contoh: `12#a1b: target code`). Hal ini menghemat token model hingga 70% dibandingkan mengirimkan diff lengkap atau rewriting file, sekaligus menghindari kesalahan salah timpa jika file telah berubah (*optimistic concurrency check*).
-  - `pi.dev` menggunakan slice editing presisi dengan fallback linter.
+  - `pi.dev` menggunakan 4 tool standar inti (`read`, `write`, `edit`, `bash`). Tool `edit` pi bekerja dengan penggantian string biasa (`oldText` -> `newText`). Klaim sebelumnya mengenai slice editing presisi otomatis dengan fallback linter pada arsitektur inti pi.dev dikoreksi dan ditandai sebagai **TIDAK TERVERIFIKASI** pada rilis inti resmi.
 - **Keputusan: NATIVE DI PACKAGES/TOOLS + SKILL PROMPT**.
   - Mengadopsi format hashline edit pada `packages/tools` untuk mengoptimalkan kuota token 9Router dan meningkatkan akurasi koding otonom.
 

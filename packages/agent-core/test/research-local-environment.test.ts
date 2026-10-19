@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PermissionEngine, SecuredCapabilityGuard } from '@personal-ai-os/permissions';
-import { ToolRegistry, createWebFetchTool, type ToolDefinition } from '@personal-ai-os/tools';
+import { ToolRegistry, createWebFetchTool, SsrfGuard, type ToolDefinition } from '@personal-ai-os/tools';
 import { LocalResearchEnvironment } from '../src/index.ts';
+
+const mockDnsSsrfGuard = new SsrfGuard({
+  dnsResolver: async () => [{ address: '93.184.216.34', family: 4 }],
+});
 
 function environmentWith(fetchImpl: (url: string) => Promise<Response>): LocalResearchEnvironment {
   const registry = new ToolRegistry(new SecuredCapabilityGuard(new PermissionEngine()));
   registry.registerTool(
-    createWebFetchTool(undefined, (input: RequestInfo | URL) => fetchImpl(String(input))),
+    createWebFetchTool(mockDnsSsrfGuard, (input: RequestInfo | URL) => fetchImpl(String(input))),
   );
   return new LocalResearchEnvironment({
     registry,

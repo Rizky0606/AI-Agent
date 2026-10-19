@@ -33,6 +33,7 @@ const mapRowToJob = (row: Record<string, unknown>): ScheduleJob => {
     nextRunAt: row['next_run_at']
       ? new Date(row['next_run_at'] as string | Date).toISOString()
       : undefined,
+    lastBrief: row['last_brief'] ? String(row['last_brief']) : undefined,
     createdAt: new Date(row['created_at'] as string | Date).toISOString(),
     updatedAt: new Date(row['updated_at'] as string | Date).toISOString(),
   };
@@ -70,7 +71,7 @@ export class PostgresScheduleStorage implements ScheduleStorage {
     const rows = await this.sql`
       SELECT id, user_id, project_id, name, type, run_at, cron_expression,
              timezone, status, missed_run_policy, task_payload, last_run_at,
-             next_run_at, created_at, updated_at
+             next_run_at, last_brief, created_at, updated_at
       FROM schedules
     `;
     return rows.map((r) => mapRowToJob(r as Record<string, unknown>));
@@ -87,13 +88,13 @@ export class PostgresScheduleStorage implements ScheduleStorage {
       INSERT INTO schedules (
         id, user_id, project_id, name, type, run_at, cron_expression,
         timezone, status, missed_run_policy, task_payload, last_run_at,
-        next_run_at, created_at, updated_at
+        next_run_at, last_brief, created_at, updated_at
       ) VALUES (
         ${job.id}, ${job.userId}, ${job.projectId ?? null}, ${job.name},
         ${job.type}, ${runAt}, ${job.cronExpression ?? null},
         ${job.timezone}, ${job.status}, ${job.missedRunPolicy},
         ${this.sql.json(job.taskPayload as never)}, ${lastRunAt},
-        ${nextRunAt}, ${createdAt}, ${updatedAt}
+        ${nextRunAt}, ${job.lastBrief ?? null}, ${createdAt}, ${updatedAt}
       )
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
@@ -106,6 +107,7 @@ export class PostgresScheduleStorage implements ScheduleStorage {
         task_payload = EXCLUDED.task_payload,
         last_run_at = EXCLUDED.last_run_at,
         next_run_at = EXCLUDED.next_run_at,
+        last_brief = EXCLUDED.last_brief,
         updated_at = EXCLUDED.updated_at
     `;
   }

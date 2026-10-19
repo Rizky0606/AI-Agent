@@ -6,6 +6,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -148,6 +149,9 @@ export const messages = pgTable(
     conversationId: uuid('conversation_id')
       .notNull()
       .references(() => conversations.id, { onDelete: 'cascade' }),
+    parentMessageId: uuid('parent_message_id'),
+    isActiveBranch: boolean('is_active_branch').default(true).notNull(),
+    branchIndex: integer('branch_index').default(0).notNull(),
     role: varchar('role', { length: 32 }).notNull(),
     content: text('content').notNull(),
     metadata: jsonb('metadata'),
@@ -156,6 +160,8 @@ export const messages = pgTable(
   (table) => [
     index('messages_scope_idx').on(table.userId, table.conversationId),
     index('messages_created_idx').on(table.conversationId, table.createdAt),
+    index('messages_parent_idx').on(table.conversationId, table.parentMessageId),
+    index('messages_active_idx').on(table.conversationId, table.isActiveBranch),
   ],
 );
 
@@ -461,6 +467,7 @@ export const schedules = pgTable(
     taskPayload: jsonb('task_payload').notNull(),
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }),
+    lastBrief: text('last_brief'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     ...created,
   },
@@ -531,3 +538,225 @@ export type NotificationRow = typeof notifications.$inferSelect;
 export type NotificationPreferencesRow = typeof notificationPreferences.$inferSelect;
 export type ModelConfigRow = typeof modelConfigs.$inferSelect;
 export type ModelRoutingPolicyRow = typeof modelRoutingPolicies.$inferSelect;
+
+export const researchRuns = pgTable(
+  'research_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    query: text('query').notNull(),
+    scope: text('scope').default('general').notNull(),
+    language: varchar('language', { length: 16 }).default('id').notNull(),
+    depth: varchar('depth', { length: 32 }).default('standard').notNull(),
+    status: varchar('status', { length: 32 }).default('queued').notNull(),
+    budgetConfig: jsonb('budget_config').notNull(),
+    budgetUsed: jsonb('budget_used').default({}).notNull(),
+    plan: jsonb('plan'),
+    checkpoint: jsonb('checkpoint'),
+    error: text('error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('research_runs_user_idx').on(table.userId),
+    index('research_runs_project_idx').on(table.projectId),
+    index('research_runs_status_idx').on(table.status),
+    index('research_runs_created_idx').on(table.createdAt),
+  ],
+);
+
+export const researchSources = pgTable(
+  'research_sources',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => researchRuns.id, { onDelete: 'cascade' }),
+    sourceId: varchar('source_id', { length: 32 }).notNull(),
+    url: text('url').notNull(),
+    title: text('title').notNull(),
+    domain: varchar('domain', { length: 255 }).notNull(),
+    credibilityScore: real('credibility_score').default(0.5).notNull(),
+    fetchStatus: varchar('fetch_status', { length: 32 }).default('pending').notNull(),
+    contentHash: varchar('content_hash', { length: 64 }),
+    snippet: text('snippet'),
+    ...created,
+  },
+  (table) => [
+    index('research_sources_run_idx').on(table.runId),
+    uniqueIndex('research_sources_run_source_uq').on(table.runId, table.sourceId),
+  ],
+);
+
+export const researchEvidence = pgTable(
+  'research_evidence',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => researchRuns.id, { onDelete: 'cascade' }),
+    sourceId: varchar('source_id', { length: 32 }).notNull(),
+    statement: text('statement').notNull(),
+    claimType: varchar('claim_type', { length: 32 }).default('sourced_fact').notNull(),
+    quote: text('quote'),
+    confidence: real('confidence').default(0.8).notNull(),
+    verified: boolean('verified').default(false).notNull(),
+    ...created,
+  },
+  (table) => [
+    index('research_evidence_run_idx').on(table.runId),
+    index('research_evidence_source_idx').on(table.runId, table.sourceId),
+  ],
+);
+
+export const researchReports = pgTable(
+  'research_reports',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => researchRuns.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    contentMarkdown: text('content_markdown').notNull(),
+    confidenceBySection: jsonb('confidence_by_section').default({}).notNull(),
+    gaps: jsonb('gaps').default([]).notNull(),
+    limitations: jsonb('limitations').default([]).notNull(),
+    summary: text('summary').notNull(),
+    ...created,
+  },
+  (table) => [
+    uniqueIndex('research_reports_run_uq').on(table.runId),
+  ],
+);
+
+export type ResearchRunRow = typeof researchRuns.$inferSelect;
+export type ResearchSourceRow = typeof researchSources.$inferSelect;
+export type ResearchEvidenceRow = typeof researchEvidence.$inferSelect;
+export type ResearchReportRow = typeof researchReports.$inferSelect;
+
+export const compareRuns = pgTable(
+  'compare_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    prompt: text('prompt').notNull(),
+    blindMode: boolean('blind_mode').default(false).notNull(),
+    status: varchar('status', { length: 32 }).default('running').notNull(),
+    winnerModelId: varchar('winner_model_id', { length: 128 }),
+    revealed: boolean('revealed').default(false).notNull(),
+    revealedAt: timestamp('revealed_at', { withTimezone: true }),
+    synthesisStatus: varchar('synthesis_status', { length: 32 }).default('none').notNull(),
+    synthesisModel: varchar('synthesis_model', { length: 128 }),
+    synthesisContent: text('synthesis_content'),
+    synthesisUsage: jsonb('synthesis_usage').default({}).notNull(),
+    tokenBudget: integer('token_budget').default(4000).notNull(),
+    totalTokensUsed: integer('total_tokens_used').default(0).notNull(),
+    error: text('error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('compare_runs_user_idx').on(table.userId),
+    index('compare_runs_project_idx').on(table.projectId),
+    index('compare_runs_status_idx').on(table.status),
+    index('compare_runs_created_idx').on(table.createdAt),
+  ],
+);
+
+export const compareResults = pgTable(
+  'compare_results',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => compareRuns.id, { onDelete: 'cascade' }),
+    modelId: varchar('model_id', { length: 128 }).notNull(),
+    modelAlias: varchar('model_alias', { length: 32 }).notNull(),
+    columnIndex: integer('column_index').notNull(),
+    content: text('content').default('').notNull(),
+    status: varchar('status', { length: 32 }).default('pending').notNull(),
+    error: text('error'),
+    latencyMs: integer('latency_ms'),
+    promptTokens: integer('prompt_tokens'),
+    completionTokens: integer('completion_tokens'),
+    totalTokens: integer('total_tokens'),
+    cost: real('cost'),
+    isWinner: boolean('is_winner').default(false).notNull(),
+    ...created,
+  },
+  (table) => [
+    index('compare_results_run_idx').on(table.runId),
+    uniqueIndex('compare_results_run_col_uq').on(table.runId, table.columnIndex),
+  ],
+);
+
+export type CompareRunRow = typeof compareRuns.$inferSelect;
+export type CompareResultRow = typeof compareResults.$inferSelect;
+
+export const promptTemplates = pgTable(
+  'prompt_templates',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 100 }).notNull(),
+    title: varchar('title', { length: 200 }).notNull(),
+    content: text('content').notNull(),
+    variables: jsonb('variables').$type<string[]>().default([]).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    ...created,
+  },
+  (table) => [
+    index('prompt_templates_user_idx').on(table.userId),
+    uniqueIndex('prompt_templates_user_name_uq').on(table.userId, table.name),
+  ],
+);
+
+export type PromptTemplateRow = typeof promptTemplates.$inferSelect;
+export type NewPromptTemplateRow = typeof promptTemplates.$inferInsert;
+
+export const skillProposals = pgTable(
+  'skill_proposals',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    skillName: varchar('skill_name', { length: 120 }).notNull(),
+    title: varchar('title', { length: 200 }).notNull(),
+    description: text('description').notNull(),
+    proposedManifest: jsonb('proposed_manifest').notNull(),
+    promptInstructions: text('prompt_instructions'),
+    changeType: varchar('change_type', { length: 32 }).default('new_skill').notNull(),
+    targetSkillName: varchar('target_skill_name', { length: 120 }),
+    diff: text('diff'),
+    status: varchar('status', { length: 32 }).default('pending').notNull(),
+    reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    rejectionReason: text('rejection_reason'),
+    ...created,
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('skill_proposals_user_idx').on(table.userId),
+    index('skill_proposals_status_idx').on(table.status),
+    index('skill_proposals_skill_name_idx').on(table.skillName),
+  ],
+);
+
+export type SkillProposalRow = typeof skillProposals.$inferSelect;
+export type NewSkillProposalRow = typeof skillProposals.$inferInsert;
+
+

@@ -10,7 +10,7 @@ import { resolve } from 'node:path';
 type RuntimeId = 'omp' | 'hermes';
 type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
-export type RuntimeEventType = 'text' | 'tool_start' | 'tool_end' | 'file_edit' | 'error' | 'completed';
+export type RuntimeEventType = 'text' | 'tool_start' | 'tool_end' | 'file_edit' | 'plan' | 'subagent' | 'error' | 'completed';
 
 export interface NormalizedRuntimeEvent {
   id: string;
@@ -24,6 +24,9 @@ export interface NormalizedRuntimeEvent {
     path?: string | undefined;
     diff?: string | undefined;
     error?: string | undefined;
+    isSubagent?: boolean | undefined;
+    subagentTask?: string | undefined;
+    planItems?: string[] | undefined;
   };
   raw?: unknown | undefined;
 }
@@ -241,24 +244,105 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
         return { id, type: 'text', timestamp, data: { text }, raw: parsed };
       }
     } else if (type === 'tool_start') {
+      const toolName = String(parsed.tool ?? parsed.name ?? 'tool');
+      if (toolName === 'task') {
+        const inputObj = typeof parsed.input === 'object' && parsed.input !== null ? (parsed.input as Record<string, unknown>) : {};
+        const subTask = typeof inputObj['task'] === 'string'
+          ? inputObj['task']
+          : typeof inputObj['prompt'] === 'string'
+            ? inputObj['prompt']
+            : 'Tugas sub-agent paralel';
+        return {
+          id,
+          type: 'subagent',
+          timestamp,
+          data: {
+            toolName: 'task',
+            input: parsed.input ?? parsed.args,
+            isSubagent: true,
+            subagentTask: subTask,
+          },
+          raw: parsed,
+        };
+      }
+      if (toolName === 'todo' || toolName === 'plan') {
+        const inputObj = typeof parsed.input === 'object' && parsed.input !== null ? (parsed.input as Record<string, unknown>) : {};
+        const rawTodos = inputObj['todos'] ?? inputObj['items'] ?? inputObj['plan'];
+        const planItems = Array.isArray(rawTodos) ? rawTodos.map(String) : undefined;
+        return {
+          id,
+          type: 'plan',
+          timestamp,
+          data: {
+            toolName,
+            input: parsed.input ?? parsed.args,
+            planItems,
+          },
+          raw: parsed,
+        };
+      }
       return {
         id,
         type: 'tool_start',
         timestamp,
         data: {
-          toolName: String(parsed.tool ?? parsed.name ?? 'tool'),
+          toolName,
           input: parsed.input ?? parsed.args,
         },
         raw: parsed,
       };
     } else if (type === 'tool_end') {
+      const toolName = String(parsed.tool ?? parsed.name ?? 'tool');
+      if (toolName === 'task') {
+        return {
+          id,
+          type: 'subagent',
+          timestamp,
+          data: {
+            toolName: 'task',
+            output: parsed.output ?? parsed.result,
+            isSubagent: true,
+          },
+          raw: parsed,
+        };
+      }
+      if (toolName === 'todo' || toolName === 'plan') {
+        const outputObj = typeof parsed.output === 'object' && parsed.output !== null ? (parsed.output as Record<string, unknown>) : {};
+        const rawTodos = outputObj['todos'] ?? outputObj['items'] ?? outputObj['plan'];
+        const planItems = Array.isArray(rawTodos) ? rawTodos.map(String) : undefined;
+        return {
+          id,
+          type: 'plan',
+          timestamp,
+          data: {
+            toolName,
+            output: parsed.output ?? parsed.result,
+            planItems,
+          },
+          raw: parsed,
+        };
+      }
       return {
         id,
         type: 'tool_end',
         timestamp,
         data: {
-          toolName: String(parsed.tool ?? parsed.name ?? 'tool'),
+          toolName,
           output: parsed.output ?? parsed.result,
+        },
+        raw: parsed,
+      };
+    } else if (type === 'plan') {
+      const rawTodos = (parsed as Record<string, unknown>)['todos'] ?? (parsed as Record<string, unknown>)['items'] ?? (parsed as Record<string, unknown>)['plan'];
+      const planItems = Array.isArray(rawTodos) ? rawTodos.map(String) : undefined;
+      return {
+        id,
+        type: 'plan',
+        timestamp,
+        data: {
+          toolName: 'plan',
+          planItems,
+          text: typeof parsed.text === 'string' ? parsed.text : undefined,
         },
         raw: parsed,
       };
@@ -351,6 +435,9 @@ async function execute(record: RunRecord): Promise<void> {
   let current: ActiveRun | undefined;
   try {
     const cwd = await prepareWorkspace(WORKSPACE_ROOT, record.request.workspaceId, record.request.taskId);
+    if (record.status === 'cancelled') {
+      return;
+    }
     const prompt = prompts.get(record.id) ?? '';
     const fullRequest: RunRequest = { ...record.request, prompt };
     const spec = command(fullRequest);
@@ -582,20 +669,19 @@ async function main(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (match?.[2] === '/events' && req.method === 'GET') return sse(res, record);
     if (!match?.[2] && req.method === 'GET') return json(res, 200, record);
     if (match?.[2] === '/cancel' && req.method === 'POST') {
-      if (record.status === 'queued') {
-        const index = queue.findIndex((item) => item.id === record.id);
-        if (index >= 0) queue.splice(index, 1);
-        prompts.delete(record.id);
-        record.status = 'cancelled';
-        finishedAt.set(record.id, Date.now());
-        audit('run_cancelled', record);
-      } else if (active) {
+      if (record.status === 'cancelled' || record.status === 'completed' || record.status === 'failed') {
+        return json(res, 202, record);
+      }
+      record.status = 'cancelled';
+      finishedAt.set(record.id, Date.now());
+      prompts.delete(record.id);
+      const index = queue.findIndex((item) => item.id === record.id);
+      if (index >= 0) queue.splice(index, 1);
+      if (active) {
         active.cancelRequested = true;
-        record.status = 'cancelled';
-        finishedAt.set(record.id, Date.now());
-        audit('run_cancelled', record);
         killProcess(active.child);
       }
+      audit('run_cancelled', record);
       return json(res, 202, record);
     }
     return json(res, 404, { error: 'not found' });

@@ -19,8 +19,27 @@ import {
   type User,
   type UserPreferences,
   type RuntimeDescriptor,
+  type PromptTemplate,
+  type ScheduleJobRecord,
+  type CreateScheduleInput,
+  type SkillProposalRecord,
+  type CreateSkillProposalInput,
 } from './types.ts';
-import type { TaskEventEnvelope, TaskRecord } from '@personal-ai-os/shared';
+import type {
+  CompareRunDetail,
+  CompareRunSummary,
+  CreateCompareRequest,
+  PromoteCompareResponse,
+  ResearchBudgetConfig,
+  ResearchDepth,
+  ResearchEvidenceItem,
+  ResearchReportData,
+  ResearchRunSummary,
+  ResearchSourceItem,
+  ResearchSubQuestionState,
+  TaskEventEnvelope,
+  TaskRecord,
+} from '@personal-ai-os/shared';
 
 export interface ApiClientOptions {
   storage?: TokenStorage | undefined;
@@ -330,6 +349,76 @@ export class ApiClient {
     return this.request<{ messages: ChatMessage[] }>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`);
   }
 
+  // --- Session Tree & Templates (Sesi 27) ---
+  async switchMessageBranch(
+    conversationId: string,
+    messageId: string,
+  ): Promise<{ messages: ChatMessage[] }> {
+    return this.request<{ messages: ChatMessage[] }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/switch`,
+      { method: 'POST' },
+    );
+  }
+
+  async deleteMessageBranch(
+    conversationId: string,
+    messageId: string,
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async exportConversation(
+    conversationId: string,
+    format: 'markdown' | 'html',
+  ): Promise<{ format: string; filename: string; content: string }> {
+    return this.request<{ format: string; filename: string; content: string }>(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/export?format=${encodeURIComponent(format)}`,
+    );
+  }
+
+  async compactConversation(
+    conversationId: string,
+  ): Promise<{
+    compacted: boolean;
+    reason?: string;
+    compactedSummary?: string;
+    compactedMessageCount?: number;
+  }> {
+    return this.request<{
+      compacted: boolean;
+      reason?: string;
+      compactedSummary?: string;
+      compactedMessageCount?: number;
+    }>(`/v1/conversations/${encodeURIComponent(conversationId)}/compact`, {
+      method: 'POST',
+    });
+  }
+
+  async listPromptTemplates(): Promise<{ templates: PromptTemplate[] }> {
+    return this.request<{ templates: PromptTemplate[] }>('/v1/prompt-templates');
+  }
+
+  async createPromptTemplate(payload: {
+    name: string;
+    title?: string;
+    content: string;
+    description?: string;
+  }): Promise<{ template: PromptTemplate }> {
+    return this.request<{ template: PromptTemplate }>('/v1/prompt-templates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePromptTemplate(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/prompt-templates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
   async refreshModels(): Promise<ModelCatalogResponse> {
     return this.request<ModelCatalogResponse>('/v1/models/refresh', { method: 'POST', body: '{}' });
   }
@@ -572,6 +661,206 @@ export class ApiClient {
     if (params?.limit) q.set('limit', String(params.limit));
     const qs = q.toString() ? `?${q.toString()}` : '';
     return this.request<{ logs: McpCallLogItem[] }>(`/v1/mcp/logs${qs}`);
+  }
+
+  async getResearchConfig(): Promise<{ budgets: Record<ResearchDepth, ResearchBudgetConfig> }> {
+    return this.request<{ budgets: Record<ResearchDepth, ResearchBudgetConfig> }>('/v1/research/config');
+  }
+
+  async createResearch(params: {
+    projectId: string;
+    query: string;
+    scope?: string | undefined;
+    language?: string | undefined;
+    depth?: ResearchDepth | undefined;
+    customBudget?: Partial<ResearchBudgetConfig> | undefined;
+    requirePlanApproval?: boolean | undefined;
+  }): Promise<{ run: ResearchRunSummary }> {
+    return this.request<{ run: ResearchRunSummary }>('/v1/research', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async getResearch(id: string): Promise<{
+    run: ResearchRunSummary;
+    sources: ResearchSourceItem[];
+    evidence: ResearchEvidenceItem[];
+    report: ResearchReportData | null;
+  }> {
+    return this.request<{
+      run: ResearchRunSummary;
+      sources: ResearchSourceItem[];
+      evidence: ResearchEvidenceItem[];
+      report: ResearchReportData | null;
+    }>(`/v1/research/${encodeURIComponent(id)}`);
+  }
+
+  async listResearch(params?: {
+    projectId?: string | undefined;
+    status?: string | undefined;
+    limit?: number | undefined;
+    offset?: number | undefined;
+  }): Promise<{ runs: ResearchRunSummary[]; total: number }> {
+    const q = new URLSearchParams();
+    if (params?.projectId) q.set('projectId', params.projectId);
+    if (params?.status) q.set('status', params.status);
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.offset) q.set('offset', String(params.offset));
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<{ runs: ResearchRunSummary[]; total: number }>(`/v1/research${qs}`);
+  }
+
+  async cancelResearch(id: string): Promise<{ success: boolean; run: ResearchRunSummary }> {
+    return this.request<{ success: boolean; run: ResearchRunSummary }>(
+      `/v1/research/${encodeURIComponent(id)}/cancel`,
+      { method: 'POST' },
+    );
+  }
+
+  async approveResearchPlan(
+    id: string,
+    plan?: { subQuestions?: ResearchSubQuestionState[] } | undefined,
+  ): Promise<{ success: boolean; run: ResearchRunSummary }> {
+    return this.request<{ success: boolean; run: ResearchRunSummary }>(
+      `/v1/research/${encodeURIComponent(id)}/approve-plan`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ plan }),
+      },
+    );
+  }
+
+  async deleteResearch(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/research/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Compare Multi-Model (Sesi 26) ---
+  async createCompare(payload: CreateCompareRequest): Promise<CompareRunSummary> {
+    return this.request<CompareRunSummary>('/v1/compare', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getCompare(id: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}`);
+  }
+
+  async listCompares(): Promise<CompareRunSummary[]> {
+    const res = await this.request<{ items: CompareRunSummary[] }>('/v1/compare');
+    return res.items ?? [];
+  }
+
+  async revealCompare(id: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}/reveal`, {
+      method: 'POST',
+    });
+  }
+
+  async selectCompareWinner(id: string, winnerModelId: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}/winner`, {
+      method: 'POST',
+      body: JSON.stringify({ winnerModelId }),
+    });
+  }
+
+  async synthesizeCompare(id: string, synthesisModelId?: string): Promise<CompareRunDetail> {
+    return this.request<CompareRunDetail>(`/v1/compare/${encodeURIComponent(id)}/synthesize`, {
+      method: 'POST',
+      body: JSON.stringify(synthesisModelId ? { synthesisModelId } : {}),
+    });
+  }
+
+  async promoteCompare(
+    id: string,
+    options?: { target?: 'new' | 'existing'; conversationId?: string },
+  ): Promise<PromoteCompareResponse> {
+    return this.request<PromoteCompareResponse>(`/v1/compare/${encodeURIComponent(id)}/promote`, {
+      method: 'POST',
+      body: JSON.stringify(options ?? {}),
+    });
+  }
+
+  async deleteCompare(id: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/v1/compare/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Schedules ---
+  async listSchedules(status?: string): Promise<ScheduleJobRecord[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await this.request<{ schedules: ScheduleJobRecord[] }>(`/v1/schedules${q}`);
+    return res.schedules;
+  }
+
+  async createSchedule(input: CreateScheduleInput): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>('/v1/schedules', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return res.schedule;
+  }
+
+  async pauseSchedule(id: string): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>(`/v1/schedules/${id}/pause`, {
+      method: 'POST',
+    });
+    return res.schedule;
+  }
+
+  async resumeSchedule(id: string): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>(`/v1/schedules/${id}/resume`, {
+      method: 'POST',
+    });
+    return res.schedule;
+  }
+
+  async cancelSchedule(id: string): Promise<ScheduleJobRecord> {
+    const res = await this.request<{ schedule: ScheduleJobRecord }>(`/v1/schedules/${id}`, {
+      method: 'DELETE',
+    });
+    return res.schedule;
+  }
+
+  // --- Skill Proposals ---
+  async listSkillProposals(status?: string): Promise<SkillProposalRecord[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await this.request<{ proposals: SkillProposalRecord[] }>(`/v1/skills/proposals${q}`);
+    return res.proposals;
+  }
+
+  async createSkillProposal(input: CreateSkillProposalInput): Promise<SkillProposalRecord> {
+    const res = await this.request<{ proposal: SkillProposalRecord }>('/v1/skills/proposals', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return res.proposal;
+  }
+
+  async approveSkillProposal(
+    id: string,
+  ): Promise<{ success: boolean; proposal: SkillProposalRecord; createdSkillName: string; statusNote: string }> {
+    return this.request<{ success: boolean; proposal: SkillProposalRecord; createdSkillName: string; statusNote: string }>(
+      `/v1/skills/proposals/${id}/approve`,
+      { method: 'POST' },
+    );
+  }
+
+  async rejectSkillProposal(
+    id: string,
+    reason?: string,
+  ): Promise<{ success: boolean; proposal: SkillProposalRecord }> {
+    return this.request<{ success: boolean; proposal: SkillProposalRecord }>(
+      `/v1/skills/proposals/${id}/reject`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    );
   }
 }
 

@@ -41,12 +41,28 @@ export const SkillMcpView: React.FC = () => {
     addMcpServer,
     deleteMcpServer,
     conversations,
+    skillProposals,
+    skillProposalsLoading,
+    fetchSkillProposals,
+    approveSkillProposal,
+    rejectSkillProposal,
   } = useAgentStore();
 
   const { success, error: toastError, info } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'skills' | 'mcp'>('skills');
+  const [activeTab, setActiveTab] = useState<'skills' | 'mcp' | 'proposals'>('skills');
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+
+  // Rejection dialog state
+  const [rejectDialog, setRejectDialog] = useState<{
+    open: boolean;
+    proposalId: string | null;
+    reason: string;
+  }>({
+    open: false,
+    proposalId: null,
+    reason: '',
+  });
 
   // Manifest modal state
   const [manifestModal, setManifestModal] = useState<{
@@ -92,15 +108,38 @@ export const SkillMcpView: React.FC = () => {
     return Array.from(set);
   }, [conversations]);
 
-  // Load skills or MCP on mount/tab change
+  // Load skills, MCP, or proposals on mount/tab change
   useEffect(() => {
     if (activeTab === 'skills') {
       void fetchSkills(selectedProjectId || undefined);
-    } else {
+    } else if (activeTab === 'mcp') {
       void fetchMcpServers();
       void fetchMcpLogs();
+    } else if (activeTab === 'proposals') {
+      void fetchSkillProposals();
     }
-  }, [activeTab, selectedProjectId, fetchSkills, fetchMcpServers, fetchMcpLogs]);
+  }, [activeTab, selectedProjectId, fetchSkills, fetchMcpServers, fetchMcpLogs, fetchSkillProposals]);
+
+  const handleApproveProposal = async (id: string) => {
+    try {
+      await approveSkillProposal(id);
+      success('Usulan skill disetujui! Skill baru dibuat dalam keadaan NONAKTIF. Anda dapat mengaktifkannya di tab Keterampilan.');
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Gagal menyetujui usulan skill.');
+    }
+  };
+
+  const handleRejectProposalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectDialog.proposalId) return;
+    try {
+      await rejectSkillProposal(rejectDialog.proposalId, rejectDialog.reason.trim() || 'Ditolak oleh pengguna.');
+      success('Usulan skill berhasil ditolak.');
+      setRejectDialog({ open: false, proposalId: null, reason: '' });
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Gagal menolak usulan skill.');
+    }
+  };
 
   const handleToggleSkill = async (skillName: string, currentEnabled: boolean, isReadOnly?: boolean) => {
     if (isReadOnly) {
@@ -226,6 +265,18 @@ export const SkillMcpView: React.FC = () => {
             <Server size={16} />
             {idID.skillsMcp.tabs.mcp}
           </button>
+          <button
+            className={`skill-mcp-tab-btn ${activeTab === 'proposals' ? 'active' : ''}`}
+            onClick={() => setActiveTab('proposals')}
+          >
+            <FileCode size={16} />
+            {idID.skillsMcp.tabs.proposals}
+            {skillProposals.filter((p) => p.status === 'pending').length > 0 && (
+              <span className="activity-badge">
+                {skillProposals.filter((p) => p.status === 'pending').length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
@@ -256,7 +307,7 @@ export const SkillMcpView: React.FC = () => {
 
       {/* SKILLS TAB CONTENT */}
       {activeTab === 'skills' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+        <div className="skills-tab-content">
           {/* Toolbar */}
           <div className="skills-toolbar">
             <div className="project-select-label">
@@ -286,7 +337,7 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           {skillsError && (
-            <div className="callout callout-error" style={{ padding: 'var(--space-3)' }}>
+            <div className="callout callout-error skills-callout-error">
               {skillsError}
             </div>
           )}
@@ -300,11 +351,11 @@ export const SkillMcpView: React.FC = () => {
                   <div>
                     <div className="skill-card-top">
                       <div className="skill-title-block">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <div className="skill-title-row">
                           <h3>{skill.name}</h3>
                           <span className="skill-version-pill">v{skill.version}</span>
                         </div>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--color-primary, #3b82f6)' }}>
+                        <span className="skill-source-badge">
                           {isReadOnly
                             ? idID.skillsMcp.skillsSection.readOnlyBadge
                             : skill.source === 'builtin'
@@ -313,7 +364,7 @@ export const SkillMcpView: React.FC = () => {
                         </span>
                       </div>
                       {skill.isProjectOverride && (
-                        <span className="risk-pill medium" style={{ fontSize: '0.68rem' }}>
+                        <span className="risk-pill medium skill-override-badge">
                           {idID.skillsMcp.skillsSection.projectOverrideActive}
                         </span>
                       )}
@@ -339,7 +390,7 @@ export const SkillMcpView: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                        <span className="skill-no-perms-text">
                           {idID.skillsMcp.skillsSection.noPermissions}
                         </span>
                       )}
@@ -403,19 +454,19 @@ export const SkillMcpView: React.FC = () => {
 
       {/* MCP TAB CONTENT */}
       {activeTab === 'mcp' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+        <div className="mcp-tab-content">
           {/* MCP Toolbar */}
           <div className="skills-toolbar">
             <div>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, margin: 0 }}>
+              <h2 className="mcp-toolbar-title">
                 {idID.skillsMcp.mcpSection.serversTitle}
               </h2>
-              <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', margin: '2px 0 0 0' }}>
+              <p className="mcp-toolbar-desc">
                 {idID.skillsMcp.mcpSection.adminOnlyNotice}
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <div className="mcp-toolbar-actions">
               <Button
                 variant="secondary"
                 size="sm"
@@ -439,7 +490,7 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           {mcpError && (
-            <div className="callout callout-error" style={{ padding: 'var(--space-3)' }}>
+            <div className="callout callout-error skills-callout-error">
               {mcpError}
             </div>
           )}
@@ -447,7 +498,7 @@ export const SkillMcpView: React.FC = () => {
           {/* MCP Servers Grid */}
           <div className="mcp-servers-grid">
             {mcpServers.length === 0 ? (
-              <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+              <div className="mcp-empty-grid">
                 Belum ada server MCP yang dikonfigurasi.
               </div>
             ) : (
@@ -455,8 +506,8 @@ export const SkillMcpView: React.FC = () => {
                 <div key={server.id} className="mcp-card">
                   <div className="mcp-card-header">
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>{server.name}</h3>
+                      <div className="mcp-server-header-left">
+                        <h3 className="mcp-server-title">{server.name}</h3>
                         <span
                           className={`mcp-status-pill ${
                             server.status === 'connected'
@@ -474,16 +525,7 @@ export const SkillMcpView: React.FC = () => {
                             : idID.skillsMcp.mcpSection.statusDisconnected}
                         </span>
                       </div>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          marginTop: '4px',
-                          fontSize: '0.75rem',
-                          color: 'var(--color-text-muted)',
-                        }}
-                      >
+                      <div className="mcp-server-meta-row">
                         {server.transport === 'stdio' ? <Terminal size={12} /> : <Globe size={12} />}
                         <span>Transport: {server.transport.toUpperCase()}</span>
                         <span>•</span>
@@ -502,7 +544,7 @@ export const SkillMcpView: React.FC = () => {
                     />
                   </div>
 
-                  <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>
+                  <div className="mcp-server-cmd">
                     {server.transport === 'stdio'
                       ? `Perintah: ${server.command} ${(server.args ?? []).join(' ')}`
                       : `URL: ${server.url}`}
@@ -510,7 +552,7 @@ export const SkillMcpView: React.FC = () => {
 
                   {/* Tools List */}
                   <div className="mcp-tools-list">
-                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>
+                    <div className="mcp-tools-header">
                       {server.tools && server.tools.length > 0
                         ? idID.skillsMcp.mcpSection.toolsCount(server.tools.length)
                         : idID.skillsMcp.mcpSection.noTools}
@@ -519,12 +561,12 @@ export const SkillMcpView: React.FC = () => {
                       <div key={idx} className="mcp-tool-row">
                         <div>
                           <strong>{t.name}</strong>
-                          <span style={{ marginLeft: 6, color: 'var(--color-text-muted)', fontSize: '0.72rem' }}>
+                          <span className="mcp-tool-desc">
                             {t.description}
                           </span>
                         </div>
                         {t.riskLevel && (
-                          <span className={`risk-pill ${t.riskLevel.toLowerCase()}`} style={{ fontSize: '0.65rem' }}>
+                          <span className={`risk-pill ${t.riskLevel.toLowerCase()} mcp-tool-risk-badge`}>
                             {t.riskLevel}
                           </span>
                         )}
@@ -537,9 +579,9 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           {/* MCP Call Logs Table (Audit Trail) */}
-          <div style={{ marginTop: 'var(--space-4)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>
+          <div className="mcp-audit-section">
+            <div className="mcp-audit-header">
+              <h3 className="mcp-audit-title">
                 {idID.skillsMcp.mcpSection.callLogsTitle}
               </h3>
               <Button
@@ -554,7 +596,7 @@ export const SkillMcpView: React.FC = () => {
 
             <div className="logs-table-container">
               {mcpLogs.length === 0 ? (
-                <div style={{ padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>
+                <div className="mcp-audit-empty">
                   {idID.skillsMcp.mcpSection.noLogs}
                 </div>
               ) : (
@@ -587,7 +629,7 @@ export const SkillMcpView: React.FC = () => {
                           </span>
                         </td>
                         <td>{log.durationMs ? `${log.durationMs}ms` : '-'}</td>
-                        <td style={{ color: log.error ? '#ef4444' : 'var(--color-text-muted)' }}>
+                        <td className={log.error ? 'mcp-log-status-error' : 'mcp-log-status-text'}>
                           {log.error || 'Sukses'}
                         </td>
                       </tr>
@@ -600,20 +642,179 @@ export const SkillMcpView: React.FC = () => {
         </div>
       )}
 
+      {/* PROPOSALS TAB CONTENT */}
+      {activeTab === 'proposals' && (
+        <div className="skills-tab-content">
+          <div className="skills-toolbar">
+            <div className="skill-mcp-titles">
+              <h2 style={{ fontSize: '1.1rem', margin: 0 }}>
+                {idID.skillsMcp.proposalsSection.title}
+              </h2>
+              <p style={{ margin: 'var(--space-1) 0 0 0', fontSize: '0.85rem' }}>
+                {idID.skillsMcp.proposalsSection.subtitle}
+              </p>
+            </div>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              iconLeft={<RefreshCw size={14} className={skillProposalsLoading ? 'spin' : ''} />}
+              onClick={() => void fetchSkillProposals()}
+            >
+              {idID.skillsMcp.proposalsSection.refresh}
+            </Button>
+          </div>
+
+          <div className="risk-card" style={{ marginTop: 'var(--space-2)' }}>
+            <div className="risk-card-header">
+              <ShieldCheck size={16} />
+              <span>{idID.skillsMcp.riskEducation.title}</span>
+            </div>
+            <div className="risk-card-body">
+              {idID.skillsMcp.proposalsSection.safetyNote}
+            </div>
+          </div>
+
+          <div className="skills-grid" style={{ marginTop: 'var(--space-4)' }}>
+            {skillProposals.length === 0 ? (
+              <div className="sidebar-empty-state" style={{ gridColumn: '1 / -1' }}>
+                {idID.skillsMcp.proposalsSection.empty}
+              </div>
+            ) : (
+              skillProposals.map((proposal) => {
+                const manifest = (proposal.proposedManifest ?? {}) as Record<string, unknown>;
+                const isImprovement = Boolean(proposal.targetSkillName);
+                const skillTitle = proposal.targetSkillName || String(manifest.name || proposal.skillName || 'Skill Tanpa Nama');
+                const toolsList = Array.isArray(manifest.tools) ? (manifest.tools as string[]) : [];
+
+                return (
+                  <div key={proposal.id} className="skill-card">
+                    <div>
+                      <div className="skill-card-header">
+                        <div className="skill-title-block">
+                          <span className="skill-title">{skillTitle}</span>
+                          <span className="skill-scope-badge">
+                            {isImprovement
+                              ? idID.skillsMcp.proposalsSection.improvementBadge
+                              : idID.skillsMcp.proposalsSection.newSkillBadge}
+                          </span>
+                        </div>
+                        <span
+                          className={`risk-pill ${
+                            proposal.status === 'approved'
+                              ? 'low'
+                              : proposal.status === 'rejected'
+                                ? 'high'
+                                : 'medium'
+                          }`}
+                        >
+                          {proposal.status === 'approved'
+                            ? idID.skillsMcp.proposalsSection.statusApproved
+                            : proposal.status === 'rejected'
+                              ? idID.skillsMcp.proposalsSection.statusRejected
+                              : idID.skillsMcp.proposalsSection.statusPending}
+                        </span>
+                      </div>
+
+                      <p className="skill-description">
+                        {String(manifest.description || proposal.description || 'Tidak ada deskripsi')}
+                      </p>
+
+                      <div className="skill-meta-row" style={{ marginTop: 'var(--space-2)' }}>
+                        <span className="skill-meta-item">
+                          <strong>Judul:</strong> {proposal.title}
+                        </span>
+                        {proposal.taskId && (
+                          <span className="skill-meta-item">
+                            <strong>Sumber Task:</strong> #{proposal.taskId.slice(0, 8)}
+                          </span>
+                        )}
+                        <span className="skill-meta-item">
+                          <strong>Tingkat Risiko:</strong> {String(manifest.riskLevel || 'LOW')}
+                        </span>
+                        {toolsList.length > 0 && (
+                          <span className="skill-meta-item">
+                            <strong>Alat:</strong> {toolsList.join(', ')}
+                          </span>
+                        )}
+                      </div>
+
+                      {proposal.promptInstructions && (
+                        <div style={{ marginTop: 'var(--space-2)' }}>
+                          <span className="settings-label" style={{ fontSize: '0.8rem' }}>Instruksi Prompt:</span>
+                          <pre
+                            className="manifest-code-box"
+                            style={{ maxHeight: '120px', overflowY: 'auto', fontSize: '0.8rem', whiteSpace: 'pre-wrap' }}
+                          >
+                            {proposal.promptInstructions}
+                          </pre>
+                        </div>
+                      )}
+
+                      {proposal.diff && (
+                        <div className="task-event-diff-box" style={{ marginTop: 'var(--space-2)' }}>
+                          <span className="settings-label" style={{ fontSize: '0.8rem' }}>
+                            {idID.skillsMcp.proposalsSection.viewDiff}
+                          </span>
+                          <pre className="tool-step-pre" style={{ maxHeight: '150px', overflowY: 'auto' }}>
+                            {proposal.diff.split('\n').map((line, lIdx) => {
+                              let lineClass = '';
+                              if (line.startsWith('+')) lineClass = 'diff-line-add';
+                              else if (line.startsWith('-')) lineClass = 'diff-line-del';
+                              else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
+                              return <div key={lIdx} className={lineClass}>{line}</div>;
+                            })}
+                          </pre>
+                        </div>
+                      )}
+
+                      {proposal.status === 'rejected' && proposal.rejectionReason && (
+                        <div className="task-error-banner" style={{ marginTop: 'var(--space-2)' }}>
+                          <strong>{idID.skillsMcp.proposalsSection.rejectionReason}</strong> {proposal.rejectionReason}
+                        </div>
+                      )}
+                    </div>
+
+                    {proposal.status === 'pending' && (
+                      <div className="skill-card-footer" style={{ marginTop: 'var(--space-3)', display: 'flex', gap: 'var(--space-2)' }}>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => handleApproveProposal(proposal.id)}
+                        >
+                          {idID.skillsMcp.proposalsSection.approveAction}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => setRejectDialog({ open: true, proposalId: proposal.id, reason: '' })}
+                        >
+                          {idID.skillsMcp.proposalsSection.rejectAction}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
       {/* MANIFEST MODAL DIALOG */}
       <Dialog
         isOpen={manifestModal.open}
         onClose={() => setManifestModal((prev) => ({ ...prev, open: false }))}
         title={`${idID.skillsMcp.skillsSection.manifestDialogTitle}: ${manifestModal.skillName}`}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', margin: 0 }}>
+        <div className="mcp-manifest-body">
+          <p className="mcp-manifest-desc">
             Manifest resmi JSON terverifikasi oleh ManifestValidator dan Permission Engine.
           </p>
           <pre className="manifest-code-box">
             {JSON.stringify(manifestModal.manifest, null, 2)}
           </pre>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+          <div className="mcp-manifest-actions">
             <Button
               variant="secondary"
               onClick={() => setManifestModal((prev) => ({ ...prev, open: false }))}
@@ -630,20 +831,19 @@ export const SkillMcpView: React.FC = () => {
         onClose={() => setIsAddMcpOpen(false)}
         title={idID.skillsMcp.mcpSection.addDialogTitle}
       >
-        <form onSubmit={handleAddMcpSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+        <form onSubmit={handleAddMcpSubmit} className="mcp-form-body">
           {addMcpData.error && (
-            <div className="callout callout-error" style={{ padding: 'var(--space-2)', fontSize: '0.85rem' }}>
+            <div className="callout callout-error mcp-form-error">
               {addMcpData.error}
             </div>
           )}
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>ID Server (unik, tanpa spasi):</label>
+            <label className="mcp-form-label">ID Server (unik, tanpa spasi):</label>
             <input
               type="text"
               required
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.id}
               onChange={(e) => setAddMcpData({ ...addMcpData, id: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })}
               placeholder="contoh: github-tools"
@@ -651,12 +851,11 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>Nama Tampilan Server:</label>
+            <label className="mcp-form-label">Nama Tampilan Server:</label>
             <input
               type="text"
               required
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.name}
               onChange={(e) => setAddMcpData({ ...addMcpData, name: e.target.value })}
               placeholder="contoh: GitHub Tools MCP"
@@ -664,10 +863,9 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.transportLabel}:</label>
+            <label className="mcp-form-label">{idID.skillsMcp.mcpSection.transportLabel}:</label>
             <select
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.transport}
               onChange={(e) => setAddMcpData({ ...addMcpData, transport: e.target.value as 'stdio' | 'sse' })}
             >
@@ -679,10 +877,9 @@ export const SkillMcpView: React.FC = () => {
           {addMcpData.transport === 'stdio' ? (
             <>
               <div>
-                <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.commandLabel}:</label>
+                <label className="mcp-form-label">{idID.skillsMcp.mcpSection.commandLabel}:</label>
                 <select
-                  className="project-select"
-                  style={{ width: '100%', marginTop: 4 }}
+                  className="project-select mcp-form-input"
                   value={addMcpData.command}
                   onChange={(e) => setAddMcpData({ ...addMcpData, command: e.target.value })}
                 >
@@ -693,17 +890,16 @@ export const SkillMcpView: React.FC = () => {
                   <option value="python3">python3 (Python runtime)</option>
                   <option value="python">python (Python runner)</option>
                 </select>
-                <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
+                <span className="mcp-form-hint">
                   {idID.skillsMcp.mcpSection.commandHint}
                 </span>
               </div>
 
               <div>
-                <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.argsLabel}:</label>
+                <label className="mcp-form-label">{idID.skillsMcp.mcpSection.argsLabel}:</label>
                 <input
                   type="text"
-                  className="project-select"
-                  style={{ width: '100%', marginTop: 4 }}
+                  className="project-select mcp-form-input"
                   value={addMcpData.args}
                   onChange={(e) => setAddMcpData({ ...addMcpData, args: e.target.value })}
                   placeholder="-y @modelcontextprotocol/server-github"
@@ -712,28 +908,26 @@ export const SkillMcpView: React.FC = () => {
             </>
           ) : (
             <div>
-              <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.urlLabel}:</label>
+              <label className="mcp-form-label">{idID.skillsMcp.mcpSection.urlLabel}:</label>
               <input
                 type="url"
                 required
-                className="project-select"
-                style={{ width: '100%', marginTop: 4 }}
+                className="project-select mcp-form-input"
                 value={addMcpData.url}
                 onChange={(e) => setAddMcpData({ ...addMcpData, url: e.target.value })}
                 placeholder="https://mcp-server.example.com/sse"
               />
-              <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
+              <span className="mcp-form-hint">
                 {idID.skillsMcp.mcpSection.urlHint}
               </span>
             </div>
           )}
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.capabilitiesLabel}:</label>
+            <label className="mcp-form-label">{idID.skillsMcp.mcpSection.capabilitiesLabel}:</label>
             <input
               type="text"
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.capabilities}
               onChange={(e) => setAddMcpData({ ...addMcpData, capabilities: e.target.value })}
               placeholder="docs:read, code:review"
@@ -741,10 +935,9 @@ export const SkillMcpView: React.FC = () => {
           </div>
 
           <div>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>{idID.skillsMcp.mcpSection.riskLevelLabel}:</label>
+            <label className="mcp-form-label">{idID.skillsMcp.mcpSection.riskLevelLabel}:</label>
             <select
-              className="project-select"
-              style={{ width: '100%', marginTop: 4 }}
+              className="project-select mcp-form-input"
               value={addMcpData.riskLevel}
               onChange={(e) =>
                 setAddMcpData({ ...addMcpData, riskLevel: e.target.value as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' })
@@ -757,12 +950,43 @@ export const SkillMcpView: React.FC = () => {
             </select>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+          <div className="mcp-form-actions">
             <Button variant="secondary" onClick={() => setIsAddMcpOpen(false)}>
               {idID.common.cancel}
             </Button>
             <Button variant="primary" type="submit">
               {idID.skillsMcp.mcpSection.confirmAdd}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
+      {/* REJECT PROPOSAL MODAL DIALOG */}
+      <Dialog
+        isOpen={rejectDialog.open}
+        onClose={() => setRejectDialog({ open: false, proposalId: null, reason: '' })}
+        title={idID.skillsMcp.proposalsSection.rejectAction}
+      >
+        <form onSubmit={handleRejectProposalSubmit} className="mcp-form-body">
+          <p className="settings-label">
+            {idID.skillsMcp.proposalsSection.reasonPrompt}
+          </p>
+          <textarea
+            className="project-select mcp-form-input"
+            rows={3}
+            value={rejectDialog.reason}
+            onChange={(e) => setRejectDialog({ ...rejectDialog, reason: e.target.value })}
+            placeholder="Contoh: Format manifest tidak sesuai standar atau pola belum teruji."
+          />
+          <div className="mcp-form-actions" style={{ marginTop: 'var(--space-3)' }}>
+            <Button
+              variant="secondary"
+              onClick={() => setRejectDialog({ open: false, proposalId: null, reason: '' })}
+            >
+              {idID.common.cancel}
+            </Button>
+            <Button variant="danger" type="submit">
+              {idID.skillsMcp.proposalsSection.rejectAction}
             </Button>
           </div>
         </form>

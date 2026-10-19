@@ -1,11 +1,11 @@
 import React from 'react';
-import { PanelLeft, MessageSquare, FolderGit2, Brain, Wrench, Settings, Bell } from 'lucide-react';
+import { PanelLeft, MessageSquare, FolderGit2, Brain, Wrench, BookOpen, Columns2, Settings, Bell } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import { StatusDot, type StatusDotKind } from '../components/StatusDot.tsx';
 import { ThemeSwitcher } from '../components/ThemeSwitcher.tsx';
 import { idID } from '../locales/id-ID.ts';
 
-export type ActiveView = 'chat' | 'project' | 'memory' | 'skills' | 'settings';
+export type ActiveView = 'chat' | 'project' | 'memory' | 'skills' | 'research' | 'compare' | 'settings';
 
 interface AppHeaderProps {
   activeView: ActiveView;
@@ -22,7 +22,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onToggleActivity,
   pendingApprovalsCount,
 }) => {
-  const { connectionStatus } = useAgentStore();
+  const { connectionStatus, conversations, activeConversationId } = useAgentStore();
+  const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
   return (
     <header className="app-header" aria-label="Navigasi Utama">
@@ -72,6 +73,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <span>{idID.nav.skills}</span>
           </button>
           <button
+            className={`header-nav-btn ${activeView === 'research' ? 'active' : ''}`}
+            onClick={() => onChangeView('research')}
+            aria-current={activeView === 'research' ? 'page' : undefined}
+          >
+            <BookOpen size={15} />
+            <span>{idID.nav.research}</span>
+          </button>
+          <button
+            className={`header-nav-btn ${activeView === 'compare' ? 'active' : ''}`}
+            onClick={() => onChangeView('compare')}
+            aria-current={activeView === 'compare' ? 'page' : undefined}
+          >
+            <Columns2 size={15} />
+            <span>{idID.nav.compare}</span>
+          </button>
+          <button
             className={`header-nav-btn ${activeView === 'settings' ? 'active' : ''}`}
             onClick={() => onChangeView('settings')}
             aria-current={activeView === 'settings' ? 'page' : undefined}
@@ -80,6 +97,25 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <span>{idID.nav.settings}</span>
           </button>
         </nav>
+      </div>
+
+      {/* Center Breadcrumb */}
+      <div className="header-center-breadcrumb" aria-label="Konteks Percakapan">
+        <span className="header-breadcrumb-title">
+          {activeView === 'chat'
+            ? activeConversation?.title || idID.chat.defaultTitle
+            : activeView === 'project'
+              ? idID.nav.project
+              : activeView === 'memory'
+                ? idID.nav.memory
+                : activeView === 'skills'
+                  ? idID.nav.skills
+                  : activeView === 'research'
+                    ? idID.nav.research
+                    : activeView === 'compare'
+                      ? idID.compare.title
+                      : idID.nav.settings}
+        </span>
       </div>
 
       <div className="header-right-actions">
@@ -94,32 +130,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
         {/* Activity drawer toggle with pending approval badge */}
         <button
-          className="ui-icon-btn ui-icon-btn-ghost ui-icon-btn-md"
+          className="ui-icon-btn ui-icon-btn-ghost ui-icon-btn-md header-activity-btn"
           onClick={onToggleActivity}
-          style={{ position: 'relative' }}
           title={idID.nav.toggleActivity}
           aria-label={idID.nav.toggleActivity}
         >
           <Bell size={18} />
           {pendingApprovalsCount > 0 && (
-            <span
-              style={{
-                position: 'absolute',
-                top: 2,
-                right: 2,
-                backgroundColor: 'var(--accent-rose)',
-                color: '#ffffff',
-                fontSize: 10,
-                fontWeight: 700,
-                width: 16,
-                height: 16,
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 0 0 2px var(--bg-card)',
-              }}
-            >
+            <span className="header-badge-count-pill" aria-label={`${pendingApprovalsCount} persetujuan menunggu`}>
               {pendingApprovalsCount}
             </span>
           )}

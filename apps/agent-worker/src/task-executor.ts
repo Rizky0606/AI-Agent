@@ -8,6 +8,9 @@ import {
 import {
   createVersionedCheckpoint,
   defaultTracer,
+  type RuntimeStepEvent,
+  sanitizeRuntimeText,
+  sanitizeRuntimeDiff,
   type TaskEventBroadcaster,
   type TaskEventEnvelope,
   type TaskRecord,
@@ -513,36 +516,139 @@ export class TaskExecutor {
         : task.id;
     const resume = task.payload?.resume === true;
 
-    const onEvent = async (event: Record<string, unknown>) => {
-      const eventType = String(event['type'] ?? '');
-      const data = (event['data'] as Record<string, unknown>) ?? {};
-      if (eventType === 'tool_start' || eventType === 'tool_end') {
-        const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', {
-          action: data['toolName'] ?? 'tool',
-          input: data['input'],
-          output: data['output'],
-          untrusted: true,
-          timestamp: event['timestamp'],
-        });
-        this.broadcaster.publish(evt);
-      } else if (eventType === 'file_edit') {
-        const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
-          action: 'file_edit',
-          path: data['path'],
-          diff: data['diff'],
-          untrusted: true,
-          timestamp: event['timestamp'],
-        });
-        this.broadcaster.publish(evt);
-      } else if (eventType === 'text' && typeof data['text'] === 'string' && data['text'].trim()) {
-        const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
-          action: 'runtime_stream',
-          text: data['text'],
-          untrusted: true,
-          timestamp: event['timestamp'],
-        });
-        this.broadcaster.publish(evt);
-      }
+    let stepSeq = 0;
+    let eventQueue = Promise.resolve();
+
+    const onEvent = (event: Record<string, unknown>) => {
+      // Chain asynchronously to preserve strict sequential order without database write race conditions
+      eventQueue = eventQueue.then(async () => {
+        stepSeq += 1;
+        const currentSeq = stepSeq;
+        const eventType = String(event['type'] ?? '');
+        const data = (event['data'] as Record<string, unknown>) ?? {};
+        const timestamp = typeof event['timestamp'] === 'string' ? event['timestamp'] : new Date().toISOString();
+
+        if (eventType === 'tool_start') {
+          const toolName = String(data['toolName'] ?? data['tool'] ?? 'tool');
+          const runtimeStep: RuntimeStepEvent = {
+            id: `step-${task.id}-${currentSeq}`,
+            taskId: task.id,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            waktu: timestamp,
+            type: 'tool_start',
+            status: 'running',
+            toolName,
+            input: data['input'],
+          };
+          const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', {
+            action: toolName,
+            input: data['input'],
+            untrusted: true,
+            timestamp,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            runtimeStep,
+          });
+          this.broadcaster.publish(evt);
+        } else if (eventType === 'tool_end') {
+          const toolName = String(data['toolName'] ?? data['tool'] ?? 'tool');
+          const rawOutput = data['output'];
+          const output = typeof rawOutput === 'string' ? sanitizeRuntimeText(rawOutput) : rawOutput;
+          const runtimeStep: RuntimeStepEvent = {
+            id: `step-${task.id}-${currentSeq}`,
+            taskId: task.id,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            waktu: timestamp,
+            type: 'tool_end',
+            status: 'completed',
+            toolName,
+            output,
+          };
+          const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', {
+            action: toolName,
+            output,
+            untrusted: true,
+            timestamp,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            runtimeStep,
+          });
+          this.broadcaster.publish(evt);
+        } else if (eventType === 'file_edit') {
+          const path = typeof data['path'] === 'string' ? data['path'] : undefined;
+          const diff = sanitizeRuntimeDiff(data['diff']);
+          const runtimeStep: RuntimeStepEvent = {
+            id: `step-${task.id}-${currentSeq}`,
+            taskId: task.id,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            waktu: timestamp,
+            type: 'file_edit',
+            status: 'completed',
+            path,
+            diff,
+          };
+          const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+            action: 'file_edit',
+            path,
+            diff,
+            untrusted: true,
+            timestamp,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            runtimeStep,
+          });
+          this.broadcaster.publish(evt);
+        } else if (eventType === 'text' && typeof data['text'] === 'string' && data['text'].trim()) {
+          const text = sanitizeRuntimeText(data['text']);
+          const runtimeStep: RuntimeStepEvent = {
+            id: `step-${task.id}-${currentSeq}`,
+            taskId: task.id,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            waktu: timestamp,
+            type: 'message',
+            status: 'running',
+            text,
+          };
+          const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+            action: 'runtime_stream',
+            text,
+            untrusted: true,
+            timestamp,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            runtimeStep,
+          });
+          this.broadcaster.publish(evt);
+        } else if (eventType === 'error') {
+          const error = sanitizeRuntimeText(data['error'] ?? data['message'] ?? 'Runtime error');
+          const runtimeStep: RuntimeStepEvent = {
+            id: `step-${task.id}-${currentSeq}`,
+            taskId: task.id,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            waktu: timestamp,
+            type: 'error',
+            status: 'failed',
+            error,
+          };
+          const evt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+            action: 'runtime_error',
+            error,
+            untrusted: true,
+            timestamp,
+            runtime: runtimeId,
+            urutan: currentSeq,
+            runtimeStep,
+          });
+          this.broadcaster.publish(evt);
+        }
+      }).catch((err) => {
+        console.error('Failed to persist runtime event step:', err);
+      });
     };
 
     const result: RuntimeExecuteResult = await this.runtimeManager.execute(runtimeId, {
@@ -550,11 +656,37 @@ export class TaskExecutor {
       prompt,
       sessionId,
       resume,
-      onEvent: (evt) => { void onEvent(evt); },
+      onEvent: (evt) => { onEvent(evt); },
       timeoutMs: typeof task.payload?.timeoutMs === 'number' ? task.payload.timeoutMs : undefined,
       metadata: { workspaceId: task.payload?.workspaceId ?? task.id },
       untrusted: true,
     });
+
+    // Ensure all queued steps are flushed and committed in order before terminal events
+    await eventQueue;
+
+    stepSeq += 1;
+    const doneStep: RuntimeStepEvent = {
+      id: `step-${task.id}-${stepSeq}`,
+      taskId: task.id,
+      runtime: runtimeId,
+      urutan: stepSeq,
+      waktu: new Date().toISOString(),
+      type: 'done',
+      status: 'completed',
+      summary: `Eksekusi runtime ${runtimeId} selesai.`,
+      durationMs: result.durationMs,
+      exitCode: result.exitCode ?? 0,
+    };
+    const doneEvt = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.progress', {
+      action: 'runtime_done',
+      summary: doneStep.summary,
+      runtime: runtimeId,
+      urutan: stepSeq,
+      runtimeStep: doneStep,
+    });
+    this.broadcaster.publish(doneEvt);
+
     const output = result.output ?? '';
     const outputEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', { tool: `runtime:${runtimeId}`, output, proposedActions: result.proposedActions ?? [], untrustedOutputWarning: result.untrustedOutputWarning === true });
     this.broadcaster.publish(outputEvent);

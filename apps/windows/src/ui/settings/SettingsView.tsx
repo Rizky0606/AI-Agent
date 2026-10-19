@@ -18,12 +18,15 @@ import {
   Layers,
   Clock,
   HelpCircle,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useAgentStore } from '../context.ts';
 import type { CapabilityName } from '../../security/capability-registry.ts';
 import { ThemeSwitcher } from '../components/ThemeSwitcher.tsx';
 import { Button } from '../components/Button.tsx';
 import { Dialog } from '../components/Dialog.tsx';
+import { StatusDot } from '../components/StatusDot.tsx';
 import { idID } from '../locales/id-ID.ts';
 
 const useDebounced = (value: string, delayMs = 400): string => {
@@ -76,7 +79,16 @@ export const SettingsView: React.FC = () => {
 
   const [newPathInput, setNewPathInput] = useState('');
   const [addPathError, setAddPathError] = useState<string | null>(null);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+
+  const handleCopyPath = (path: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      void navigator.clipboard.writeText(path);
+      setCopiedPath(path);
+      setTimeout(() => setCopiedPath(null), 2000);
+    }
+  };
 
   // Settings drafts
   const [serverUrlDraft, setServerUrlDraft] = useState(serverUrl);
@@ -292,15 +304,26 @@ export const SettingsView: React.FC = () => {
                   ) : (
                     allowedRoots.map((rootPath) => (
                       <div key={rootPath} className="settings-root-item">
-                        <code>{rootPath}</code>
-                        <button
-                          type="button"
-                          className="ui-btn ui-btn-danger ui-btn-sm"
-                          onClick={() => removeAllowedRoot(rootPath)}
-                        >
-                          <Trash2 size={12} className="conversation-item-icon" />
-                          <span>{idID.settings.device.removePathButton}</span>
-                        </button>
+                        <code className="settings-root-path-code" title={rootPath}>{rootPath}</code>
+                        <div className="settings-root-actions">
+                          <button
+                            type="button"
+                            className="ui-btn ui-btn-secondary ui-btn-sm"
+                            onClick={() => handleCopyPath(rootPath)}
+                            title="Salin path direktori"
+                          >
+                            {copiedPath === rootPath ? <Check size={12} /> : <Copy size={12} />}
+                            <span>{copiedPath === rootPath ? 'Tersalin!' : 'Salin'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="ui-btn ui-btn-danger ui-btn-sm"
+                            onClick={() => removeAllowedRoot(rootPath)}
+                          >
+                            <Trash2 size={12} className="conversation-item-icon" />
+                            <span>{idID.settings.device.removePathButton}</span>
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -328,7 +351,7 @@ export const SettingsView: React.FC = () => {
               </div>
 
               {modelCatalogUnavailable && (
-                <div className="model-popover-alert" style={{ marginBottom: 12, borderRadius: 'var(--radius-md)' }} role="alert">
+                <div className="model-popover-alert model-catalog-alert" role="alert">
                   <span className="model-alert-text">
                     {modelCatalogError || 'Katalog model tidak dapat dihubungi (503).'}
                   </span>
@@ -358,22 +381,22 @@ export const SettingsView: React.FC = () => {
                   const hasUnknown = details && (details.streaming?.status === 'unknown' || details.tool_calling?.status === 'unknown' || details.vision?.status === 'unknown');
 
                   return (
-                    <div key={model.id} className="activity-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div key={model.id} className="activity-card model-settings-card">
                       <div className="card-header-row">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div className="model-settings-title-row">
                           <strong className="card-title-text">{model.id}</strong>
                           {isDefault && (
                             <span className="model-default-badge">Default Akun</span>
                           )}
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div className="model-settings-actions-row">
                           <button
                             type="button"
                             className="model-action-icon-btn"
                             onClick={() => toggleFavoriteModel(model.id)}
                             title={isFav ? 'Hapus favorit' : 'Sematkan favorit'}
                           >
-                            <Star size={14} fill={isFav ? 'var(--accent-amber, #f59e0b)' : 'none'} color={isFav ? 'var(--accent-amber, #f59e0b)' : 'var(--text-sub)'} />
+                            <Star size={14} fill={isFav ? 'var(--color-warning)' : 'none'} color={isFav ? 'var(--color-warning)' : 'var(--text-sub)'} />
                           </button>
                           {!isDefault && (
                             <button
@@ -546,6 +569,45 @@ export const SettingsView: React.FC = () => {
                     {idID.settings.advanced.connectWss}
                   </button>
                 )}
+              </div>
+
+              {/* System Health Status Cards */}
+              <div className="settings-form-group">
+                <h3 className="card-title-text">Kesehatan Sistem & Layanan</h3>
+                <div className="settings-health-grid">
+                  <div className="settings-health-card">
+                    <div className="settings-health-header">
+                      <span className="settings-health-label">API Gateway VPS</span>
+                      <StatusDot status={connectionStatus === 'connected' ? 'connected' : connectionStatus === 'connecting' ? 'connecting' : 'disconnected'} />
+                    </div>
+                    <span className="settings-health-val">
+                      {connectionStatus === 'connected' ? 'Terhubung (200 OK)' : connectionStatus === 'connecting' ? 'Menghubungkan...' : 'Terputus'}
+                    </span>
+                    <span className="settings-health-sub">{serverUrl}</span>
+                  </div>
+
+                  <div className="settings-health-card">
+                    <div className="settings-health-header">
+                      <span className="settings-health-label">Event Stream (WSS)</span>
+                      <StatusDot status={connectionStatus === 'connected' ? 'connected' : 'disconnected'} />
+                    </div>
+                    <span className="settings-health-val">
+                      {connectionStatus === 'connected' ? 'Aktif' : 'Terputus'}
+                    </span>
+                    <span className="settings-health-sub">/v1/events realtime</span>
+                  </div>
+
+                  <div className="settings-health-card">
+                    <div className="settings-health-header">
+                      <span className="settings-health-label">Worker Windows</span>
+                      <StatusDot status={device.id ? 'connected' : 'disconnected'} />
+                    </div>
+                    <span className="settings-health-val">
+                      {device.id ? 'Terdaftar & Siap' : 'Belum Terdaftar'}
+                    </span>
+                    <span className="settings-health-sub">{device.name || 'Personal PC'}</span>
+                  </div>
+                </div>
               </div>
 
               {/* Diagnostic Logs */}

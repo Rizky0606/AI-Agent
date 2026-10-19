@@ -459,8 +459,9 @@ class InMemoryMemoryRepo {
 // Setup Shared Environment
 let fake9Router: LocalFake9RouterServer;
 let fake9RouterUrl: string;
-let redisPublisher: Redis;
-let redisSubscriber: Redis;
+let isRedisAvailable = false;
+let redisPublisher: Redis | null = null;
+let redisSubscriber: Redis | null = null;
 let realSql: postgres.Sql | null = null;
 
 before(async () => {
@@ -468,13 +469,26 @@ before(async () => {
   fake9Router = new LocalFake9RouterServer();
   fake9RouterUrl = await fake9Router.start();
 
-  // 2. Setup Redis clients
-  redisPublisher = new Redis(REDIS_URL, { maxRetriesPerRequest: 1 });
-  redisSubscriber = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
-
-  // 3. Test PostgreSQL availability
+  // 2. Fast-probe Redis availability with short timeout (no background connection spam or hanging)
   try {
-    const testSql = postgres(DATABASE_URL, { connect_timeout: 2, max: 1 });
+    const probe = new Redis(REDIS_URL, { lazyConnect: true, connectTimeout: 1500, retryStrategy: () => null });
+    await probe.connect();
+    await probe.ping();
+    await probe.quit();
+    isRedisAvailable = true;
+    redisPublisher = new Redis(REDIS_URL, { maxRetriesPerRequest: 1 });
+    redisSubscriber = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
+    console.log('[E2E Platform] Connected to real Redis at', REDIS_URL);
+  } catch {
+    isRedisAvailable = false;
+    redisPublisher = null;
+    redisSubscriber = null;
+    console.log('[E2E Platform] Redis not reachable locally. Live Redis scenarios will be cleanly skipped.');
+  }
+
+  // 3. Test PostgreSQL availability with short timeout
+  try {
+    const testSql = postgres(DATABASE_URL, { connect_timeout: 1.5, max: 1, onnotice: () => undefined });
     await testSql`SELECT 1`;
     realSql = testSql;
     console.log('[E2E Platform] Connected to real PostgreSQL at', DATABASE_URL);
@@ -488,10 +502,14 @@ before(async () => {
 
 after(async () => {
   await fake9Router.stop();
-  await redisPublisher.quit();
-  await redisSubscriber.quit();
+  if (redisPublisher) {
+    await redisPublisher.quit().catch(() => {});
+  }
+  if (redisSubscriber) {
+    await redisSubscriber.quit().catch(() => {});
+  }
   if (realSql) {
-    await realSql.end();
+    await realSql.end({ timeout: 1 }).catch(() => {});
   }
 });
 
@@ -587,7 +605,11 @@ test('Skenario 1: Register/login, chat streaming via WebSocket (real Fastify & f
   }
 });
 
-test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed', async () => {
+test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima klien → Evaluator menandai completed', async (t) => {
+  if (!isRedisAvailable || !redisPublisher || !redisSubscriber) {
+    t.skip('Live Redis required for Skenario 2 (BullMQ queue & events)');
+    return;
+  }
   const authRepo = new InMemoryAuthRepository();
   const auth = createAuthService(authRepo, JWT_SECRET);
   const user = await auth.register('bob-worker@e2e.test', 'Password123!');
@@ -721,7 +743,11 @@ test('Skenario 2: Buat task → worker mengeksekusi → event realtime diterima 
   }
 });
 
-test('Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; deny menghentikan task', async () => {
+test('Skenario 3: Aksi HIGH memicu waiting_approval, approve, task dilanjutkan; deny menghentikan task', async (t) => {
+  if (!isRedisAvailable || !redisPublisher || !redisSubscriber) {
+    t.skip('Live Redis required for Skenario 3 (BullMQ queue & events)');
+    return;
+  }
   const authRepo = new InMemoryAuthRepository();
   const auth = createAuthService(authRepo, JWT_SECRET);
   const user = await auth.register('charlie-approval@e2e.test', 'Password123!');
@@ -1060,11 +1086,13 @@ test('Skenario 7: Isolasi: user A tidak bisa membaca project/task/memori user B'
     task: {
       projectRepo: projectRepo as never,
       taskRepo: taskRepo as never,
-      taskQueue: new BullMqTaskQueue(redisPublisher),
-      broadcaster: new RedisTaskEventBroadcaster({
-        publisher: redisPublisher,
-        subscriber: redisSubscriber,
-      }),
+      taskQueue: (redisPublisher ? new BullMqTaskQueue(redisPublisher) : { enqueue: async () => ({ id: 'dummy' }) } as never),
+      broadcaster: (redisPublisher && redisSubscriber
+        ? new RedisTaskEventBroadcaster({
+            publisher: redisPublisher,
+            subscriber: redisSubscriber,
+          })
+        : new InMemoryTaskEventBroadcaster() as never),
     },
     memory: { memoryRepo: memoryRepo as never },
   });

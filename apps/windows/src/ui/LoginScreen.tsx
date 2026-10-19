@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { Laptop, AlertTriangle } from 'lucide-react';
 import { useAgentStore } from './context.ts';
 import { Button, Spinner, ThemeSwitcher } from './components/index.ts';
 import './Theme.css';
 import './components/Components.css';
+import './LoginScreen.css';
 
 export const LoginScreen: React.FC = () => {
   const {
@@ -46,90 +48,32 @@ export const LoginScreen: React.FC = () => {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        width: '100vw',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px 16px',
-        background: 'var(--bg-canvas)',
-        color: 'var(--text-main)',
-        position: 'relative',
-        boxSizing: 'border-box',
-      }}
-    >
+    <div className="login-screen-container">
       {/* Top right controls */}
-      <div style={{ position: 'absolute', top: 16, right: 16 }}>
+      <div className="login-theme-switcher-wrapper">
         <ThemeSwitcher />
       </div>
 
       {/* Main Login Card */}
-      <div
-        className="card"
-        style={{
-          width: '100%',
-          maxWidth: 420,
-          boxShadow: 'var(--shadow-xl)',
-          borderRadius: 'var(--radius-xl)',
-          border: '1px solid var(--border-color)',
-          background: 'var(--bg-card)',
-          padding: 32,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 24,
-        }}
-      >
+      <div className="card login-card">
         {/* Logo and Brand Header */}
-        <div style={{ textAlign: 'center' }}>
-          <div
-            style={{
-              fontSize: 48,
-              lineHeight: 1,
-              marginBottom: 12,
-              filter: 'drop-shadow(0 4px 12px rgba(14, 165, 233, 0.25))',
-            }}
-          >
-            🪟
+        <div className="login-header">
+          <div className="login-logo-icon">
+            <Laptop size={26} />
           </div>
-          <h1
-            style={{
-              fontSize: 22,
-              fontWeight: 700,
-              margin: '0 0 6px 0',
-              letterSpacing: '-0.02em',
-            }}
-          >
+          <h1 className="login-title">
             Personal AI OS
           </h1>
-          <p
-            style={{
-              fontSize: 13,
-              color: 'var(--text-sub)',
-              margin: 0,
-              lineHeight: 1.4,
-            }}
-          >
+          <p className="login-subtitle">
             Satu asisten pribadi terpadu dengan eksekusi lokal aman di Windows.
           </p>
         </div>
 
         {/* State: Bootstrapping (Reopening with existing credentials) */}
         {authState === 'bootstrapping' && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 16,
-              padding: '24px 0',
-            }}
-            aria-live="polite"
-          >
+          <div className="login-state-box" aria-live="polite">
             <Spinner size="lg" />
-            <p style={{ fontSize: 13, color: 'var(--text-sub)', margin: 0 }}>
+            <p className="login-state-text">
               {bootstrapMessage ?? 'Memverifikasi sesi...'}
             </p>
           </div>
@@ -137,23 +81,13 @@ export const LoginScreen: React.FC = () => {
 
         {/* State: Authenticating in flight */}
         {authState === 'authenticating' && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 16,
-              padding: '20px 0',
-              textAlign: 'center',
-            }}
-            aria-live="polite"
-          >
+          <div className="login-state-box" aria-live="polite">
             <Spinner size="lg" />
             <div>
-              <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px 0' }}>
+              <p className="login-state-title">
                 {stepLabels[loginStep] ?? 'Memproses login...'}
               </p>
-              <p style={{ fontSize: 12, color: 'var(--text-sub)', margin: 0 }}>
+              <p className="login-state-desc">
                 {loginStep === 'opening_browser'
                   ? 'Silakan selesaikan proses masuk pada jendela peramban yang terbuka.'
                   : 'Mohon tunggu sejenak, mengonfigurasi sesi Anda...'}
@@ -164,25 +98,14 @@ export const LoginScreen: React.FC = () => {
 
         {/* State: Error alert */}
         {loginStep === 'error' && loginError && (
-          <div
-            style={{
-              padding: 14,
-              borderRadius: 'var(--radius-md)',
-              background: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid var(--accent-rose)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 12,
-            }}
-            role="alert"
-          >
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-              <span style={{ fontSize: 16 }}>⚠️</span>
-              <div style={{ fontSize: 13, color: 'var(--accent-rose)', lineHeight: 1.4 }}>
+          <div className="login-error-card" role="alert">
+            <div className="login-error-content">
+              <AlertTriangle size={18} className="login-error-alert-icon" />
+              <div className="login-error-msg">
                 <strong>Gagal Masuk:</strong> {loginError}
               </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <div className="login-error-actions">
               <Button
                 variant="secondary"
                 size="sm"
@@ -199,21 +122,9 @@ export const LoginScreen: React.FC = () => {
 
         {/* State: Unauthenticated (Clean 1-step Google Login) */}
         {!isAuthenticating && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="login-unauth-section">
             <button
-              className="ui-btn ui-btn-primary ui-btn-lg"
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 10,
-                fontSize: 14,
-                fontWeight: 600,
-                padding: '12px 20px',
-                borderRadius: 'var(--radius-md)',
-                cursor: 'pointer',
-              }}
+              className="ui-btn ui-btn-primary ui-btn-lg login-google-btn"
               onClick={() => void googleLogin()}
             >
               <svg width="18" height="18" viewBox="0 0 24 24">
@@ -238,19 +149,11 @@ export const LoginScreen: React.FC = () => {
             </button>
 
             {/* Discreet Advanced Toggle */}
-            <div style={{ textAlign: 'center', marginTop: 4 }}>
+            <div className="login-advanced-toggle-wrap">
               <button
                 type="button"
+                className="login-advanced-toggle-btn"
                 onClick={() => setShowAdvanced(!showAdvanced)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-sub)',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  padding: 4,
-                }}
               >
                 {showAdvanced ? 'Tutup Opsi Lanjutan ▲' : 'Lanjutan (Opsi Pengembang) ▼'}
               </button>
@@ -260,33 +163,15 @@ export const LoginScreen: React.FC = () => {
             {showAdvanced && (
               <form
                 onSubmit={(e) => void handleManualLogin(e)}
-                style={{
-                  marginTop: 8,
-                  padding: 16,
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-subtle, rgba(255, 255, 255, 0.03))',
-                  border: '1px solid var(--border-color)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 12,
-                }}
+                className="login-advanced-form"
               >
                 <div>
-                  <label
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: 'var(--text-muted)',
-                      display: 'block',
-                      marginBottom: 4,
-                    }}
-                  >
+                  <label className="login-field-label">
                     URL Server VPS (Control Plane):
                   </label>
                   <input
                     type="text"
-                    className="text-input"
-                    style={{ width: '100%', fontSize: 12 }}
+                    className="text-input login-field-input"
                     value={serverUrlDraft}
                     onChange={(e) => setServerUrlDraft(e.target.value)}
                     placeholder="https://ai.ojixx.my.id"
@@ -294,21 +179,12 @@ export const LoginScreen: React.FC = () => {
                 </div>
 
                 <div>
-                  <label
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: 'var(--text-muted)',
-                      display: 'block',
-                      marginBottom: 4,
-                    }}
-                  >
+                  <label className="login-field-label">
                     Token Manual Pengembang:
                   </label>
                   <input
                     type="password"
-                    className="text-input"
-                    style={{ width: '100%', fontSize: 12 }}
+                    className="text-input login-field-input"
                     value={manualTokenInput}
                     onChange={(e) => setManualTokenInput(e.target.value)}
                     placeholder="Tempel token akses di sini..."
@@ -316,15 +192,14 @@ export const LoginScreen: React.FC = () => {
                 </div>
 
                 {manualError && (
-                  <div style={{ fontSize: 11, color: 'var(--accent-rose)' }}>
+                  <div className="login-manual-error">
                     {manualError}
                   </div>
                 )}
 
                 <button
                   type="submit"
-                  className="ui-btn ui-btn-secondary ui-btn-sm"
-                  style={{ width: '100%', marginTop: 4 }}
+                  className="ui-btn ui-btn-secondary ui-btn-sm login-manual-submit-btn"
                 >
                   Gunakan Token & Hubungkan
                 </button>
@@ -335,14 +210,7 @@ export const LoginScreen: React.FC = () => {
       </div>
 
       {/* Footer text */}
-      <footer
-        style={{
-          marginTop: 24,
-          fontSize: 11,
-          color: 'var(--text-sub)',
-          textAlign: 'center',
-        }}
-      >
+      <footer className="login-footer">
         Personal AI OS · Sesi Aman Berbasis PKCE & Sandboxing
       </footer>
     </div>

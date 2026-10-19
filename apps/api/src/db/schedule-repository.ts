@@ -38,6 +38,7 @@ export class SqlScheduleRepository implements ScheduleRepository {
       taskPayload: row.taskPayload as TaskPayload,
       lastRunAt: row.lastRunAt ? row.lastRunAt.toISOString() : undefined,
       nextRunAt: row.nextRunAt ? row.nextRunAt.toISOString() : undefined,
+      lastBrief: row.lastBrief ?? undefined,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -72,6 +73,7 @@ export class SqlScheduleRepository implements ScheduleRepository {
           taskPayload: job.taskPayload,
           lastRunAt: job.lastRunAt ? new Date(job.lastRunAt) : null,
           nextRunAt: job.nextRunAt ? new Date(job.nextRunAt) : null,
+          lastBrief: job.lastBrief ?? null,
           createdAt: new Date(job.createdAt),
           updatedAt: new Date(job.updatedAt),
         })
@@ -88,6 +90,7 @@ export class SqlScheduleRepository implements ScheduleRepository {
             taskPayload: job.taskPayload,
             lastRunAt: job.lastRunAt ? new Date(job.lastRunAt) : null,
             nextRunAt: job.nextRunAt ? new Date(job.nextRunAt) : null,
+            lastBrief: job.lastBrief ?? null,
             updatedAt: new Date(job.updatedAt),
           },
         });

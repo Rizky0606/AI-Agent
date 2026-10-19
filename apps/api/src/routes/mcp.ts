@@ -24,6 +24,12 @@ export function registerMcpRoutes(
 ): void {
   const { mcpRepo, auth, auditRepo, approvalRepo } = options;
 
+  if (process.env.NODE_ENV === 'production' && !auth) {
+    throw new Error(
+      'FATAL CONFIGURATION ERROR: registerMcpRoutes requires active AuthService in production environment.',
+    );
+  }
+
   const getUser = async (req: FastifyRequest): Promise<AuthUser> => {
     if (auth) {
       const authHeader = req.headers.authorization;
@@ -37,6 +43,9 @@ export function registerMcpRoutes(
         role: (authenticated as unknown as { role?: string }).role,
       };
     }
+    if (process.env.NODE_ENV === 'production') {
+      throw new AuthError('UNAUTHENTICATED', 'Autentikasi wajib di lingkungan produksi.', 401);
+    }
     return (
       (req as unknown as { user?: AuthUser }).user ?? {
         id: 'default-user',
@@ -47,10 +56,19 @@ export function registerMcpRoutes(
   };
 
   const assertAdmin = (user: AuthUser): void => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction && (!auth || user.id === 'default-user')) {
+      throw new AuthError(
+        'FORBIDDEN',
+        'Operasi admin MCP dilarang di lingkungan produksi tanpa autentikasi terverifikasi.',
+        403,
+      );
+    }
+
     const ownerEmail = process.env.OWNER_EMAIL ?? process.env.ADMIN_EMAIL;
     const isOwner = Boolean(ownerEmail && user.email.toLowerCase() === ownerEmail.toLowerCase());
     const isAdminRole = user.role === 'admin';
-    const isDefaultAdmin = !auth || user.id === 'default-user';
+    const isDefaultAdmin = !isProduction && (!auth || user.id === 'default-user');
 
     if (!isOwner && !isAdminRole && !isDefaultAdmin) {
       throw new AuthError(

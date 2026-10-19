@@ -1,5 +1,5 @@
 version: 1
-updated: 2026-10-16
+updated: 2026-10-18
 capabilities:
   control_plane:
     status: implemented
@@ -30,12 +30,19 @@ capabilities:
     limitation: the health file is refreshed only after a `select 1` on Postgres and a Redis `PING` both succeed (`refreshHealthFile`), so a disconnected worker goes stale and the container is reported unhealthy instead of healthy
   scheduler:
     status: implemented
-    code: apps/scheduler/src/index.ts; apps/scheduler/src/scheduler-engine.ts; apps/api/src/services/task-notifications.ts; apps/api/src/db/notification-repository.ts
+    code: apps/scheduler/src/index.ts; apps/scheduler/src/scheduler-engine.ts; apps/api/src/services/task-notifications.ts; apps/api/src/db/notification-repository.ts; apps/api/src/routes/schedules.ts; apps/windows/src/ui/activity/ActivityPanel.tsx; docs/adr/0029-tugas-terjadwal-dan-usulan-skill.md
     permission_boundary: PermissionEngine; schedule ownership
-    clients: android notifications
-    proof: apps/scheduler/test/scheduler.test.ts; apps/scheduler/test/notifications.test.ts; apps/scheduler/test/fcm-provider.test.ts; apps/api/test/task-notifications.test.ts
+    clients: android notifications; windows activity panel & schedule manager
+    proof: apps/scheduler/test/scheduler.test.ts; apps/scheduler/test/notifications.test.ts; apps/scheduler/test/fcm-provider.test.ts; apps/api/test/task-notifications.test.ts; apps/api/test/schedules-and-skill-proposals.test.ts; apps/windows/test/schedules-and-skill-proposals.test.ts
     limitation: |
-      The API registers schedules in `schedules` only; `tick()` runs solely in the `scheduler` container, which inserts the `tasks` row and enqueues BullMQ (the duplicate API dispatcher that enqueued without inserting was deleted 2026-10-14). Notification delivery is now durable and observed live: task completion, task failure, and a `task.waiting_approval` event on `personal-ai-os:events:all` each produced a `notifications` row with `delivery_state` and `deep_link`, and both rows and preferences survived an API restart. `NotificationEngine` uses `SqlNotificationRepository` and `createFcmProviderFromEnv()`. FCM uses a real OAuth2 access token from the service account (`ServiceAccountTokenSource`, RS256 JWT exchanged at `token_uri`); the hardcoded `dummy-env-token` is gone. Push tokens live in `devices.push_token` (migration `0009_device_push_token.sql`, partial unique index) and are registered per install through `POST /v1/devices/:deviceId/push-token`. Remaining: `FCM_SERVICE_ACCOUNT_JSON` is not provisioned, so the active provider is `DisabledFcmProvider` and no real Google send has been observed; a push that exhausts `maxAttempts` ends `failed` with no dead-letter queue; incoming events carry no signature verification and `registerRule` is never called in production.
+      The API registers schedules in `schedules` only; `tick()` runs solely in the `scheduler` container, which inserts the `tasks` row and enqueues BullMQ (the duplicate API dispatcher that enqueued without inserting was deleted 2026-10-14). Notification delivery is now durable and observed live: task completion, task failure, and a `task.waiting_approval` event on `personal-ai-os:events:all` each produced a `notifications` row with `delivery_state` and `deep_link`, and both rows and preferences survived an API restart. `NotificationEngine` uses `SqlNotificationRepository` and `createFcmProviderFromEnv()`. FCM uses a real OAuth2 access token from the service account (`ServiceAccountTokenSource`, RS256 JWT exchanged at `token_uri`); the hardcoded `dummy-env-token` is gone. Push tokens live in `devices.push_token` (migration `0009_device_push_token.sql`, partial unique index) and are registered per install through `POST /v1/devices/:deviceId/push-token`.
+      Sesi 28 Enhancements (ADR 0029, 2026-10-18):
+      - Windows UI Schedule Manager in `ActivityPanel.tsx` (subtab Jadwal): create schedule (preset once/one_off, daily 08:00 WIB, weekly Monday 08:00 WIB, or custom 5-field cron).
+      - Default timezone: Asia/Jakarta.
+      - Resource bounds: minimum recurring interval 15 minutes (`MIN_RECURRING_INTERVAL_MINUTES = 15`), maximum 10 active schedules per user quota (`MAX_ACTIVE_SCHEDULES_PER_USER = 10`).
+      - Task briefs: execution result summarized into `brief` stored in `tasks.payload.brief` and `schedules.lastBrief`, sent as notification with deep link `personal-ai://tasks/:id`, and rendered directly in Windows Activity Panel & TaskCard.
+      - Permission Engine: scheduled tasks execute through PermissionEngine; actions requiring HIGH/CRITICAL permissions halt at `waiting_approval` without failing or canceling brief generation (the brief explicitly notes the pending approval).
+      - Remaining: `FCM_SERVICE_ACCOUNT_JSON` is not provisioned, so the active push provider is `DisabledFcmProvider` and no real Google send has been observed; a push that exhausts `maxAttempts` ends `failed` with no dead-letter queue; incoming events carry no signature verification and `registerRule` is never called in production.
   universal_agent_execution:
     status: implemented
     code: apps/agent-worker/src/task-executor.ts; packages/agent-core/src/generic/generic-agent.ts; packages/agent-core/src/router/agent-router.ts
@@ -80,17 +87,17 @@ capabilities:
     clients: android
     proof: pnpm --filter @personal-ai-os/android test
     limitation: |
-      Android UI Redesign & Navigation Architecture implemented (2026-10-15, Sesi 7, ADR 0009):
-      - Replaced manual bottom tab with genuine React Navigation (@react-navigation/bottom-tabs, @react-navigation/native) using lucide-react-native icons (MessageSquare, Activity, MoreHorizontal). 3 primary tabs: Chat, Aktivitas (unified Tasks & Approvals with live pending count badge), and Lainnya.
-      - Deep linking supports custom scheme `personal-ai://` and universal URLs, routing seamlessly to Chat, ApprovalDetail, TaskDetail, and ProjectDetail.
-      - Chat Experience: Full-width assistant messages without heavy bubbles, smooth right-aligned user bubble, custom zero-dependency MarkdownView supporting copyable code blocks with language badge and copy action, inline formatting, long-press menu for Salin and Ulangi, streaming thinking indicator, empty state with 4 Indonesian sample prompt cards, composer integrated with Mode and Model chips (Sesi 6), and safe area/keyboard handling.
-      - Approvals & Risk Management: Inline approval card in Chat and Aktivitas, bottom sheet detail showing risk level, action, target resource, and consequences. Mandatory secondary confirmation dialog for HIGH and CRITICAL risks explicitly stating consequences. All interactive buttons meet or exceed 48 dp minTouchTarget.
-      - Onboarding & Login: Google Sign-in as primary hero action, email/password collapsed under "Opsi Masuk Lainnya", server URL hidden by default under "Pengaturan Lanjutan".
-      - Lainnya Tab: Clean consumer view with 7 sections: Akun (with Logout), Model default, Notifikasi (push switch), Tampilan (Sistem/Terang/Gelap via dynamic useAppTheme synchronized with ui-store and OS appearance), Memori (scaffold Sesi 10), Skill & MCP (Sesi 14 implemented: per-project toggle, manifest viewer, and MCP server/tool status & logs), and collapsible Lanjutan (Server endpoint, Device ID, User ID, PostgreSQL/Redis/API health status, Artifacts, Projects).
-      - Centralized Indonesian localization in `src/locales/id-ID.ts` with 100% consistent Indonesian copy.
-      - Client Model Selector integrated (Sesi 6, ADR 0008): Model chip bottom sheet with provider grouping, capability verification badges, catalog 503 resilience, and per-conversation model/mode persistence.
-      - Sesi 17 QA & Release: All 56 test files passing in CI. Expo export bundles cleanly (3.7 MB JS, 17 assets). APK generation pipeline verified in `.github/workflows/release-installers.yml` with release version 0.3.0. Manual verification on real device remains necessary for physical rendering.
-      - Remaining gaps: attachment upload unavailable; physical Android device visual rendering requires manual verification.
+      Android UI Redesign & Native UX Overhaul implemented (2026-10-17, Sesi 23, ADR 0024):
+      - Zero new dependencies: Evaluated and rejected react-native-reanimated; used React Native's built-in Animated API with useNativeDriver: true for maximum stability and compatibility without native linking.
+      - Hardware BackHandler integration in Navigator.tsx: Android hardware back button gracefully dismisses active sub-screens (chat conversation, task detail, more subscreens) before exiting the app.
+      - Standard ScreenHeader component: Enforces consistent top bar across all secondary screens with 48dp touch target, ArrowLeft Lucide icon, and dynamic theme colors.
+      - Stream Throttling & List Performance: Created StreamThrottler utility to batch rapid WebSocket token deltas (default 80ms) and memoized ChatMessageBubble with React.memo, preventing expensive whole-list re-renders during high-speed LLM generation.
+      - Dynamic Theme Architecture: Purged static Theme.ts imports across all screens (TaskDetailScreen, TaskListScreen, ActivityScreen, ApprovalInboxScreen, MemoryScreen, ProjectsScreen, ArtifactsScreen, ConversationListScreen), migrating to dynamic useAppTheme() hook with instant runtime light/dark mode adaptation.
+      - Approval & Risk Accents: Explicit visual differentiation between CRITICAL (riskCritical, riskCriticalBg) and HIGH (riskHigh, riskHighBg) in cards, bottom sheets, and secondary confirmation dialogs.
+      - Touch Targets & Native Feedback: All interactive pressables strictly satisfy Android Material >= 48dp minTouchTarget with android_ripple native feedback.
+      - Copyable Diagnostics & No Emojis: Replaced emoji AI clichés with clean Lucide icons (Zap, Wrench, Eye, Cpu, AlertTriangle). Added one-tap clipboard copy buttons with toast feedback for Server Endpoint, Device ID, and User ID in Settings.
+      - Proof: All 47 Android unit tests passing (`pnpm --filter @personal-ai-os/android test:unit`). Lint passing with 0 warnings (`pnpm --filter @personal-ai-os/android lint`). Typecheck passing with strict TypeScript (`tsc --noEmit`). Production bundle compiles cleanly via Expo (`expo export --platform android`, 3.72 MB JS, 17 assets).
+      - Visual physical device rendering status: BELUM DIVERIFIKASI VISUAL (requires manual physical Android device testing).
   windows:
     status: partial
     code: apps/windows/src/ui; apps/windows/src/api; apps/windows/src/connection; apps/windows/src/security; apps/windows/src-tauri
@@ -117,30 +124,48 @@ capabilities:
       - Code Signing & Auto-Updater Runbooks: Published `docs/windows/code-signing-runbook.md` (evaluating Azure Trusted Signing vs Cloud HSM vs EV) and ADR 0017 (`docs/adr/0017-usulan-windows-auto-updater-tauri.md`).
       - High-Risk Capabilities: Enforced default OFF with `requiresExplicitOptIn: true` for `powershell`, `docker`, and `vscode`, plus folder allowlist boundary for filesystem.
       - Sesi 17 QA & Release: All 74 test files passing in CI. Vite production bundle builds in <8s (dist/index.html, Inter fonts, CSS 62.5 KB, JS 334 KB). Tauri NSIS installer target configured for version 0.3.0. Manual verification on real Windows hardware remains necessary for SmartScreen and display rendering.
-      - Remaining gaps: Physical Windows hardware screen visual inspection and real code signing certificate procurement require manual user action.
+      - Sesi 22 UI/UX Overhaul (2026-10-17, ADR 0023 / feat/sesi-22-rombak-ui-windows):
+        - Automated design token compliance: `scripts/check-design-tokens.ts` (`pnpm check:tokens`) enforces 0 hex/rgba colors and 0 inline styles across all Windows CSS files (0 violations).
+        - Shell Header & Sidebar: Breadcrumb konteks navigasi terpotong rapi (`truncate`), status sinkronisasi, affordance "Obrolan Baru" sekunder dengan badge `<kbd>Ctrl+N</kbd>`.
+        - Chat & Composer: Kontainer pesan terpusat max-width 720px, pembungkus horizontal chip komposer (Mode, Model, Runtime) dengan scrollbar tersembunyi (`scrollbar-width: none`), 4 kartu saran prompt empty state responsif.
+        - Panel Aktivitas: Kartu persetujuan risiko HIGH (`--color-risk-high`) dan CRITICAL (`--color-risk-critical`) dengan aksen border/background subtle, judul checkpoint tindakan yang informatif ("Menjalankan Perintah", "Menavigasi Web", dsb.), indikator status live streaming tool step.
+        - Pengaturan: Tombol salin path allowlist direktori dengan feedback visual "Tersalin!", grid 3 kartu status kesehatan sistem (REST API, WebSocket Event, Worker Process) dengan dot status dinamis.
+        - Memori & Skill/MCP: 100% tokenisasi CSS (menghapus seluruh sisa hardcoded warna & spasi), tampilan badge status seragam.
+        - Layar Login: Menghapus emoji (🪟, ⚠️) digantikan icon Lucide (`Laptop`, `AlertTriangle`), penataan input dan tombol aksi hero dengan token semantik.
+        - Banner Koneksi: Banner lengket di bagian atas antarmuka saat status WebSocket terputus (`reconnecting` / `disconnected`) dengan tombol "Hubungkan Kembali".
+        - Sesi 22 QA: 78 unit test di `@personal-ai-os/windows` lulus 100% (`pnpm --filter @personal-ai-os/windows test`), typecheck lulus 0 error.
+      - Remaining gaps: Physical Windows hardware screen visual inspection at 1366x768 and 1920x1080 (125% and 150% DPI) is labeled "BELUM DIVERIFIKASI VISUAL" and requires manual user verification; real code signing certificate procurement requires manual user action.
   memory_artifacts_observability:
     status: partial
     code: packages/memory; apps/api/src/db/memory-repository.ts; apps/api/src/routes/memory.ts; apps/api/src/db
     permission_boundary: project/user ownership; audit redaction; artifact quotas
     clients: android; windows
-    proof: packages/memory/test/memory.test.ts; apps/api/test/memory.test.ts; apps/agent-worker/test/task-executor.test.ts; apps/windows/test/layout-and-components.test.ts; pnpm --filter @personal-ai-os/android test
+    proof: packages/memory/test/memory.test.ts; packages/memory/test/cached-embedding.test.ts; packages/memory/test/evaluation.test.ts; apps/api/test/memory.test.ts; apps/agent-worker/test/task-executor.test.ts; apps/windows/test/layout-and-components.test.ts; pnpm --filter @personal-ai-os/android test; scripts/eval-memory-search.ts
     limitation: |
-      Memory subsystem fully upgraded in Sesi 10 (2026-10-15, ADR 0012):
+      Memory subsystem fully upgraded in Sesi 10 & Sesi 30 (ADR 0012, ADR 0031):
       - Fastify Route Order Fixed: Static routes (`/search`, `/proposals`, `/sweep`, `/backfill`) are declared prior to parameterized `/:id`, completely resolving the 400 error where search was intercepted as an invalid UUID. Both `POST` and `GET /v1/memories/search` return 200.
       - Hybrid Text Search Fallback: 9Router embeddings probe re-verified (`POST /v1/embeddings` returns 401 without provider credentials). Implemented PostgreSQL full-text (`tsvector`/`ts_rank` + `ILIKE`) search on `DrizzleMemoryRepository.searchSemantic` with honest metadata (`semanticSearchActive: false`, `searchMode: 'text_fallback'`). Bounded batch backfill (`backfillEmbeddings`) is available for zero-downtime vector generation when provider credentials are added.
+      - Sesi 30 Semantic Hybrid Search & Caching Overhaul (2026-10-18, ADR 0031):
+        1. Caching Hash SHA-256 (`CachedEmbeddingProvider`): Normalisasi teks dan penghitungan hash SHA-256 dengan in-memory LRU cache (default 10.000 entri) mencegah panggilan duplikat ke API embedding eksternal. Operasi batch hanya meminta vektor untuk cache misses.
+        2. Sanitasi Data Sensitif: Seluruh teks disaring lewat `redactSensitiveData` sebelum di-hash atau dikirim ke provider embedding eksternal, menjamin kunci rahasia (API key, bearer token, JWT, NIK, kartu kredit) tidak pernah bocor.
+        3. Gateway Adapter: `GatewayEmbeddingAdapter` menghubungkan `NineRouterEmbeddingProvider` dan `MockEmbeddingProvider` ke antarmuka repositori memori.
+        4. True Hybrid Search (RRF): Menggabungkan kemiripan kosinus pgvector (`1 - (memories.embedding <=> queryVector)`) dan peringkat teks PostgreSQL (`ts_rank` + `ILIKE`) dengan algoritma Reciprocal Rank Fusion ($k=60$) dan pembobotan komposit (65% vektor + 35% teks). Fallback anggun otomatis ke `text_fallback` bila provider embedding hulu belum siap atau gagal.
+        5. Evaluasi Mutu Empiris (`scripts/eval-memory-search.ts`): Diuji pada 35 memori korpus dan 35 kueri evaluasi mencakup 5 kategori. Hasil: Hybrid unggul mutlak dengan MRR 0.8905 dan Recall@3 97.1% (dibandingkan Pure Text MRR 0.6748, Recall@3 77.1%). Mode Hybrid resmi ditetapkan sebagai default.
+        6. Backfill Bertahap: `backfillEmbeddings` dilengkapi `rateLimitDelayMs` (default 250 ms) untuk mencegah HTTP 429 rate limit saat memproses memori historis.
+        7. Deduplikasi Deep Research: Ditambahkan filter tumpang-tindih teks ($\ge 0.88$) pada `DeepResearchEngine` untuk menyaring snippet duplikat lintas domain sebelum diunduh.
       - Automatic Extraction via Proposals (Zero Silent Storage): `apps/agent-worker` and `apps/api` (chat) invoke `MemoryCandidateExtractor` after conversation or task completion. Candidate memories pass `SensitiveDataFilter` (redacting/rejecting API keys, passwords, NIK, credit cards) and are stored strictly as `status: 'proposed'`. Silent storage is prohibited; users must explicitly approve or edit proposals in the client UI.
       - Retention Sweeper: Automated TTL cleanup (`sweepExpiredMemories` and `POST /v1/memories/sweep`) purges expired rows according to their retention tier (`ephemeral` 1d, `session` 7d, `30d`, `90d`, `permanent` never) and records an audit log to `audit_logs`.
       - ContextManager Provenance: Top-k budgeting is enforced, tracking `usedMemories` and `usedMemoryIds` to provide visibility into which memories shaped an assistant answer.
       - Client UI: Dedicated Memory management screens built for Windows (`MemoryView.tsx`) and Android (`MemoryScreen.tsx`), featuring active memory list, search, edit, delete, global/project scope filter, and proposals approval queue.
-      - Remaining gaps: True semantic vector cosine similarity search remains inactive pending 9Router embedding provider credentials.
+      - Remaining gaps: Probe empiris VPS 2026-10-18 mengonfirmasi 9Router mengembalikan HTTP 400 `No credentials for provider: openai`. Sistem siap 100% dan beroperasi dalam mode hybrid/text fallback yang aman hingga pemilik memasukkan kredensial OpenAI di 9Router (Opsi A).
       Artifacts: checksum sha256 is computed and stored, path traversal is rejected, and quota is enforced cross-process. Uploads stream as of 2026-10-14: `POST /v1/artifacts/stream` takes raw bytes (`application/octet-stream`, custom content-type parser so Fastify never buffers) with a 25 MiB route-scoped `bodyLimit`, pipes them into `storage.putStream` (temp file + `rename`), and `GET /v1/artifacts/:id/download` streams through the previously-unused `getArtifactStream`; the JSON route stays for small clients. MIME is no longer client-declared: `packages/tools/src/artifacts/magic-bytes.ts` sniffs the leading bytes (PNG/JPEG/GIF/WebP/PDF/ZIP, text/JSON fallback) and refuses a mismatch with `InvalidMimeTypeError`. Retention is enforced for artifacts by `apps/api/src/services/artifact-retention-sweeper.ts` on a timer in the API process (`ARTIFACT_RETENTION_SWEEP_INTERVAL_MS`, `ARTIFACT_EPHEMERAL_TTL_MS`): `ephemeral` past its TTL, `task_duration` once its task is terminal, `project_lifetime` once its project is gone, `permanent` never. Remaining gaps: `accessPolicy: 'project_members'` is ignored, the quota check-then-put is not atomic (TOCTOU).
-      Observability, Alerting, & Offsite Backup upgraded in Sesi 16 (2026-10-16, ADR 0018):
+      Observability, Alerting, & Offsite Backup upgraded in Sesi 16 & Sesi 19 (ADR 0018, ADR 0021):
       - Alerting: `VpsAlertChecker` monitors /ready, BullMQ queue health, backup freshness (<26h), disk usage (<85%), and TLS certificate expiration (<14d), dispatching Indonesian alerts to Telegram via `TelegramAlertTransport` with cooldown suppression (ADR 0018).
       - Distributed Tracing & W3C Propagation: `TelemetryTracer` enhanced with W3C `traceparent` propagation across Client -> Fastify API -> BullMQ queue -> Worker execution -> Model call. Low-sampling (default 10%) saves ARM64 resources while 100% of error spans are captured. Strict redaction (`redactSensitiveAttributes`) purges passwords, tokens, API keys, and Authorization headers.
-      - Offsite Encrypted Backup: `scripts/backup-offsite.sh` and `scripts/restore-offsite.sh` provide automated AES-256 encrypted pg_dump with SHA256 integrity verification, S3/Oracle Object Storage upload, and key table row count validation (`apps/api/test/offsite-backup-drill.test.ts`).
+      - Authenticated Offsite Backup (Sesi 19, ADR 0021): `scripts/backup-offsite.sh`, `scripts/restore-offsite.sh`, and `scripts/backup-crypto.js` implement authenticated AES-256-GCM encryption with Scrypt KDF and strict 0600 file permission enforcement (passphrase via command-line arguments strictly forbidden). Unencrypted raw dumps are purged immediately after encryption and upload. S3 upload failure or missing encryption key fails hard with non-zero exit code. Verified with automated end-to-end tests (`apps/api/test/offsite-backup-restore.test.ts`).
       - Edge Hardening: Added security headers (HSTS, nosniff, DENY, Referrer-Policy, Permissions-Policy) and access log rotation to `infrastructure/caddy/Caddyfile` and Fastify hooks.
       - Capacity Profile: Benchmarked 10 parallel chats + 1 Chromium task + 1 OMP run; established memory and concurrency limits in `docs/runbooks/resource-profiling-and-capacity.md`.
-      - Remaining gaps: Live Telegram message delivery and offsite S3 cloud bucket push depend on production secret provisioning. Physical client hardware screens require manual validation.
+      - Remaining gaps: Live Telegram message delivery and offsite S3 cloud bucket push depend on production secret provisioning. Live restore drill to Oracle Cloud Object Storage is marked "Belum diverifikasi (menunggu kredensial Oracle Object Storage dari pemilik)".
   shared_design_system:
     status: implemented
     code: packages/shared/src/design; apps/windows/src/ui/components; apps/windows/src/ui/Theme.css; apps/android/src/components/Theme.ts
@@ -149,12 +174,20 @@ capabilities:
     proof: packages/shared/test/design-tokens.test.ts; apps/windows/test/markdown-sanitization.test.ts; pnpm --filter @personal-ai-os/windows test; pnpm --filter @personal-ai-os/android test
     limitation: |
       Single token source implemented in @personal-ai-os/shared/design with dark and light themes, typography, radii, and spacing scales. All WCAG AA / AAA text contrast ratios verified by automated tests.
-      Windows client bundles Inter WOFF2 fonts locally (zero CDN requests) compliant with Tauri CSP 'self'. Base components (Button, IconButton, Chip, Popover, Drawer, Dialog, Toast, EmptyState, Spinner, Skeleton, StatusDot) and MarkdownMessage implemented with zero inline styles. External links confirmed via Dialog and opened through Tauri command open_external_url.
+      Windows client bundles Inter WOFF2 fonts locally (zero CDN requests) compliant with Tauri CSP 'self'. Base components (Button, IconButton, Chip, Popover, Drawer, Dialog, Toast, EmptyState, Spinner, Skeleton, StatusDot) and MarkdownMessage implemented with zero inline styles. In Sesi 19, all 119 inline styles across SkillMcpView, LoginScreen, MemoryView, TaskCard, and ToolStepCard were refactored to shared design token CSS classes.
       Theme preference (system/light/dark) persisted in localStorage with dynamic OS media query synchronization.
-      Android theme unified to consume @personal-ai-os/shared theme generator with lucide-react-native + react-native-svg. Screen-level migration is scheduled for Sesi 4.
+      Android theme unified to consume @personal-ai-os/shared theme generator with lucide-react-native + react-native-svg.
+      Sesi 21 Design Audit & Language (2026-10-17):
+      - Created root DESIGN.md documenting evidenced design tokens (Inter fonts, Teal-Mint accent, surface elevation, radii, spacing, component patterns).
+      - Executed read-only audit across 8 surface areas producing prioritized improvement plans in design-plans/ (windows-shell, chat, activity, settings, android-navigation, android-chat, onboarding, deep-research).
+      - Established docs/design/skills-used.md tracking UI skills (ibelick/create-design-md, ibelick/improve-ui, pbakaus/shape, pbakaus/critique, kemiljk/subtractive-design, arla6ka/token-mapping, kemiljk/real-content-design, jakubkrehel/better-writing, pbakaus/clarify).
+      - Sesi 22 UI/UX Overhaul & Token Verification (2026-10-17):
+        - Implemented automated design token linter `scripts/check-design-tokens.ts` (`pnpm check:tokens`) enforcing 0 non-token colors (#hex, rgba) and 0 inline styles across client CSS (0 violations).
+        - Applied subtractive design and accessible affordances across 8 Windows surfaces per `design-plans/windows-shell.md`, `chat.md`, `activity.md`, `settings.md`, `onboarding.md`.
+      - Visual appearance on physical screens remains labeled "BELUM DIVERIFIKASI VISUAL" pending live hardware inspection.
   runtime_bridges_and_execution:
-    status: implemented
-    code: apps/runtime-bridge/src/index.ts; packages/agent-core/src/runtimes/remote-adapter.ts; apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts; apps/api/src/routes/runtimes.ts; apps/api/src/routes/skills.ts; docs/adr/0014-integrasi-hermes-dan-runtime-picker.md
+    status: partial
+    code: apps/runtime-bridge/src/index.ts; packages/agent-core/src/runtimes/remote-adapter.ts; apps/agent-worker/src/task-executor.ts; packages/agent-core/src/router/agent-router.ts; apps/api/src/routes/runtimes.ts; apps/api/src/routes/skills.ts; docs/adr/0014-integrasi-hermes-dan-runtime-picker.md; docs/adr/0020-pemetaan-fitur-runtime.md
     permission_boundary: SecuredCapabilityGuard; child_process execution allowlist; strict rejection of push/merge/deploy; approval halting for HIGH/CRITICAL actions; untrusted output wrapping
     clients: backend (worker/runtime-bridge); windows (chat composer chips, activity cards, runtime status); android (chat chips, task detail, settings skills)
     proof: packages/agent-core/test/agent-router.test.ts; apps/agent-worker/test/worker.test.ts; apps/api/test/skills.test.ts; apps/runtime-bridge/test/index.test.ts; apps/windows/test/layout-and-components.test.ts
@@ -166,14 +199,29 @@ capabilities:
       - Hermes Skills Read-Only: Hermes skills (`hermes_telegram_messenger`, `hermes_web_search`, `hermes_browser_automation`, `hermes_memory_recall`, `hermes_script_runner`) are exposed read-only at `GET /v1/skills` and `GET /v1/runtimes/hermes/skills`. Attempts to toggle enable/disable return HTTP 403 Forbidden. Android `SettingsScreen` renders the read-only Hermes skill list in Section 6.
       - Untrusted Output Sanitization: Output from external runtimes is strictly isolated and wrapped in `<untrusted_content is_instruction="false">...</untrusted_content>` before ingestion into artifacts or context.
       - Telegram & Deep Link Safety: Single Telegram instance policy enforced (no second bot). Notifications carry deep links (`personal-ai://tasks/:taskId`, `personal-ai://approvals/:approvalId`). HIGH and CRITICAL approvals strictly require authenticated application JWT sessions and secondary modal confirmation; approvals cannot be made directly from unauthenticated Telegram messages.
-      - Remaining gaps: Physical Android device visual rendering and live Hermes VPS network binding require manual runtime verification.
+      - In Sesi 19: Fixed race condition during runtime cancellation in `apps/runtime-bridge` and verified all 9 tests pass. Renumbered runtime mapping ADR to ADR 0020 and updated verified facts (can1357/oh-my-pi, Odysseus 1.0.2 release tag, pi.dev 4 standard tools).
+      - In Sesi 20 (ADR 0022): Implemented end-to-end live agent step streaming across Windows and Android:
+        1. Unified `RuntimeStepEvent` schema in `@personal-ai-os/shared` (types: `message`, `tool_start`, `tool_end`, `file_edit` with diff, `error`, `done`; fields: `id`, `taskId`, `runtime`, `urutan`, `waktu`).
+        2. Strict sanitization & bounds: untrusted output stripped of HTML tags, event handlers, and `javascript:` pseudo-protocols; diff bounded to 32 KB, text bounded to 16 KB.
+        3. Sequential execution event queue in `TaskExecutor` emitting structured `task.progress` runtime steps persisted to `task_events` and broadcasted via WebSocket.
+        4. Windows: `ToolStepCard` integrated into `TaskCard` (Aktivitas panel) and `ChatMessages` (chat view) with collapsible timeline, colored diffs, running/completed/failed status, runtime badges, and bottom-guarded auto-scroll (`isAtBottom`).
+        5. Android: `TaskDetailScreen` timeline updated with `DiffBlock` (monospace font, 140dp height limit, "Lihat semua" / "Tutup diff" toggle), status pills, and runtime badges.
+        6. Resilience & Replay: Duplicate suppression and sequence sorting (`sortRuntimeEvents`) across reconnects using `last_event_id`.
+      - Sesi 29 Enhancements (2026-10-18, ADR 0030):
+        1. Empirical VPS Probe & Verification (`docs/verification/omp-hermes-capabilities-2026-10.md`): Verified OMP v18.6.1 and Hermes v0.20.5 on live Ubuntu 24.04 ARM64 VPS. Verified OMP JSONL event stream (`assistantMessageEvent`, `text_delta`, tool results). Verified that Hermes CLI command `hermes run` DOES NOT EXIST (fails with invalid choice); verified non-interactive mode is `hermes -z <prompt> --no-restore-cwd --safe-mode`. Verified Hermes daemon (port 9119) returns `{"ok":true,"version":"0.20.5"}` on `/api/health`, and OpenAPI inspection confirmed port 9119 is a management/dashboard REST API with NO prompt execution endpoint.
+        2. Plan Mode & Sub-agent Step UI: Extended `RuntimeStepEvent` and `AggregatedRuntimeStep` with types `'plan'` and `'subagent'`, `planItems`, `isSubagent`, and `subagentTask`. Updated `apps/runtime-bridge` and `@personal-ai-os/shared` (`normalizeOmpEvent`, `aggregateRuntimeSteps`) to classify `task` tool as subagent and `todo`/`plan` tools as plan. Windows `ToolStepCard.tsx` renders structured Plan Mode card with `ListTodo` icon, title, and formatted checklist items, and sub-agent progress badge with `GitFork` icon.
+        3. Honest Steer & One-Shot Notice: Steer intervention remains disabled for CLI one-shot execution because runtimes run via `child_process.spawn` with `stdio: ['ignore', 'pipe', 'pipe']`. Windows UI explicitly displays a subtle Indonesian notice explaining that one-shot batch execution does not support interactive mid-run steering.
+        4. Proposed 3rd Runtime (ADR 0030): Evaluated and proposed `pi.dev` (`@earendil-works/pi-coding-agent`, MIT license, RPC mode stdio) for future interactive coding without installing dependencies or modifying VPS prior to explicit user approval.
+        5. Proof: `packages/shared/test/runtime-step-event.test.ts` (30/30 tests), `apps/runtime-bridge/test/index.test.ts` (9/9 tests), `apps/windows/test/tool-step-card.test.ts` (88/88 tests), `pnpm check:tokens` (0 violations).
+      - Remaining gaps: Marked as Partial because interactive visual rendering on Windows/Android physical displays requires manual verification on real hardware ("Belum diverifikasi di perangkat fisik"), and daemon HTTP prompt execution on Hermes VPS port 9119 remains unauthenticated / non-existent for LLM prompts.
   skills_and_mcp_manager:
     status: implemented
-    code: packages/agent-core/src/skills; packages/mcp; apps/api/src/routes/skills.ts; apps/api/src/routes/mcp.ts; apps/api/src/db/skill-repository.ts; apps/api/src/db/mcp-repository.ts; apps/windows/src/ui/skills; apps/android/src/screens/SettingsScreen.tsx; docs/adr/0015-skill-dan-mcp-manager.md; docs/skills/writing-skills.md
-    permission_boundary: ManifestValidator; PermissionEngine; MCP_COMMAND_ALLOWLIST validation; SSRF loopback/cloud-metadata blocking; admin/owner authorization check; audit_logs recording
-    clients: windows (full Skill & MCP Manager with plain risk explanations, manifest viewer, project overrides, admin add server dialog, call logs); android (view & toggle skills per project, manifest viewer, MCP server & tool inspection, plain risk guide)
-    proof: packages/agent-core/test/skills.test.ts; packages/mcp/test/remote-mcp-and-security.test.ts; apps/api/test/skills.test.ts; apps/api/test/mcp-routes.test.ts; apps/api/test/schema-parity.test.ts; pnpm --filter @personal-ai-os/windows test; pnpm --filter @personal-ai-os/android test
+    code: packages/agent-core/src/skills; packages/mcp; apps/api/src/routes/skills.ts; apps/api/src/routes/skill-proposals.ts; apps/api/src/routes/mcp.ts; apps/api/src/db/skill-repository.ts; apps/api/src/db/skill-proposal-repository.ts; apps/api/src/db/mcp-repository.ts; apps/api/src/services/sensitive-data-filter.ts; apps/windows/src/ui/skills; apps/android/src/screens/SettingsScreen.tsx; docs/adr/0015-skill-dan-mcp-manager.md; docs/adr/0029-tugas-terjadwal-dan-usulan-skill.md; docs/skills/writing-skills.md
+    permission_boundary: ManifestValidator; PermissionEngine; MCP_COMMAND_ALLOWLIST validation; SSRF loopback/cloud-metadata blocking; admin/owner authorization check; sensitive data filter; audit_logs recording
+    clients: windows (full Skill & MCP Manager with plain risk explanations, manifest viewer, project overrides, admin add server dialog, call logs, skill proposals queue & unified diff review); android (view & toggle skills per project, manifest viewer, MCP server & tool inspection, plain risk guide)
+    proof: packages/agent-core/test/skills.test.ts; packages/mcp/test/remote-mcp-and-security.test.ts; apps/api/test/skills.test.ts; apps/api/test/mcp-routes.test.ts; apps/api/test/mcp-admin-security.test.ts; apps/api/test/schema-parity.test.ts; apps/api/test/schedules-and-skill-proposals.test.ts; apps/windows/test/schedules-and-skill-proposals.test.ts; pnpm --filter @personal-ai-os/windows test; pnpm --filter @personal-ai-os/android test
     limitation: |
+      Sesi 19 Security Fix: `assertAdmin` and `getUser` in `apps/api/src/routes/mcp.ts` strictly fail closed when unauthenticated in `NODE_ENV=production`. If authentication is disabled or missing in production, registering MCP routes throws a fatal error and admin operations are rejected with HTTP 403 Forbidden. Verified by `apps/api/test/mcp-admin-security.test.ts`.
       Skill and MCP Manager implemented in Sesi 14 (ADR 0015, 2026-10-16):
       - 3 High-Value Skills with manifests, tests, and documentation:
         1. `plan-before-act`: Enforces structured step plan and concrete acceptance criteria before executing actions.
@@ -190,7 +238,129 @@ capabilities:
       - Audit Logging & Plain Indonesian Risk Guidance:
         - All skill executions, MCP server changes, and tool calls recorded in `audit_logs` and `mcp_call_logs`.
         - Windows and Android clients explain risk levels in plain Indonesian before enabling tools.
+      Sesi 28 Enhancements (ADR 0029, 2026-10-18):
+      - Skill Proposals Queue (`skill_proposals` table): automated extraction of successful patterns from completed evaluator-passed tasks.
+      - Inactive by default: approved proposed skills strictly start in `isEnabled: false` state and require manual user activation. Never activate automatically.
+      - Sensitive data filtering: `sensitive-data-filter.ts` sanitizes Bearer tokens, OpenAI/9Router sk-* keys, and credential strings before proposal persistence.
+      - Manifest validation: proposals validated against ManifestValidator schemas and minimal permission policy.
+      - Unified diff review: improvements to existing skills produce unified diffs reviewable in Windows UI before approval.
+      - Full audit trail: `skill.proposed`, `skill_proposal.approved`, `skill_proposal.rejected` recorded in `audit_logs`.
       - Remaining gaps: Visual rendering on live Android device and physical Windows system tray interaction require manual verification.
+  deep_research_backend:
+    status: implemented
+    code: packages/agent-core/src/deep-research; packages/evaluator/src/research-evaluator.ts; apps/api/src/routes/research.ts; apps/api/src/db/research-repository.ts
+    permission_boundary: PermissionEngine; SsrfGuard; rate limiting (max 3 concurrent fetches); untrusted content sanitizer (<untrusted_content is_instruction="false">); plan approval gating
+    clients: backend API; android & windows (API consumers via /v1/research)
+    proof: packages/agent-core/test/deep-research.test.ts; packages/evaluator/test/evaluator.test.ts; apps/api/test/research-routes.test.ts; scripts/test-deep-research-live.ts
+    limitation: |
+      Deep Research Backend implemented in Sesi 24 (ADR 0025, 2026-10-17):
+      - 8-stage bounded pipeline: Brief -> Plan -> Collect -> Read -> Extract -> Synthesize -> Verify -> Output.
+      - Hard budgets per depth (quick, standard, deep) enforcing maxSearches, maxPagesRead, maxModelTokens, and maxDurationMs in code.
+      - Validated Planning: Structured sub-question planning via ModelGateway JSON schema with bounded retries and fallback; deep depth pauses at 'waiting_plan_approval' until explicitly approved/modified via POST /v1/research/:id/approve-plan.
+      - Collection: Web search using existing DuckDuckGo / web_search; per-domain limit of max 2 pages; deduplication by normalized URL.
+      - Reading: Lightweight HTML-to-text extraction via htmlToText; sha256 content hash and snippet metadata; model receives NO tools during reading; content wrapped in <untrusted_content is_instruction="false"> tags.
+      - Evidence Extraction: Atomic claims with statement, sourceId, short quote (<= 200 chars for copyright safety), claimType (sourced_fact, inference), and confidence score.
+      - Synthesis: Structured Markdown report with numbered citations ([src-X]), confidence scores per section, and missing information section ('Yang Tidak Ditemukan').
+      - Extended ResearchEvaluator: Single evaluator reused; added verbatim limit check (<= 200 chars), claim support verification, and information gaps criteria.
+      - Concurrency & Resources: Max 3 concurrent fetches via ConcurrencyLimiter; 1 active run at a time per user to honor 2 OCPU / 12 GB ARM64 VPS constraints.
+      - Clean-room AGPL compliance: Zero code from Odysseus (AGPL-3.0-or-later); built purely on existing repo abstractions and MIT/Apache dependencies.
+      - Frontend integration: Complete in Sesi 25 across Windows desktop and Android mobile clients.
+  deep_research_ui:
+    status: implemented
+    code: packages/shared/src/research; apps/windows/src/ui/research; apps/android/src/screens/ResearchScreen.tsx; apps/android/src/components/SourceBottomSheet.tsx
+    clients: windows & android
+    proof: packages/shared/test/research-progress.test.ts; apps/windows/test/research-ui.test.ts; apps/android/test/research.test.ts
+    limitation: |
+      Deep Research UI implemented in Sesi 25 (ADR 0026, 2026-10-17):
+      - Chat Mode Switcher: Dedicated Deep Research toggle in chat composer with depth selector (quick, standard, deep) and upfront budget transparency (searches, pages, model tokens, duration).
+      - Interactive Plan Approval: Modal/screen for 'waiting_plan_approval' state allowing users to review, add, edit, or remove sub-questions before execution resumes.
+      - Real-Time Live Progress: Reactive timeline driven by WebSocket events (plan, search, page_read, extract, synthesize, verify) with deduplication and terminal-state protection.
+      - Interactive Report Viewer: Numbered citation pills ([1], [2]) triggering source preview drawer/bottom sheet with domain credibility, quote verification, and direct outbound links.
+      - Section Confidence & Gaps: Visual meters showing confidence score per section and explicit 'Yang Tidak Ditemukan' callouts for missing information.
+      - Shared State Architecture: Cross-platform pure reducer and citation parser in `@personal-ai-os/shared` consumed identically by React (Windows) and React Native (Android).
+      - Remaining gaps: Physical device validation on Android and Windows native tray notifications require manual verification.
+  compare_multi_model:
+    status: implemented
+    code: packages/agent-core/src/compare; packages/shared/src/compare; apps/api/src/routes/compare.ts; apps/api/src/db/compare-repository.ts; apps/windows/src/ui/compare; apps/android/src/screens/CompareScreen.tsx
+    permission_boundary: PermissionEngine; server-only gateway calls; no tools or agents executed (pure chat); strict per-model rate limit & token budget (default 4000, max 8000)
+    clients: windows (side-by-side columns); android (segmented tabs / horizontal swipe); backend REST & WebSocket
+    proof: packages/shared/test/compare-reducer.test.ts; packages/agent-core/test/compare-engine.test.ts; apps/api/test/compare-routes.test.ts; apps/windows/test/compare-ui.test.ts; apps/android/test/compare.test.ts; scripts/test-compare-live.ts
+    limitation: |
+      Compare Multi-Model implemented in Sesi 26 (ADR 0027, 2026-10-17):
+      - Multi-Model Parallel Inference: User selects 2–3 verified models from the catalog; server dispatches parallel requests bounded by concurrency limiter and cumulative token budget; per-column streaming via WebSocket events.
+      - Strict No-Fallback Rule: If a model fails, that column is marked 'failed' with the exact upstream error. Fallback substitution is forbidden so comparisons remain truthful.
+      - Blind Mode (Mode Buta): Model identities are masked as 'Model A', 'Model B', etc. without leaking `modelId` across payloads until revealed via explicit Reveal or Pick Winner action.
+      - Optional Synthesis: Extra single-pass prompt synthesizing Persamaan, Perbedaan, and Rekomendasi, with the synthesizing model explicitly labeled.
+      - Honest Gateway Metrics: Latency (ms), tokens (in/out/total), and cost displayed ONLY if provided by gateway, never fabricated.
+      - Persistence & Promotion: `compare_runs` and `compare_results` tables with migration `0016_compare_runs.sql`. Winning or selected answer can be promoted to a new or existing chat conversation.
+      - Cross-platform UI: Windows side-by-side columns (`CompareView.tsx`); Android segmented tabs / horizontal view (`CompareScreen.tsx`).
+      - Remaining gaps: Visual rendering on live physical Android device and live physical Windows desktop require manual verification. Real 9Router calls with live model keys require explicit user permission.
+  session_features_native:
+    status: implemented
+    code: apps/api/src/routes/chat.ts; apps/api/src/routes/prompt-templates.ts; apps/api/src/services/conversation-exporter.ts; apps/api/src/db/chat-repository.ts; apps/api/src/db/prompt-template-repository.ts; packages/memory/src/context/context-manager.ts; apps/windows/src/ui/chat; apps/android/src/api
+    permission_boundary: authenticated API routes; strict conversation & template user ownership; zero external sharing; standalone sanitized exports
+    clients: windows (tree branch navigator `< 1/2 >`, Markdown/HTML export, prompt template slash autocomplete, busy queue banner & buttons, context compaction accordion banner, model cycle shortcut Ctrl+M); android (tree & template API client & typed schemas)
+    proof: apps/api/test/session-tree-and-templates.test.ts; packages/memory/test/context-manager.test.ts; apps/windows/test/layout-and-components.test.ts; apps/android/test/client.test.ts
+    limitation: |
+      Native Pi-Style Session Features implemented in Sesi 27 (ADR 0028, 2026-10-17):
+      - Message Tree Branching:
+        - Messages store `parentMessageId`, `isActiveBranch`, and compute sibling index/count (`< 1/2 >`).
+        - Editing user messages or retrying assistant answers spawns a new branch instead of overwriting history.
+        - `switchBranch` and `deleteBranch` endpoints support clean linear and sub-branch navigation.
+        - Backfill migration (`0017_session_tree_and_templates.sql`) safely links existing linear messages without data loss.
+      - Sanitized Conversation Export:
+        - Standalone HTML (zero external CSS/JS/fonts, inline strict dark styling, full HTML entity escaping, meta CSP) and GitHub-flavored Markdown.
+        - Redaction engine strips auth tokens, bearer headers, 9Router credentials, and sensitive API keys.
+        - Third-party cloud sharing services deliberately not implemented to protect data privacy.
+      - Server-Side Prompt Templates:
+        - `prompt_templates` table supporting `name`, `title`, and `content` with simple variable substitution `{{var}}`.
+        - Triggered natively via `/name` slash command autocomplete popover in Windows chat composer.
+      - Agent Busy Message Queueing:
+        - Submitting a message while agent is busy or streaming changes action to 'Antre' (Queue Message).
+        - Queued messages are batched in order and sent sequentially as soon as the active stream finishes.
+        - 'Arahkan/Steer' mid-run intervention button DELIBERATELY OMITTED until runtime capabilities are probed in Sesi 29.
+      - Context Compaction:
+        - Automatic compaction triggered when estimated tokens approach model context limits (configurable threshold, default 80%).
+        - Retains 100% of system prompt instructions, core behavioral rules, and pinned memory items.
+        - Original messages remain preserved in database; client displays collapsible 'Konteks diringkas' banner with 'Lihat isi ringkasan'.
+      - Windows Favorite Model Cycle Shortcut:
+        - `Ctrl+M` / `Alt+M` shortcut cycles instantly through user's favorite models (defined in Sesi 6).
+      - Remaining gaps: Visual rendering on live physical Android device and live physical Windows desktop require manual verification.
+  hybrid_memory_search:
+    status: implemented
+    code: packages/memory/src/search/hybrid-search.ts; packages/memory/src/embeddings/cached-embedding-provider.ts; apps/api/src/db/drizzle-memory-repository.ts
+    permission_boundary: authenticated API routes; strict per-user memory isolation; PII/secret redaction prior to embedding calls
+    clients: android & windows (consumed through /v1/memories and memory search)
+    proof: packages/memory/test/hybrid-search.test.ts; packages/memory/test/benchmark-hybrid-search.test.ts; apps/api/test/memories-routes.test.ts
+    limitation: |
+      True Hybrid Search implemented in Sesi 30 (ADR 0031, 2026-10-18):
+      - RRF (Reciprocal Rank Fusion) ranking combining pgvector cosine distance and PostgreSQL full-text search (tsvector/websearch_to_tsquery) with k=60 and 65% vector / 35% text weighting.
+      - CachedEmbeddingProvider: SHA-256 hash LRU cache (1000 items) and automatic PII/credential sanitization (redactSensitiveData).
+      - Benchmark evaluation: 35 query evaluation suite demonstrates Hybrid Search superiority with MRR 0.8905 and Recall@3 97.14% (vs Text MRR 0.6748, Recall@3 77.14%).
+      - Empirical 9Router probe: documented HTTP 400 No credentials for provider: openai on current VPS setup; graceful text fallback active when vector embeddings are unavailable.
+  runtime_streaming_and_diff:
+    status: implemented
+    code: packages/shared/src/tasks/runtime-step-event.ts; apps/windows/src/ui/chat/ToolStep.tsx; apps/windows/src/ui/chat/DiffLineViewer.tsx
+    permission_boundary: SecuredCapabilityGuard; read-only streaming of sanitized execution events; diff masking of secrets
+    clients: windows desktop (streaming progress and unified diff viewer)
+    proof: packages/shared/test/runtime-step-event.test.ts; apps/windows/test/toolstep.test.ts
+    limitation: |
+      Runtime Execution Streaming implemented in Sesi 28 (2026-10-18):
+      - ToolStep component aggregates streaming runtime events (tool_start, tool_finish, file_edit, task_progress) into interactive cards.
+      - Inline unified diff viewer with line-by-line syntax coloring, hunk headers, and copy buttons.
+      - Runtime pill indicators for active execution engine (Native, OMP, Hermes).
+  release_readiness_v040:
+    status: implemented
+    code: package.json; apps/windows/src-tauri/tauri.conf.json; apps/android/app.json; CHANGELOG.md; docs/adr/0032-qa-akhir-dan-rilis-040.md
+    permission_boundary: PermissionEngine; AGENTS.md rule 9 (zero unauthorized deploy/tag/push)
+    clients: windows; android; backend API; agent worker; scheduler
+    proof: pnpm test:unit; pnpm test:live; pnpm -r typecheck; pnpm -r lint; pnpm -r test; pnpm -r build; pnpm check:tokens; pnpm verify:audit
+    limitation: |
+      QA Akhir & Rilis 0.4.0 implemented in Sesi 31 (ADR 0032, 2026-10-18):
+      - 100% Quality Gates: All 14 packages pass typecheck, lint, unit tests, live tests, token check, audit verification, and production bundling.
+      - Design & Accessibility Audit: WCAG AA/AAA contrast verified (Dark 14.8:1, Light 15.6:1), prefers-reduced-motion respected, TalkBack accessibilityLabels in Android, responsive at 1366x768 and 150% DPI scale.
+      - Security Audit: fail-closed MCP admin, SSRF-guarded Deep Research & remote MCP, encrypted offsite backups without guessed keys, no tokens in logs, zero AGPL code copied from Odysseus.
+      - Sesi 31 release candidate version bumped to 0.4.0 across monorepo.
 simulation:
   status: test_or_explicit_placeholder_only
   marker: '[PLACEHOLDER_GENERIC_WORKER]'

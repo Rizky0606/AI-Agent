@@ -8,16 +8,30 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 're
 
 export interface ChatFrame {
   type: string;
-  conversationId?: string;
-  messageId?: string;
-  delta?: string;
-  content?: string;
-  code?: string;
-  message?: string | { id: string; role: 'user' | 'assistant' | 'system'; content: string; cancelled?: boolean; metadata?: Record<string, unknown> };
-  usage?: Record<string, unknown>;
-  resolvedModel?: string;
-  model?: string;
-  fallbackUsed?: boolean;
+  conversationId?: string | undefined;
+  messageId?: string | undefined;
+  delta?: string | undefined;
+  content?: string | undefined;
+  code?: string | undefined;
+  message?:
+    | string
+    | {
+        id: string;
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+        cancelled?: boolean | undefined;
+        metadata?: Record<string, unknown> | undefined;
+        parentMessageId?: string | null | undefined;
+        isActiveBranch?: boolean | undefined;
+        branchIndex?: number | undefined;
+        branchCount?: number | undefined;
+        siblingMessageIds?: string[] | undefined;
+      }
+    | undefined;
+  usage?: Record<string, unknown> | undefined;
+  resolvedModel?: string | undefined;
+  model?: string | undefined;
+  fallbackUsed?: boolean | undefined;
 }
 
 export interface AgentConnectionOptions {

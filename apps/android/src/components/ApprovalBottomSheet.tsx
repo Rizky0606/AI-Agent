@@ -39,7 +39,15 @@ export const ApprovalBottomSheet: React.FC<ApprovalBottomSheetProps> = ({
   if (!approval) return null;
 
   const isPending = approval.status === 'pending';
-  const isHighRisk = approval.riskLevel === 'HIGH' || approval.riskLevel === 'CRITICAL';
+  const isCritical = approval.riskLevel === 'CRITICAL';
+  const isHigh = approval.riskLevel === 'HIGH';
+  const isHighRisk = isCritical || isHigh;
+  const riskColor = isCritical ? theme.colors.riskCritical : isHigh ? theme.colors.riskHigh : theme.colors.textPrimary;
+  const riskBgColor = isCritical
+    ? theme.colors.riskCriticalBg
+    : isHigh
+      ? theme.colors.riskHighBg
+      : theme.colors.surfaceElevated;
 
   const handleApprovePress = () => {
     if (isHighRisk) {
@@ -204,12 +212,8 @@ export const ApprovalBottomSheet: React.FC<ApprovalBottomSheetProps> = ({
                   style={[
                     styles.consequenceBox,
                     {
-                      backgroundColor: isHighRisk
-                        ? theme.colors.riskHighBg
-                        : theme.colors.surfaceElevated,
-                      borderColor: isHighRisk
-                        ? theme.colors.riskHigh
-                        : theme.colors.surfaceBorder,
+                      backgroundColor: isHighRisk ? riskBgColor : theme.colors.surfaceElevated,
+                      borderColor: isHighRisk ? riskColor : theme.colors.surfaceBorder,
                     },
                   ]}
                 >
@@ -217,11 +221,10 @@ export const ApprovalBottomSheet: React.FC<ApprovalBottomSheetProps> = ({
                     style={[
                       styles.consequenceText,
                       {
-                        color: isHighRisk
-                          ? theme.colors.riskHigh
-                          : theme.colors.textPrimary,
+                        color: isHighRisk ? riskColor : theme.colors.textPrimary,
                       },
                     ]}
+                    allowFontScaling
                   >
                     {approval.consequence}
                   </Text>
@@ -332,14 +335,15 @@ export const ApprovalBottomSheet: React.FC<ApprovalBottomSheetProps> = ({
               styles.confirmCard,
               {
                 backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.riskHigh,
+                borderColor: riskColor,
               },
             ]}
           >
             <View style={styles.confirmHeader}>
-              <AlertTriangle size={28} color={theme.colors.riskHigh} />
+              <AlertTriangle size={28} color={riskColor} />
               <Text
                 style={[styles.confirmTitle, { color: theme.colors.textPrimary }]}
+                allowFontScaling
               >
                 {idID.approval.secondaryConfirmTitle}
               </Text>
@@ -347,6 +351,7 @@ export const ApprovalBottomSheet: React.FC<ApprovalBottomSheetProps> = ({
 
             <Text
               style={[styles.confirmDesc, { color: theme.colors.textSecondary }]}
+              allowFontScaling
             >
               {idID.approval.secondaryConfirmDesc}
             </Text>
@@ -355,12 +360,15 @@ export const ApprovalBottomSheet: React.FC<ApprovalBottomSheetProps> = ({
               style={[
                 styles.confirmConsequenceBox,
                 {
-                  backgroundColor: theme.colors.riskHighBg,
-                  borderColor: theme.colors.riskHigh,
+                  backgroundColor: riskBgColor,
+                  borderColor: riskColor,
                 },
               ]}
             >
-              <Text style={[styles.confirmConsequenceText, { color: theme.colors.riskHigh }]}>
+              <Text
+                style={[styles.confirmConsequenceText, { color: riskColor }]}
+                allowFontScaling
+              >
                 {approval.consequence}
               </Text>
             </View>
@@ -371,11 +379,11 @@ export const ApprovalBottomSheet: React.FC<ApprovalBottomSheetProps> = ({
                 accessibilityLabel={idID.approval.confirmProceed}
                 style={[
                   styles.confirmProceedBtn,
-                  { backgroundColor: theme.colors.riskHigh },
+                  { backgroundColor: riskColor },
                 ]}
                 onPress={() => void handleConfirmSecondaryApprove()}
               >
-                <Text style={styles.confirmProceedText}>
+                <Text style={styles.confirmProceedText} allowFontScaling>
                   {idID.approval.confirmProceed}
                 </Text>
               </TouchableOpacity>

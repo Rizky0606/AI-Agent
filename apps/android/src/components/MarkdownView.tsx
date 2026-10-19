@@ -186,9 +186,15 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({
                     </Text>
                   </TouchableOpacity>
                 </View>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  nestedScrollEnabled
+                  contentContainerStyle={{ flexGrow: 1 }}
+                >
                   <Text
                     selectable
+                    allowFontScaling
                     style={[
                       styles.codeContent,
                       {

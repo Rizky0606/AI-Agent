@@ -1,4 +1,4 @@
-# Installable app releases (v0.3.0)
+# Installable app releases (v0.4.0)
 
 ## Build installers
 
@@ -7,8 +7,8 @@ GitHub Actions → **Build installable apps** (`.github/workflows/release-instal
 - Windows runs `tauri build --bundles nsis` on `windows-latest`.
 
 Download artifacts from the completed Actions run:
-- `personal-ai-os-android-apk` → `personal-ai-os.apk` (Versi 0.3.0)
-- `personal-ai-os-windows-installer` → `Personal AI OS - Windows Agent_0.3.0_x64-setup.exe` (Versi 0.3.0)
+- `personal-ai-os-android-apk` → `personal-ai-os.apk` (Versi 0.4.0)
+- `personal-ai-os-windows-installer` → `Personal AI OS - Windows Agent_0.4.0_x64-setup.exe` (Versi 0.4.0)
 
 No installer is committed to the Git repository. Windows may display a Windows Defender SmartScreen ("Windows protected your PC") warning because the binary is unsigned by an EV certificate (see `docs/windows/code-signing-runbook.md` for production signing options), and the APK carries the debug keystore for easy sideloading.
 

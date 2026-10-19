@@ -1,7 +1,7 @@
 {
   "name": "@personal-ai-os/windows",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/*.test.ts",
     "dev": "vite",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:unit": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
     "@personal-ai-os/permissions": "workspace:*",

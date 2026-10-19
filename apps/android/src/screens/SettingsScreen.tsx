@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  Clipboard,
   Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -16,6 +18,8 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Columns2,
+  Copy,
   Cpu,
   FileCode,
   FolderKanban,
@@ -52,12 +56,14 @@ export interface SettingsScreenProps {
   onNavigateToArtifacts?: () => void;
   onNavigateToProjects?: () => void;
   onNavigateToMemory?: () => void;
+  onNavigateToCompare?: () => void;
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onNavigateToArtifacts,
   onNavigateToProjects,
   onNavigateToMemory,
+  onNavigateToCompare,
 }) => {
   const theme = useAppTheme();
   const { user, device, serverUrl, logout } = useAuthStore();
@@ -66,7 +72,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     setTheme,
     pushNotificationsEnabled,
     setPushNotificationsEnabled,
+    showToast,
   } = useUiStore();
+
+  const copyToClipboard = (text: string, label: string) => {
+    Clipboard.setString(text);
+    showToast(`${label} berhasil disalin ke clipboard`);
+  };
   const { userDefaultModel } = useChatStore();
   const { data: health, isLoading: healthLoading } = useHealth();
   const { data: skills, isLoading: skillsLoading } = useSkills();
@@ -209,19 +221,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             },
           ]}
         >
-          <Text style={[styles.modelName, { color: theme.colors.textPrimary }]}>
-            🧠 {userDefaultModel ?? 'Auto (Disarankan oleh Gateway)'}
-          </Text>
-          <TouchableOpacity
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Cpu size={16} color={theme.colors.primary} />
+            <Text
+              style={[styles.modelName, { color: theme.colors.textPrimary }]}
+              allowFontScaling
+            >
+              {userDefaultModel ?? 'Auto (Disarankan oleh Gateway)'}
+            </Text>
+          </View>
+          <Pressable
+            android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
             accessibilityRole="button"
             accessibilityLabel={idID.more.changeModelButton}
             style={[styles.changeModelBtn, { backgroundColor: theme.colors.primary }]}
             onPress={() => setIsModelModalOpen(true)}
           >
-            <Text style={styles.changeModelBtnText}>
+            <Text style={styles.changeModelBtnText} allowFontScaling>
               {idID.more.changeModelButton}
             </Text>
-          </TouchableOpacity>
+          </Pressable>
         </View>
       </View>
 
@@ -375,6 +394,57 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 ]}
               >
                 Buka Pusat Memori
+              </Text>
+            </View>
+            <ChevronRight size={16} color={theme.colors.textMuted} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {/* 5b. Bandingkan Multi-Model (Sesi 26) */}
+      <View
+        style={[
+          styles.card,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.surfaceBorder,
+          },
+        ]}
+      >
+        <View style={styles.cardHeader}>
+          <Columns2 size={18} color={theme.colors.primary} />
+          <Text style={[styles.cardTitle, { color: theme.colors.textPrimary }]}>
+            {idID.compare.title}
+          </Text>
+        </View>
+
+        <Text style={[styles.cardDesc, { color: theme.colors.textSecondary }]}>
+          {idID.compare.subtitle}
+        </Text>
+
+        {onNavigateToCompare ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Buka Bandingkan Model"
+            style={[
+              styles.navLinkBtn,
+              {
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.surfaceBorder,
+                marginTop: 10,
+              },
+            ]}
+            onPress={onNavigateToCompare}
+          >
+            <View style={styles.navLinkLeft}>
+              <Columns2 size={16} color={theme.colors.primary} />
+              <Text
+                style={[
+                  styles.navLinkText,
+                  { color: theme.colors.textPrimary },
+                ]}
+              >
+                Buka Bandingkan Model
               </Text>
             </View>
             <ChevronRight size={16} color={theme.colors.textMuted} />
@@ -677,11 +747,27 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           <View style={styles.advancedContent}>
             {/* Server Endpoint */}
             <View style={styles.diagRow}>
-              <Text style={[styles.diagLabel, { color: theme.colors.textMuted }]}>
-                {idID.more.serverEndpointLabel}:
-              </Text>
+              <View style={styles.diagLabelRow}>
+                <Text style={[styles.diagLabel, { color: theme.colors.textMuted }]} allowFontScaling>
+                  {idID.more.serverEndpointLabel}:
+                </Text>
+                <Pressable
+                  android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                  style={styles.copyPillBtn}
+                  onPress={() => copyToClipboard(serverUrl, idID.more.serverEndpointLabel)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Salin ${idID.more.serverEndpointLabel}`}
+                >
+                  <Copy size={12} color={theme.colors.primary} />
+                  <Text style={[styles.copyPillText, { color: theme.colors.primary }]} allowFontScaling>
+                    Salin
+                  </Text>
+                </Pressable>
+              </View>
               <Text
                 style={[styles.diagValue, { color: theme.colors.textSecondary }]}
+                selectable
+                allowFontScaling
               >
                 {serverUrl}
               </Text>
@@ -689,12 +775,30 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
             {/* Device ID */}
             <View style={styles.diagRow}>
-              <Text style={[styles.diagLabel, { color: theme.colors.textMuted }]}>
-                {idID.more.deviceIdLabel}:
-              </Text>
+              <View style={styles.diagLabelRow}>
+                <Text style={[styles.diagLabel, { color: theme.colors.textMuted }]} allowFontScaling>
+                  {idID.more.deviceIdLabel}:
+                </Text>
+                {device?.id ? (
+                  <Pressable
+                    android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                    style={styles.copyPillBtn}
+                    onPress={() => copyToClipboard(device.id, idID.more.deviceIdLabel)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Salin ${idID.more.deviceIdLabel}`}
+                  >
+                    <Copy size={12} color={theme.colors.primary} />
+                    <Text style={[styles.copyPillText, { color: theme.colors.primary }]} allowFontScaling>
+                      Salin
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
               <Text
                 style={[styles.diagValue, { color: theme.colors.textSecondary }]}
                 numberOfLines={1}
+                selectable
+                allowFontScaling
               >
                 {device?.id ?? 'Belum terdaftar'}
               </Text>
@@ -702,12 +806,30 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
             {/* User ID */}
             <View style={styles.diagRow}>
-              <Text style={[styles.diagLabel, { color: theme.colors.textMuted }]}>
-                {idID.more.userIdLabel}:
-              </Text>
+              <View style={styles.diagLabelRow}>
+                <Text style={[styles.diagLabel, { color: theme.colors.textMuted }]} allowFontScaling>
+                  {idID.more.userIdLabel}:
+                </Text>
+                {user?.id ? (
+                  <Pressable
+                    android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
+                    style={styles.copyPillBtn}
+                    onPress={() => copyToClipboard(user.id, idID.more.userIdLabel)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Salin ${idID.more.userIdLabel}`}
+                  >
+                    <Copy size={12} color={theme.colors.primary} />
+                    <Text style={[styles.copyPillText, { color: theme.colors.primary }]} allowFontScaling>
+                      Salin
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
               <Text
                 style={[styles.diagValue, { color: theme.colors.textSecondary }]}
                 numberOfLines={1}
+                selectable
+                allowFontScaling
               >
                 {user?.id ?? 'Belum ada'}
               </Text>
@@ -1038,11 +1160,30 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   diagRow: {
-    marginVertical: 4,
+    marginVertical: 6,
+  },
+  diagLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
   },
   diagLabel: {
     fontSize: 11,
     fontWeight: '600',
+  },
+  copyPillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    minHeight: 36,
+  },
+  copyPillText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   diagValue: {
     fontSize: 12,

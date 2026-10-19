@@ -89,7 +89,8 @@ pnpm --filter @personal-ai-os/agent-worker test:recovery
 Lihat dokumentasi lengkap di:
 - [Panduan Instalasi Aplikasi (Android APK & Windows NSIS)](docs/runbooks/install-apps.md)
 - [Prosedur Deployment & Kapasitas VPS](docs/runbooks/deployment.md)
-- [Laporan Penerimaan & Status Rilis 0.3.0](docs/acceptance-report-2026-10-16.md)
+- [Laporan Penerimaan & Status Rilis 0.4.0](docs/capability-acceptance-report.md)
+- [Matriks Kemampuan Lengkap (Capability Matrix)](docs/capability-matrix.yaml)
 - [Catatan Perubahan Versi (CHANGELOG)](CHANGELOG.md)
 
 ---

@@ -109,7 +109,7 @@ export const registerSchedulesRoutes = async (
           projectId: body.projectId,
           runAt: body.runAt,
           cronExpression: body.cronExpression,
-          timezone: body.timezone,
+          timezone: body.timezone || 'Asia/Jakarta',
           missedRunPolicy: body.missedRunPolicy,
           taskPayload: normalizedTaskPayload,
         });

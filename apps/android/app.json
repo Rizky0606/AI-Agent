@@ -2,7 +2,7 @@
   "expo": {
     "name": "Personal AI OS",
     "slug": "personal-ai-os",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "personal-ai",

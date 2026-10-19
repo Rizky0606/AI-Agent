@@ -89,6 +89,7 @@ export function registerMemoryRoutes(
     type: MemoryType | undefined,
     limit: number,
     threshold: number,
+    searchMode?: 'semantic' | 'text' | 'hybrid',
   ) => {
     const isActive =
       typeof memoryRepo.isSemanticSearchActive === 'function'
@@ -101,12 +102,15 @@ export function registerMemoryRoutes(
       type,
       limit,
       threshold,
+      searchMode,
     });
+
+    const activeMode = results[0]?.searchMode ?? (isActive ? (searchMode ?? 'hybrid') : 'text_fallback');
 
     return {
       data: results,
       semanticSearchActive: isActive,
-      searchMode: isActive ? 'semantic' : 'text_fallback',
+      searchMode: activeMode,
       status: isActive ? 'active' : 'inactive',
       notice: isActive
         ? undefined
@@ -124,13 +128,14 @@ export function registerMemoryRoutes(
           type?: MemoryType;
           limit?: number;
           threshold?: number;
+          searchMode?: 'semantic' | 'text' | 'hybrid';
         };
       }>,
       reply: FastifyReply,
     ) => {
       const user = await getUser(req);
-      const { query, projectId, type, limit = 10, threshold = 0.0 } = req.body;
-      const response = await handleSearch(user.id, query, projectId, type, limit, threshold);
+      const { query, projectId, type, limit = 10, threshold = 0.0, searchMode } = req.body;
+      const response = await handleSearch(user.id, query, projectId, type, limit, threshold, searchMode);
       return reply.send(response);
     },
   );
@@ -146,6 +151,7 @@ export function registerMemoryRoutes(
           type?: MemoryType;
           limit?: string;
           threshold?: string;
+          searchMode?: 'semantic' | 'text' | 'hybrid';
         };
       }>,
       reply: FastifyReply,
@@ -161,6 +167,7 @@ export function registerMemoryRoutes(
         req.query.type,
         limit,
         threshold,
+        req.query.searchMode,
       );
       return reply.send(response);
     },
@@ -227,14 +234,14 @@ export function registerMemoryRoutes(
     '/v1/memories/backfill',
     async (
       req: FastifyRequest<{
-        Body?: { batchSize?: number; maxRows?: number };
+        Body?: { batchSize?: number; maxRows?: number; rateLimitDelayMs?: number };
       }>,
       reply: FastifyReply,
     ) => {
       await getUser(req);
-      const { batchSize = 20, maxRows = 100 } = req.body ?? {};
+      const { batchSize = 20, maxRows = 100, rateLimitDelayMs = 250 } = req.body ?? {};
       const result = memoryRepo.backfillEmbeddings
-        ? await memoryRepo.backfillEmbeddings(batchSize, maxRows)
+        ? await memoryRepo.backfillEmbeddings(batchSize, maxRows, rateLimitDelayMs)
         : { processed: 0, success: 0, failed: 0 };
       return reply.send({ data: result });
     },

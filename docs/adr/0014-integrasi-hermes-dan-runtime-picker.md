@@ -78,5 +78,5 @@ Jika runtime yang ditargetkan atau dipilih pengguna tidak sehat (`health.healthy
 - Ketahanan sistem: kegagalan salah satu runtime di host tidak melumpuhkan seluruh platform berkat fallback otomatis yang jujur.
 
 ### Batasan
-- Hermes CLI dipanggil melalui `-z` (mode teks aman) sesuai jalur terverifikasi ADR 0004.
+- Hermes CLI dipanggil melalui `-z` (mode teks aman) sesuai jalur terverifikasi ADR 0020.
 - Sinkronisasi skill dinamis Hermes dari VPS bergantung pada ketersediaan runtime bridge.

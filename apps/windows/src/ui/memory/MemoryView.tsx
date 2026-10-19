@@ -339,7 +339,7 @@ export const MemoryView: React.FC = () => {
       ) : (
         /* Proposals Queue Tab */
         <div className="memory-list">
-          <div className="memory-notice-card" style={{ background: 'rgba(59, 130, 246, 0.1)', borderColor: 'rgba(59, 130, 246, 0.3)', color: '#3b82f6' }}>
+          <div className="memory-notice-card notice-info">
             <ShieldCheck size={20} />
             <span>
               <strong>Prinsip Privasi Memori:</strong> Tidak ada penyimpanan diam-diam. Semua temuan
@@ -402,17 +402,16 @@ export const MemoryView: React.FC = () => {
           onClose={() => setEditingMemory(null)}
           title="Koreksi Memori Pengguna"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>
+          <div className="memory-dialog-content">
+            <p className="memory-dialog-desc">
               Ubah atau sempurnakan catatan memori agar AI memahaminya secara akurat.
             </p>
             <textarea
-              className="memory-search-input"
-              style={{ minHeight: '120px', resize: 'vertical' }}
+              className="memory-search-input memory-dialog-textarea"
               value={editContent}
               onChange={(e) => setEditContent(e.target.value)}
             />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+            <div className="memory-dialog-actions">
               <Button variant="ghost" onClick={() => setEditingMemory(null)}>
                 Batal
               </Button>
@@ -431,9 +430,9 @@ export const MemoryView: React.FC = () => {
           onClose={() => setDeletingId(null)}
           title="Hapus Memori"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          <div className="memory-dialog-content">
             <p>Apakah Anda yakin ingin menghapus memori ini? Tindakan ini tidak dapat dibatalkan.</p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+            <div className="memory-dialog-actions">
               <Button variant="ghost" onClick={() => setDeletingId(null)}>
                 Batal
               </Button>
@@ -452,15 +451,14 @@ export const MemoryView: React.FC = () => {
           onClose={() => setIsNewDialogOpen(false)}
           title="Tambah Memori Baru"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-            <div style={{ display: 'flex', gap: 'var(--space-4)' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', display: 'block', marginBottom: '4px' }}>
+          <div className="memory-dialog-content">
+            <div className="memory-dialog-grid-row">
+              <div className="memory-dialog-grid-col">
+                <label className="memory-dialog-label">
                   Tipe Memori
                 </label>
                 <select
-                  className="memory-select"
-                  style={{ width: '100%' }}
+                  className="memory-select memory-dialog-select"
                   value={newType}
                   onChange={(e) => setNewType(e.target.value)}
                 >
@@ -471,13 +469,12 @@ export const MemoryView: React.FC = () => {
                 </select>
               </div>
 
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', display: 'block', marginBottom: '4px' }}>
+              <div className="memory-dialog-grid-col">
+                <label className="memory-dialog-label">
                   Cakupan
                 </label>
                 <select
-                  className="memory-select"
-                  style={{ width: '100%' }}
+                  className="memory-select memory-dialog-select"
                   value={newScope}
                   onChange={(e) => setNewScope(e.target.value as 'user' | 'project')}
                 >
@@ -488,19 +485,18 @@ export const MemoryView: React.FC = () => {
             </div>
 
             <div>
-              <label style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', display: 'block', marginBottom: '4px' }}>
+              <label className="memory-dialog-label">
                 Isi Memori (Data sensitif/kredensial dilarang)
               </label>
               <textarea
-                className="memory-search-input"
-                style={{ minHeight: '120px', resize: 'vertical' }}
+                className="memory-search-input memory-dialog-textarea"
                 placeholder="Contoh: Selalu sertakan kesimpulan eksekutif di awal setiap laporan arsitektur."
                 value={newContent}
                 onChange={(e) => setNewContent(e.target.value)}
               />
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+            <div className="memory-dialog-actions">
               <Button variant="ghost" onClick={() => setIsNewDialogOpen(false)}>
                 Batal
               </Button>

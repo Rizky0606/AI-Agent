@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   FlatList,
   Modal,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -251,7 +252,8 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
               renderItem={({ item }) => {
                 const isSelected = taskStatusFilter === item.value;
                 return (
-                  <TouchableOpacity
+                  <Pressable
+                    android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
                     accessibilityRole="button"
                     accessibilityLabel={`Filter ${item.label}`}
                     style={[
@@ -275,15 +277,17 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
                           fontWeight: isSelected ? '700' : '600',
                         },
                       ]}
+                      allowFontScaling
                     >
                       {item.label}
                     </Text>
-                  </TouchableOpacity>
+                  </Pressable>
                 );
               }}
             />
 
-            <TouchableOpacity
+            <Pressable
+              android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
               accessibilityRole="button"
               accessibilityLabel={idID.activity.newRuntimeTask}
               style={[styles.createBtn, { backgroundColor: theme.colors.primary }]}
@@ -293,8 +297,10 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
               }}
             >
               <Plus size={16} color="#fff" />
-              <Text style={styles.createBtnText}>Tugas</Text>
-            </TouchableOpacity>
+              <Text style={styles.createBtnText} allowFontScaling>
+                Tugas
+              </Text>
+            </Pressable>
           </View>
 
           {tasksLoading ? (
@@ -303,7 +309,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
             </View>
           ) : tasks?.length === 0 ? (
             <View style={styles.centerContainer}>
-              <Text style={[styles.emptyText, { color: theme.colors.textMuted }]}>
+              <Text style={[styles.emptyText, { color: theme.colors.textMuted }]} allowFontScaling>
                 {idID.activity.emptyTasks}
               </Text>
             </View>
@@ -315,7 +321,8 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
               onRefresh={refetchTasks}
               refreshing={tasksLoading}
               renderItem={({ item }: { item: TaskItem }) => (
-                <TouchableOpacity
+                <Pressable
+                  android_ripple={{ color: 'rgba(128, 128, 128, 0.15)' }}
                   accessibilityRole="button"
                   accessibilityLabel={`Tugas ${item.kind}, status ${item.status}, progres ${item.progress}%`}
                   style={[
@@ -331,6 +338,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
                     <Text
                       style={[styles.taskKindText, { color: theme.colors.textPrimary }]}
                       numberOfLines={1}
+                      allowFontScaling
                     >
                       {item.kind}
                     </Text>
@@ -344,6 +352,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
                         styles.progressPercent,
                         { color: theme.colors.textSecondary },
                       ]}
+                      allowFontScaling
                     >
                       {item.progress}%
                     </Text>
@@ -353,6 +362,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
                     <Text
                       style={{ color: theme.colors.riskHigh, fontSize: 12, marginTop: 4 }}
                       numberOfLines={2}
+                      allowFontScaling
                     >
                       Keterangan: {item.error}
                     </Text>
@@ -360,10 +370,11 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
 
                   <Text
                     style={[styles.taskTime, { color: theme.colors.textMuted }]}
+                    allowFontScaling
                   >
                     {new Date(item.createdAt).toLocaleString()}
                   </Text>
-                </TouchableOpacity>
+                </Pressable>
               )}
             />
           )}
@@ -380,7 +391,8 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
             renderItem={({ item }) => {
               const isSelected = approvalStatusFilter === item.value;
               return (
-                <TouchableOpacity
+                <Pressable
+                  android_ripple={{ color: 'rgba(128, 128, 128, 0.2)' }}
                   accessibilityRole="button"
                   accessibilityLabel={`Filter persetujuan ${item.label}`}
                   style={[
@@ -404,10 +416,11 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
                         fontWeight: isSelected ? '700' : '600',
                       },
                     ]}
+                    allowFontScaling
                   >
                     {item.label}
                   </Text>
-                </TouchableOpacity>
+                </Pressable>
               );
             }}
           />
@@ -649,9 +662,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   filterChip: {
-    minHeight: 38,
-    paddingHorizontal: 12,
-    borderRadius: 19,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
@@ -662,10 +675,10 @@ const styles = StyleSheet.create({
   createBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    minHeight: 38,
-    paddingHorizontal: 12,
-    borderRadius: 19,
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
     justifyContent: 'center',
   },
   createBtnText: {

@@ -1,0 +1,203 @@
+/* ==========================================================================
+   Personal AI OS — Windows Agent Login Screen Styles
+   Powered by design tokens from Theme.css
+   ========================================================================== */
+
+.login-screen-container {
+  min-height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+  background: var(--bg-canvas, var(--color-bg));
+  color: var(--text-main, var(--color-text));
+  position: relative;
+  box-sizing: border-box;
+}
+
+.login-theme-switcher-wrapper {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  box-shadow: var(--shadow-xl);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-color, var(--color-border));
+  background: var(--bg-card, var(--color-surface));
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.login-header {
+  text-align: center;
+}
+
+.login-logo-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto var(--space-3) auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+}
+
+.login-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 6px 0;
+  letter-spacing: -0.02em;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: var(--text-sub, var(--color-text-secondary));
+  margin: 0;
+  line-height: 1.4;
+}
+
+.login-state-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-6) 0;
+  text-align: center;
+}
+
+.login-state-text {
+  font-size: 13px;
+  color: var(--text-sub, var(--color-text-secondary));
+  margin: 0;
+}
+
+.login-state-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+}
+
+.login-state-desc {
+  font-size: 12px;
+  color: var(--text-sub, var(--color-text-secondary));
+  margin: 0;
+}
+
+.login-error-card {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.login-error-content {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.login-error-alert-icon {
+  color: var(--color-danger);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.login-error-msg {
+  font-size: 13px;
+  color: var(--accent-rose, var(--color-danger));
+  line-height: 1.4;
+}
+
+.login-error-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.login-unauth-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-google-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.login-advanced-toggle-wrap {
+  text-align: center;
+  margin-top: 4px;
+}
+
+.login-advanced-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-sub, var(--color-text-secondary));
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 4px;
+}
+
+.login-advanced-form {
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-color, var(--color-border));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.login-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, var(--color-text-muted));
+  display: block;
+  margin-bottom: 4px;
+}
+
+.login-field-input {
+  width: 100%;
+  font-size: 12px;
+}
+
+.login-manual-error {
+  font-size: 11px;
+  color: var(--accent-rose, var(--color-danger));
+}
+
+.login-manual-submit-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.login-footer {
+  margin-top: var(--space-6);
+  font-size: 11px;
+  color: var(--text-sub, var(--color-text-secondary));
+  text-align: center;
+}

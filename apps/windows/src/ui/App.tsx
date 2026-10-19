@@ -9,8 +9,11 @@ import { ChatView } from './chat/ChatView.tsx';
 import { ProjectView } from './project/ProjectView.tsx';
 import { MemoryView } from './memory/MemoryView.tsx';
 import { SkillMcpView } from './skills/SkillMcpView.tsx';
+import { ResearchView } from './research/ResearchView.tsx';
+import { CompareView } from './compare/CompareView.tsx';
 import { SettingsView } from './settings/SettingsView.tsx';
 import { ActivityPanel } from './activity/ActivityPanel.tsx';
+import { StatusDot, type StatusDotKind } from './components/StatusDot.tsx';
 import { idID } from './locales/id-ID.ts';
 
 import './Theme.css';
@@ -29,9 +32,12 @@ const AppShell: React.FC = () => {
     approvals,
     newConversation,
     setActiveConversation,
+    connectionStatus,
+    connectToServer,
+    activeResearchState,
   } = useAgentStore();
 
-  const { warning } = useToast();
+  const { warning, success } = useToast();
 
   const [activeView, setActiveView] = useState<ActiveView>('chat');
   const [isActivityOpen, setIsActivityOpen] = useState(false);
@@ -106,6 +112,24 @@ const AppShell: React.FC = () => {
     prevPendingCountRef.current = pendingCount;
   }, [pendingCount, pendingApprovals, warning]);
 
+  // Toast notification when research finishes
+  const activeResearchStatus = activeResearchState?.status;
+  const prevResearchStatusRef = useRef(activeResearchStatus);
+  useEffect(() => {
+    if (
+      (prevResearchStatusRef.current === 'running' ||
+        prevResearchStatusRef.current === 'planning' ||
+        prevResearchStatusRef.current === 'waiting_plan_approval') &&
+      activeResearchStatus === 'completed'
+    ) {
+      success(
+        `Riset Selesai: ${activeResearchState?.report?.title || 'Laporan siap dibaca'}`,
+        6000,
+      );
+    }
+    prevResearchStatusRef.current = activeResearchStatus;
+  }, [activeResearchStatus, activeResearchState?.report?.title, success]);
+
   const handleSelectConversation = useCallback(
     (id: string) => {
       setActiveConversation(id);
@@ -142,10 +166,39 @@ const AppShell: React.FC = () => {
           pendingApprovalsCount={pendingCount}
         />
 
-        {activeView === 'chat' && <ChatView />}
+        {/* Offline & Reconnecting Global Banner */}
+        {(connectionStatus === 'disconnected' || connectionStatus === 'reconnecting') && (
+          <div className="connection-offline-banner" role="status">
+            <div className="connection-banner-content">
+              <StatusDot status={connectionStatus as StatusDotKind} pulse />
+              <span>
+                {connectionStatus === 'reconnecting'
+                  ? 'Koneksi terputus. Mencoba menghubungkan kembali ke server...'
+                  : 'Terputus dari server WSS. Fitur real-time dinonaktifkan sementara.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="ui-btn ui-btn-secondary ui-btn-sm connection-banner-retry-btn"
+              onClick={() => void connectToServer()}
+            >
+              Hubungkan Kembali
+            </button>
+          </div>
+        )}
+
+        {activeView === 'chat' && (
+          <ChatView onNavigateToResearch={() => setActiveView('research')} />
+        )}
         {activeView === 'project' && <ProjectView />}
         {activeView === 'memory' && <MemoryView />}
         {activeView === 'skills' && <SkillMcpView />}
+        {activeView === 'research' && (
+          <ResearchView onNavigateToChat={() => setActiveView('chat')} />
+        )}
+        {activeView === 'compare' && (
+          <CompareView onNavigateToChat={() => setActiveView('chat')} />
+        )}
         {activeView === 'settings' && <SettingsView />}
       </div>
 

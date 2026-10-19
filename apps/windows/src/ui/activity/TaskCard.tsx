@@ -1,8 +1,9 @@
 import React from 'react';
-import type { TaskRecord } from '@personal-ai-os/shared';
+import { aggregateRuntimeSteps, type TaskRecord } from '@personal-ai-os/shared';
 import type { TaskEventEntry } from '../../state/agent-store.ts';
 import { Play, Pause, XCircle } from 'lucide-react';
 import { idID } from '../locales/id-ID.ts';
+import { ToolStepCard } from '../chat/ToolStepCard.tsx';
 
 interface TaskCardProps {
   task: TaskRecord;
@@ -12,6 +13,7 @@ interface TaskCardProps {
   onPause?: ((taskId: string) => Promise<void>) | undefined;
   onResume?: ((taskId: string) => Promise<void>) | undefined;
   onCancel?: ((taskId: string) => Promise<void>) | undefined;
+  onProposeSkill?: ((task: TaskRecord) => void) | undefined;
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({
@@ -22,7 +24,17 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   onPause,
   onResume,
   onCancel,
+  onProposeSkill,
 }) => {
+  const payloadRecord = task.payload as Record<string, unknown> | undefined;
+  const metaRecord = (payloadRecord?.metadata ?? {}) as Record<string, unknown>;
+  const isScheduled = Boolean(payloadRecord?.scheduleId || metaRecord.scheduled);
+  const briefText = typeof payloadRecord?.brief === 'string'
+    ? (payloadRecord.brief as string)
+    : typeof metaRecord.brief === 'string'
+      ? (metaRecord.brief as string)
+      : null;
+
   return (
     <div
       onClick={() => onSelect(task.id)}
@@ -32,7 +44,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       aria-pressed={isSelected}
     >
       <div className="card-header-row">
-        <strong className="card-title-text">{task.kind}</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <strong className="card-title-text">{task.kind}</strong>
+          {isScheduled && (
+            <span className="status-pill scheduled" title={idID.activity.tasks.scheduledBadge}>
+              {idID.activity.tasks.scheduledBadge}
+            </span>
+          )}
+        </div>
         <span className={`status-pill ${task.status}`}>{task.status}</span>
       </div>
 
@@ -40,56 +59,54 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         <span>ID: <code>{task.id.slice(0, 8)}</code></span>
         {task.progress != null && <span>{task.progress}%</span>}
         {Boolean(task.payload?.runtime || task.payload?.selectedRuntimeId) && (
-          <span style={{ fontSize: 11, color: 'var(--accent-cyan, #06b6d4)', fontWeight: 500 }}>
+          <span className="task-runtime-pill">
             Runtime: {String(task.payload?.runtime || task.payload?.selectedRuntimeId)}
           </span>
         )}
       </div>
 
       {task.payload?.runtimeFallback === true && (
-        <div
-          className="task-fallback-banner"
-          style={{
-            marginTop: '8px',
-            marginBottom: '8px',
-            padding: '6px 10px',
-            backgroundColor: 'rgba(245, 158, 11, 0.12)',
-            border: '1px solid rgba(245, 158, 11, 0.3)',
-            borderRadius: '6px',
-            color: '#f59e0b',
-            fontSize: '12px',
-            lineHeight: 1.4,
-          }}
-        >
+        <div className="task-fallback-banner">
           <strong>Pengalihan Runtime:</strong> {String(task.payload.fallbackReason || `Dialihkan dari ${task.payload.originalRuntimeId}`)}
         </div>
       )}
 
       {task.checkpoint && (
-        <div className="card-meta-row">
-          <span>{idID.activity.tasks.checkpointLabel}</span>
-          <span className="card-title-text">
-            {task.checkpoint.lastExecutedAction} ({task.checkpoint.stepIndex}/{task.checkpoint.totalSteps})
-          </span>
+        <div className="task-checkpoint-block">
+          <div className="task-checkpoint-header">
+            <span className="task-checkpoint-label">{idID.activity.tasks.checkpointLabel}</span>
+            <span className="task-checkpoint-steps">
+              {task.checkpoint.stepIndex}/{task.checkpoint.totalSteps}
+            </span>
+          </div>
+          <div className="task-checkpoint-action-title">
+            {task.checkpoint.lastExecutedAction || 'Menjalankan langkah...'}
+          </div>
+          <div className="task-checkpoint-progress-track">
+            <div
+              className="task-checkpoint-progress-fill"
+              style={{
+                width: `${Math.min(100, Math.round(((task.checkpoint.stepIndex || 1) / (task.checkpoint.totalSteps || 1)) * 100))}%`,
+              }}
+            />
+          </div>
         </div>
       )}
 
       {task.status === 'failed' && task.error && (
-        <div
-          className="task-error-banner"
-          style={{
-            marginTop: '8px',
-            marginBottom: '8px',
-            padding: '6px 10px',
-            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
-            borderRadius: '6px',
-            color: '#f87171',
-            fontSize: '12px',
-            lineHeight: 1.4,
-          }}
-        >
+        <div className="task-error-banner">
           <strong>Keterangan Masalah:</strong> {task.error}
+        </div>
+      )}
+
+      {briefText && (
+        <div className="task-checkpoint-block" style={{ marginTop: 'var(--space-2)' }}>
+          <div className="task-checkpoint-header">
+            <span className="task-checkpoint-label">{idID.activity.tasks.briefLabel}</span>
+          </div>
+          <div className="task-event-text" style={{ whiteSpace: 'pre-wrap', marginTop: 'var(--space-1)' }}>
+            {briefText}
+          </div>
         </div>
       )}
 
@@ -131,64 +148,85 @@ export const TaskCard: React.FC<TaskCardProps> = ({
               <span>Hentikan</span>
             </button>
           )}
+
+          {task.status === 'completed' && onProposeSkill && (
+            <button
+              type="button"
+              className="ui-btn ui-btn-secondary ui-btn-sm"
+              onClick={() => onProposeSkill(task)}
+              title={idID.activity.tasks.proposeSkill}
+            >
+              <span>{idID.activity.tasks.proposeSkill}</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Event Stream (Expanded when selected) */}
       {isSelected && events && events.length > 0 && (
-        <div className="settings-form-group" style={{ marginTop: 12 }}>
+        <div className="settings-form-group task-events-group">
           <span className="settings-label">{idID.activity.tasks.eventStreamLabel}</span>
-          <div className="task-timeline-container" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-            {events.map((ev, i) => {
-              const payload = (ev.payload ?? {}) as Record<string, unknown>;
-              const isDiff = Boolean(payload.diff);
-              return (
-                <div
-                  key={ev.id || i}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: 6,
-                    backgroundColor: 'rgba(0,0,0,0.2)',
-                    border: '1px solid var(--border-sub, rgba(255,255,255,0.08))',
-                    fontSize: 12,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontWeight: 600 }}>
-                    <span>
-                      #{i + 1} {ev.eventType}
-                      {payload.action ? ` (${String(payload.action)})` : ''}
-                    </span>
-                    <span style={{ fontSize: 10, color: 'var(--text-sub)' }}>
-                      {ev.createdAt ? new Date(ev.createdAt).toLocaleTimeString() : ''}
-                    </span>
-                  </div>
-                  {payload.text ? (
-                    <div style={{ color: 'var(--text-main)', whiteSpace: 'pre-wrap', marginBottom: 4 }}>
-                      {String(payload.text)}
+          <div className="task-timeline-container">
+            {(() => {
+              const formattedEvents = events.map((ev, idx) => ({
+                id: ev.id || `ev-${idx}`,
+                taskId: task.id,
+                eventType: ev.eventType,
+                payload: (ev.payload ?? {}) as Record<string, unknown>,
+                createdAt: ev.createdAt ?? new Date().toISOString(),
+              }));
+              const steps = aggregateRuntimeSteps(formattedEvents);
+              if (steps.length > 0) {
+                return steps.map((step) => (
+                  <ToolStepCard
+                    key={step.id}
+                    step={step}
+                    onStop={task.status === 'running' && onCancel ? () => void onCancel(task.id) : undefined}
+                  />
+                ));
+              }
+              return events.map((ev, i) => {
+                const payload = (ev.payload ?? {}) as Record<string, unknown>;
+                const isDiff = Boolean(payload.diff);
+                return (
+                  <div key={ev.id || i} className="task-event-card">
+                    <div className="task-event-header-row">
+                      <span>
+                        #{i + 1} {ev.eventType}
+                        {payload.action ? ` (${String(payload.action)})` : ''}
+                      </span>
+                      <span className="task-event-time">
+                        {ev.createdAt ? new Date(ev.createdAt).toLocaleTimeString() : ''}
+                      </span>
                     </div>
-                  ) : null}
-                  {isDiff ? (
-                    <div style={{ marginTop: 4, padding: 6, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4, fontFamily: 'monospace', fontSize: 11, overflowX: 'auto' }}>
-                      {payload.path ? <div style={{ color: 'var(--accent-cyan)', marginBottom: 2 }}>{String(payload.path)}</div> : null}
-                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                        {String(payload.diff).split('\n').map((line, lIdx) => {
-                          let color = 'inherit';
-                          if (line.startsWith('+')) color = 'var(--accent-emerald, #10b981)';
-                          else if (line.startsWith('-')) color = 'var(--accent-rose, #ef4444)';
-                          else if (line.startsWith('@@')) color = 'var(--accent-cyan, #06b6d4)';
-                          return <div key={lIdx} style={{ color }}>{line}</div>;
-                        })}
+                    {payload.text ? (
+                      <div className="task-event-text">
+                        {String(payload.text)}
+                      </div>
+                    ) : null}
+                    {isDiff ? (
+                      <div className="task-event-diff-box">
+                        {payload.path ? <div className="task-event-diff-path">{String(payload.path)}</div> : null}
+                        <pre className="tool-step-pre">
+                          {String(payload.diff).split('\n').map((line, lIdx) => {
+                            let lineClass = '';
+                            if (line.startsWith('+')) lineClass = 'diff-line-add';
+                            else if (line.startsWith('-')) lineClass = 'diff-line-del';
+                            else if (line.startsWith('@@')) lineClass = 'diff-line-hunk';
+                            return <div key={lIdx} className={lineClass}>{line}</div>;
+                          })}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {!payload.text && !isDiff ? (
+                      <pre className="task-event-raw-json">
+                        {JSON.stringify(payload)}
                       </pre>
-                    </div>
-                  ) : null}
-                  {!payload.text && !isDiff ? (
-                    <pre style={{ margin: 0, fontSize: 11, color: 'var(--text-sub)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                      {JSON.stringify(payload)}
-                    </pre>
-                  ) : null}
-                </div>
-              );
-            })}
+                    ) : null}
+                  </div>
+                );
+              });
+            })()}
           </div>
         </div>
       )}

@@ -14,3 +14,5 @@ export * from './tasks/repository.ts';
 export * from './tasks/checkpoint-verifier.ts';
 export * from './observability/index.ts';
 export * from './design/index.ts';
+export * from './research/index.ts';
+export * from './compare/index.ts';

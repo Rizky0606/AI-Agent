@@ -66,7 +66,31 @@ export type TaskEventType =
   | 'task.failed'
   | 'task.cancelled'
   | 'task.paused'
-  | 'task.resumed';
+  | 'task.resumed'
+  | 'runtime.step'
+  | 'research.started'
+  | 'research.plan'
+  | 'research.search'
+  | 'research.source'
+  | 'research.page_read'
+  | 'research.evidence'
+  | 'research.draft'
+  | 'research.verify'
+  | 'research.done'
+  | 'research.plan_approved'
+  | 'research.completed'
+  | 'research.cancelled'
+  | 'research.error'
+  | 'compare.started'
+  | 'compare.chunk'
+  | 'compare.model_completed'
+  | 'compare.model_failed'
+  | 'compare.completed'
+  | 'compare.revealed'
+  | 'compare.winner_selected'
+  | 'compare.synthesis_chunk'
+  | 'compare.synthesis_completed'
+  | 'compare.synthesis_failed';
 
 export interface TaskEventEnvelope {
   id: string;
@@ -84,3 +108,6 @@ export interface TaskEventBroadcaster {
   subscribeUser(userId: string, listener: (event: TaskEventEnvelope) => void): () => void;
   close?(): Promise<void>;
 }
+
+export * from './runtime-step-event.ts';
+
