@@ -8,11 +8,13 @@ import {
 export const CURRENT_AGENT_CORE_VERSION = '0.2.0';
 
 // Forbidden actions that skills are NEVER allowed to declare or request (Deny-by-default system boundaries)
-const FORBIDDEN_SKILL_ACTIONS = [
-  /^system:(shutdown|reboot|exec_elevated|rmdir_root)/i,
-  /^auth:(revoke_all|change_master_key)/i,
+export const FORBIDDEN_SKILL_ACTIONS = [
+  /^system:(shutdown|reboot|exec_elevated|rmdir_root|exec_unrestricted)/i,
+  /^auth:(revoke_all|change_master_key|bypass_token)/i,
   /^(db|database):(drop|truncate|delete_database)/i,
-  /^security:(bypass|disable_guard)/i,
+  /^security:(bypass|disable_guard|override_policy)/i,
+  /^network:(raw_socket|intercept_traffic)/i,
+  /^package:(install_global|arbitrary_eval)/i,
 ];
 
 export class ManifestValidator {

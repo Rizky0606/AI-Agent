@@ -5,6 +5,7 @@ import {
   SecuredCapabilityGuard,
   type RiskLevel,
 } from '@personal-ai-os/permissions';
+import type { HashlineEditItem, HashlineEditOutput } from '@personal-ai-os/tools';
 import type {
   CodingAgentConfig,
   CodingExecutionReport,
@@ -19,6 +20,7 @@ export interface CodingEnvironment {
   createIsolatedBranch(branchName: string): Promise<void>;
   readFile(filePath: string): Promise<string>;
   writeFile(filePath: string, content: string): Promise<void>;
+  editFileHashline?(filePath: string, edits: HashlineEditItem[]): Promise<HashlineEditOutput>;
   runLint(): Promise<{ passed: boolean; output: string }>;
   runTypecheck(): Promise<{ passed: boolean; output: string }>;
   runTests(): Promise<{
@@ -44,6 +46,7 @@ export interface CodingTaskInput {
   repoPath?: string | undefined;
   targetBranch?: string | undefined;
   filesToModify?: Array<{ path: string; content: string }> | undefined;
+  hashlineEdits?: Array<{ path: string; edits: HashlineEditItem[] }> | undefined;
   mockEnvironment?: CodingEnvironment | undefined;
   requestPush?: boolean | undefined;
   requestDeploy?: boolean | undefined;
@@ -149,6 +152,17 @@ export class CodingAgent {
         await env.writeFile(file.path, file.content);
         if (!modifiedFiles.includes(file.path)) {
           modifiedFiles.push(file.path);
+        }
+      }
+    }
+
+    if (input.hashlineEdits && input.hashlineEdits.length > 0) {
+      for (const editItem of input.hashlineEdits) {
+        if (env.editFileHashline) {
+          await env.editFileHashline(editItem.path, editItem.edits);
+        }
+        if (!modifiedFiles.includes(editItem.path)) {
+          modifiedFiles.push(editItem.path);
         }
       }
     }

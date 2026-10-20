@@ -1,5 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, normalize, resolve } from 'node:path';
+import { isAbsolute, normalize, resolve, basename } from 'node:path';
 import type { ToolDefinition } from '../types.ts';
 
 export interface WorkspaceReadFileInput {
@@ -54,6 +54,21 @@ export function createWorkspaceReadFileTool(
       if (!targetPath.startsWith(rootDir)) {
         throw new Error(
           `Path traversal terdeteksi pada '${input.path}'. Akses di luar direktori workspace '${rootDir}' dilarang.`,
+        );
+      }
+
+      // 2. Sensitive and credential file protection (Rule 10 & Sesi 6 requirement)
+      const base = basename(targetPath).toLowerCase();
+      if (
+        base === '.env' ||
+        base.startsWith('.env.') ||
+        base.includes('secret') ||
+        base.includes('credential') ||
+        base.includes('id_rsa') ||
+        base.includes('id_ed25519')
+      ) {
+        throw new Error(
+          `Akses ke file sensitif/kredensial '${input.path}' dilarang demi keamanan host.`,
         );
       }
 

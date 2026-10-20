@@ -62,10 +62,10 @@ export const createAgentWorker = (
   queue?: BullMqTaskQueue | undefined;
   close: () => Promise<void>;
 } => {
-  const executor = new TaskExecutor(config.taskRepo, config.broadcaster, config.executorOptions);
   const concurrency = config.concurrency ?? 2; // Low concurrency for limited VPS resources
 
   if (!config.redisUrl) {
+    const executor = new TaskExecutor(config.taskRepo, config.broadcaster, config.executorOptions);
     return {
       executor,
       close: async () => {},
@@ -75,6 +75,10 @@ export const createAgentWorker = (
   const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
   const queueName = config.queueName ?? TASK_QUEUE_NAME;
   const queue = new BullMqTaskQueue(redis, { queueName });
+  const executor = new TaskExecutor(config.taskRepo, config.broadcaster, {
+    ...config.executorOptions,
+    taskQueue: queue,
+  });
   const worker = new Worker(
     queueName,
     async (job) => {

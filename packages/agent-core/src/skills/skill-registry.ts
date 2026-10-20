@@ -38,18 +38,14 @@ export class SkillRegistry {
       });
       this.revisions.set(validated.name, history);
 
-      const updated: SkillRecord = {
-        ...existing,
-        version: validated.version,
-        description: validated.description,
-        manifest: validated,
-        updatedAt: now,
-      };
-      this.skills.set(validated.name, updated);
+      existing.version = validated.version;
+      existing.description = validated.description;
+      existing.manifest = validated;
+      existing.updatedAt = now;
       if (handler) {
         this.handlers.set(validated.name, handler);
       }
-      return updated;
+      return existing;
     }
 
     const created: SkillRecord = {
@@ -88,6 +84,8 @@ export class SkillRegistry {
     const skill = this.skills.get(name);
     if (!skill) throw new SkillNotFoundError(name);
     skill.isEnabled = true;
+    skill.consecutiveFailures = 0;
+    skill.autoDisabledReason = null;
     skill.updatedAt = new Date();
     return skill;
   }
@@ -140,6 +138,8 @@ export class SkillRegistry {
       version: targetRevision!.version,
       description: targetRevision!.manifest.description,
       manifest: targetRevision!.manifest,
+      consecutiveFailures: 0,
+      autoDisabledReason: null,
       updatedAt: new Date(),
     };
 
@@ -160,6 +160,26 @@ export class SkillRegistry {
       throw new Error(`Handler eksekusi untuk skill '${name}' belum terdaftar.`);
     }
 
-    return await this.executor.executeSkill(skill, handler, input, context);
+    try {
+      const result = await this.executor.executeSkill(skill, handler, input, context);
+      skill.lastOutcome = 'success';
+      skill.lastError = null;
+      skill.consecutiveFailures = 0;
+      skill.lastUsedAt = new Date();
+      return result;
+    } catch (err) {
+      skill.lastOutcome = 'failure';
+      const errMsg = err instanceof Error ? err.message : String(err);
+      skill.lastError = errMsg;
+      skill.lastUsedAt = new Date();
+      skill.consecutiveFailures = (skill.consecutiveFailures ?? 0) + 1;
+
+      // Circuit Breaker: Auto-disable after 3 consecutive failures
+      if (skill.consecutiveFailures >= 3) {
+        skill.isEnabled = false;
+        skill.autoDisabledReason = `Skill otomatis dinonaktifkan setelah 3 kali kegagalan berturut-turut. Error terakhir: ${errMsg}`;
+      }
+      throw err;
+    }
   }
 }

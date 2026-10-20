@@ -73,6 +73,30 @@ test('Schedules, Events, and Notifications API integration', async () => {
   assert.equal(resumeRes.statusCode, 200);
   assert.equal(resumeRes.json().schedule.status, 'active');
 
+  // 4b. Update schedule via PATCH /v1/schedules/:id
+  const updateRes = await app.inject({
+    method: 'PATCH',
+    url: `/v1/schedules/${createdSchedule.id}`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: {
+      name: 'Updated Evening Briefing',
+      cronExpression: '30 20 * * *',
+    },
+  });
+  assert.equal(updateRes.statusCode, 200);
+  const updatedSchedule = updateRes.json().schedule;
+  assert.equal(updatedSchedule.name, 'Updated Evening Briefing');
+  assert.equal(updatedSchedule.cronExpression, '30 20 * * *');
+
+  // 4c. Delete / Cancel schedule via DELETE /v1/schedules/:id
+  const deleteRes = await app.inject({
+    method: 'DELETE',
+    url: `/v1/schedules/${createdSchedule.id}`,
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(deleteRes.statusCode, 200);
+  assert.equal(deleteRes.json().schedule.status, 'cancelled');
+
   // 5. Ingest event via POST /v1/events
   const eventPayload = {
     id: 'evt-webhook-99',

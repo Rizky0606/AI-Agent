@@ -23,7 +23,7 @@ export const registerSkillProposalsRoutes = async (
   fastify: FastifyInstance,
   options: SkillProposalsRoutesOptions,
 ): Promise<void> => {
-  const { auth, proposalRepo, skillRepo, validator = new ManifestValidator() } = options;
+  const { auth, proposalRepo, skillRepo, auditRepo, validator = new ManifestValidator() } = options;
 
   const authenticate = async (
     request: FastifyRequest,
@@ -155,10 +155,38 @@ export const registerSkillProposalsRoutes = async (
       if (!user) return;
 
       try {
+        const existing = await proposalRepo.getProposalById(request.params.id);
+        if (existing) {
+          const meta = (existing.proposedManifest.metadata ?? {}) as Record<string, unknown>;
+          if (meta['testStatus'] === 'failed') {
+            return reply.code(400).send({
+              error: {
+                code: 'APPROVAL_ERROR',
+                message: 'Proposal ini gagal dalam pengujian sandbox harness dan tidak dapat disetujui.',
+              },
+            });
+          }
+        }
+
         const result = await proposalRepo.approveProposal(request.params.id, user.id);
         // Terapkan ke skillRepo dan pastikan selalu dalam keadaan NONAKTIF
         await skillRepo.upsertSkill(result.proposal.proposedManifest);
         await skillRepo.disableSkill(result.createdSkillName);
+
+        if (auditRepo) {
+          await auditRepo.log({
+            userId: user.id,
+            action: 'skill_proposal.approved',
+            resourceType: 'skill_proposal',
+            resourceId: request.params.id,
+            decision: 'allow',
+            metadata: {
+              createdSkillName: result.createdSkillName,
+              taskId: result.proposal.taskId,
+              appliedAsDisabled: true,
+            },
+          });
+        }
 
         return reply.code(200).send({
           success: true,
@@ -194,6 +222,21 @@ export const registerSkillProposalsRoutes = async (
 
       try {
         const proposal = await proposalRepo.rejectProposal(request.params.id, user.id, reason);
+
+        if (auditRepo) {
+          await auditRepo.log({
+            userId: user.id,
+            action: 'skill_proposal.rejected',
+            resourceType: 'skill_proposal',
+            resourceId: request.params.id,
+            decision: 'deny',
+            metadata: {
+              reason,
+              taskId: proposal.taskId,
+            },
+          });
+        }
+
         return reply.code(200).send({
           success: true,
           proposal,

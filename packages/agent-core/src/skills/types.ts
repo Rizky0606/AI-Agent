@@ -47,6 +47,8 @@ export interface SkillRecord {
   lastUsedAt?: Date | null | undefined;
   lastOutcome?: 'success' | 'failure' | undefined;
   lastError?: string | null | undefined;
+  consecutiveFailures?: number | undefined;
+  autoDisabledReason?: string | null | undefined;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -57,6 +59,62 @@ export interface SkillRevisionRecord {
   version: string;
   manifest: SkillManifest;
   createdAt: Date;
+  reviewedBy?: string | undefined;
+}
+
+export interface SkillTestCase {
+  name: string;
+  input: Record<string, unknown>;
+  expectedOutput?: Record<string, unknown> | undefined;
+  shouldPass?: boolean | undefined;
+}
+
+export interface SkillEvolutionProposal {
+  id: string;
+  name: string;
+  title: string;
+  purpose: string;
+  sourceTaskIds: readonly string[];
+  manifest: SkillManifest;
+  requiredTools: readonly string[];
+  permissions: readonly SkillPermission[];
+  testCases: readonly SkillTestCase[];
+  risk: RiskLevel;
+  changeType: 'new_skill' | 'improvement';
+  targetSkillName?: string | undefined;
+  diff?: string | null | undefined;
+  promptInstructions?: string | undefined;
+  testStatus: 'pending' | 'passed' | 'failed';
+  testResults?: Array<{
+    testName: string;
+    passed: boolean;
+    durationMs: number;
+    error?: string | undefined;
+  }> | undefined;
+}
+
+export interface SkillProposalEligibilityCheck {
+  eligible: boolean;
+  reason: string;
+  suggestedName?: string | undefined;
+  suggestedType?: 'new_skill' | 'improvement' | undefined;
+}
+
+export interface TaskEvaluationContext {
+  taskId: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  prompt: string;
+  kind?: string | undefined;
+  durationMs?: number | undefined;
+  toolCalls?: readonly string[] | undefined;
+  output?: string | undefined;
+  evaluation?: {
+    passed: boolean;
+    score: number;
+    confidence: number;
+    selfClaimRejected: boolean;
+    remainingIssues?: readonly string[] | undefined;
+  } | undefined;
 }
 
 export interface SkillExecutionContext {

@@ -180,6 +180,7 @@ export const tasks = pgTable(
     payload: jsonb('payload').notNull(),
     idempotencyKey: varchar('idempotency_key', { length: 128 }),
     conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+    parentTaskId: uuid('parent_task_id'),
     leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
     progress: integer('progress').default(0).notNull(),
     attempt: integer('attempt').default(0).notNull(),
@@ -196,6 +197,7 @@ export const tasks = pgTable(
   (table) => [
     index('tasks_scope_status_idx').on(table.userId, table.projectId, table.status),
     index('tasks_conversation_idx').on(table.userId, table.conversationId),
+    index('tasks_parent_idx').on(table.userId, table.parentTaskId),
     uniqueIndex('tasks_user_idempotency_uq').on(table.userId, table.idempotencyKey),
     uniqueIndex('tasks_scope_uq').on(table.id, table.userId),
   ],
@@ -758,5 +760,30 @@ export const skillProposals = pgTable(
 
 export type SkillProposalRow = typeof skillProposals.$inferSelect;
 export type NewSkillProposalRow = typeof skillProposals.$inferInsert;
+
+export const channelPairings = pgTable(
+  'channel_pairings',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channel: varchar('channel', { length: 32 }).default('telegram').notNull(),
+    channelChatId: varchar('channel_chat_id', { length: 128 }).notNull(),
+    channelUsername: varchar('channel_username', { length: 128 }),
+    status: varchar('status', { length: 32 }).default('active').notNull(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
+    pairedAt: timestamp('paired_at', { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    ...created,
+  },
+  (table) => [
+    index('channel_pairings_user_idx').on(table.userId),
+    uniqueIndex('channel_pairings_channel_chat_uq').on(table.channel, table.channelChatId),
+  ],
+);
+
+export type ChannelPairingRow = typeof channelPairings.$inferSelect;
+export type NewChannelPairingRow = typeof channelPairings.$inferInsert;
 
 

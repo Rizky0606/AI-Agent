@@ -6,3 +6,5 @@ export * from './hub/mcp-hub.ts';
 export * from './transport/stdio-adapter.ts';
 export * from './transport/sse-adapter.ts';
 export * from './config/server-config.ts';
+export * from './server/host-tool-server.ts';
+export * from './server/workspace-injector.ts';

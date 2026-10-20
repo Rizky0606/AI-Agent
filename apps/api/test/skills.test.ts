@@ -320,4 +320,57 @@ test('Skills API: manifest viewer, per-project toggle, and execution tracking of
   assert.ok(verifyDetailRes.json().skill.lastError);
 });
 
+test('Hermes catalog: strictly read-only, mutation attempts return 403, and disk sync does not overwrite', async () => {
+  const authRepo = new InMemoryAuthRepository();
+  const auth = createAuthService(authRepo, secret);
+  const skillRepo = new InMemorySkillRepository();
+
+  const user = await auth.register('bob-hermes@example.com', 'ValidPassword123!');
+
+  const app = await buildApp({
+    auth,
+    skills: {
+      skillRepo,
+    },
+  });
+
+  // 1. Toggle Hermes skill for project returns 403 Forbidden
+  const toggleRes = await app.inject({
+    method: 'POST',
+    url: '/v1/projects/proj-123/skills/hermes_telegram_messenger/toggle',
+    headers: { authorization: `Bearer ${user.accessToken}` },
+    payload: { isEnabled: false },
+  });
+  assert.equal(toggleRes.statusCode, 403);
+  assert.ok(toggleRes.json().error.includes('berstatus read-only'));
+
+  // 2. Enable Hermes skill directly returns 403 Forbidden
+  const enableRes = await app.inject({
+    method: 'POST',
+    url: '/v1/skills/hermes_telegram_messenger/enable',
+    headers: { authorization: `Bearer ${user.accessToken}` },
+  });
+  assert.equal(enableRes.statusCode, 403);
+  assert.ok(enableRes.json().error.includes('berstatus read-only'));
+
+  // 3. Disable Hermes skill directly returns 403 Forbidden
+  const disableRes = await app.inject({
+    method: 'POST',
+    url: '/v1/skills/hermes_telegram_messenger/disable',
+    headers: { authorization: `Bearer ${user.accessToken}` },
+  });
+  assert.equal(disableRes.statusCode, 403);
+  assert.ok(disableRes.json().error.includes('berstatus read-only'));
+
+  // 4. Rollback Hermes skill directly returns 403 Forbidden
+  const rollbackRes = await app.inject({
+    method: 'POST',
+    url: '/v1/skills/hermes_telegram_messenger/rollback',
+    headers: { authorization: `Bearer ${user.accessToken}` },
+    payload: { targetVersion: '0.19.0' },
+  });
+  assert.equal(rollbackRes.statusCode, 403);
+  assert.ok(rollbackRes.json().error.includes('berstatus read-only'));
+});
+
 

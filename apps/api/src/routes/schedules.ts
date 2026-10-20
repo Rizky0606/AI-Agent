@@ -229,6 +229,66 @@ export const registerSchedulesRoutes = async (
     },
   );
 
+  // 6b. Update Schedule
+  fastify.patch(
+    '/v1/schedules/:id',
+    async (
+      request: FastifyRequest<{
+        Params: { id: string };
+        Body: {
+          name?: string;
+          cronExpression?: string;
+          runAt?: string;
+          timezone?: string;
+          missedRunPolicy?: MissedRunPolicy;
+          taskPayload?: TaskPayload;
+        };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const user = await authenticate(request, reply);
+      if (!user) return;
+
+      const job = schedulerEngine.getJob(request.params.id);
+      if (!job || job.userId !== user.id) {
+        return reply
+          .code(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Jadwal tidak ditemukan' } });
+      }
+
+      const body = request.body ?? {};
+      let normalizedTaskPayload: TaskPayload | undefined;
+      if (body.taskPayload) {
+        const rawPayload = body.taskPayload as unknown as Record<string, unknown>;
+        normalizedTaskPayload = {
+          kind: String(rawPayload.kind ?? job.taskPayload.kind),
+          input: (rawPayload.input ?? rawPayload.payload ?? job.taskPayload.input) as Record<string, unknown>,
+          priority: typeof rawPayload.priority === 'number' ? rawPayload.priority : job.taskPayload.priority,
+        };
+      }
+
+      try {
+        const updated = schedulerEngine.updateSchedule(job.id, {
+          name: body.name,
+          cronExpression: body.cronExpression,
+          runAt: body.runAt,
+          timezone: body.timezone,
+          missedRunPolicy: body.missedRunPolicy,
+          taskPayload: normalizedTaskPayload,
+        });
+
+        return reply.code(200).send({ schedule: updated });
+      } catch (err: unknown) {
+        return reply.code(400).send({
+          error: {
+            code: 'SCHEDULE_UPDATE_ERROR',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
+    },
+  );
+
   // 7. Event Ingestion
   fastify.post('/v1/events', async (request: FastifyRequest, reply: FastifyReply) => {
     const user = await authenticate(request, reply);

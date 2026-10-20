@@ -25,4 +25,8 @@ export * from './deep-research/index.ts';
 // Compare Multi-Model
 export * from './compare/index.ts';
 
+// Durable Subagent Orchestration
+export * from './orchestration/subagent-types.ts';
+export * from './orchestration/subagent-orchestrator.ts';
+
 

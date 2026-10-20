@@ -45,6 +45,9 @@ import type { PromptTemplateRepository } from './db/prompt-template-repository.t
 import { registerPromptTemplateRoutes } from './routes/prompt-templates.ts';
 import type { SkillProposalRepository } from './db/skill-proposal-repository.ts';
 import { registerSkillProposalsRoutes } from './routes/skill-proposals.ts';
+import type { TelegramChannelAdapter } from './channels/telegram/channel-adapter.ts';
+import type { TelegramPairingManager } from './channels/telegram/pairing-manager.ts';
+import { registerTelegramChannelRoutes } from './routes/channels-telegram.ts';
 export type AppDependencies = {
   auth: AuthService;
   health?: { database: () => Promise<boolean>; redis: () => Promise<boolean> } | undefined;
@@ -198,6 +201,12 @@ export type AppDependencies = {
     | {
         proposalRepo: SkillProposalRepository;
         skillRepo?: SkillRepository | undefined;
+      }
+    | undefined;
+  telegram?:
+    | {
+        channelAdapter: TelegramChannelAdapter;
+        pairingManager: TelegramPairingManager;
       }
     | undefined;
 };
@@ -797,6 +806,14 @@ export const buildApp = async (dependencies: AppDependencies): Promise<FastifyIn
       proposalRepo: dependencies.skillProposals.proposalRepo,
       skillRepo: dependencies.skillProposals.skillRepo ?? dependencies.skills!.skillRepo,
       auditRepo: dependencies.approval?.auditRepo,
+    });
+  }
+
+  if (dependencies.telegram) {
+    registerTelegramChannelRoutes(app, {
+      auth: dependencies.auth,
+      channelAdapter: dependencies.telegram.channelAdapter,
+      pairingManager: dependencies.telegram.pairingManager,
     });
   }
 

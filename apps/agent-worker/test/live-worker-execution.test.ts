@@ -18,7 +18,12 @@ import {
   PermissionEngine,
   SecuredCapabilityGuard,
 } from '@personal-ai-os/permissions';
-import { PLACEHOLDER_WORKER_LABEL, TaskExecutor, createAgentWorker } from '../src/index.ts';
+import {
+  type AutoProposeSkillPayload,
+  PLACEHOLDER_WORKER_LABEL,
+  TaskExecutor,
+  createAgentWorker,
+} from '../src/index.ts';
 import { prepareCodingWorkspace } from '@personal-ai-os/agent-core';
 import {
   InMemoryTaskEventBroadcaster,
@@ -706,6 +711,53 @@ test('Real coding task executes with CodingAgent & CodingEvaluator without place
     assert.equal(evt.payload?.placeholder, undefined);
     assert.notEqual(evt.payload?.note, PLACEHOLDER_WORKER_LABEL);
   }
+});
+
+test('Coding task automatically extracts and proposes skill upon evaluator completion', async () => {
+  const repo = new TestTaskRepo();
+  const broadcaster = new InMemoryTaskEventBroadcaster();
+  const fixture = await createCodingWorkspaceFixture(0);
+  const proposedSkills: AutoProposeSkillPayload[] = [];
+
+  const executor = new TaskExecutor(repo, broadcaster, {
+    codingWorkspaceRoot: fixture.root,
+    skillProposalHandler: async (proposal) => {
+      proposedSkills.push(proposal);
+    },
+  });
+
+  const { task } = await repo.createTask({
+    userId: 'user-coder',
+    projectId: 'proj-coder',
+    kind: 'coding_task',
+    payload: {
+      instructions: 'Fix memory leak in buffer pooling',
+      workspaceDir: fixture.workspaceDir,
+      filesToModify: [{ path: 'src/pool.ts', content: 'export const pool = new Map();' }],
+    },
+  });
+
+  await executor.execute({
+    taskId: task.id,
+    userId: task.userId,
+    projectId: task.projectId,
+    kind: task.kind,
+    attempt: 0,
+    maxAttempts: 3,
+  });
+
+  const completedTask = await repo.getTask(task.userId, task.id);
+  assert.equal(completedTask?.status, 'completed');
+
+  assert.equal(proposedSkills.length, 1);
+  const proposal = proposedSkills[0]!;
+  assert.equal(proposal.taskId, task.id);
+  assert.equal(proposal.userId, task.userId);
+  assert.equal(proposal.extractedFromEvaluation, true);
+  assert.ok(proposal.skillName.startsWith('coding_'));
+  assert.equal(proposal.proposedManifest.name, proposal.skillName);
+  assert.ok(proposal.proposedManifest.permissions.some((p) => p.action === 'fs:edit_file'));
+  assert.ok(proposal.promptInstructions.includes('src/pool.ts'));
 });
 
 test('Coding task is failed when the real checks fail', async () => {

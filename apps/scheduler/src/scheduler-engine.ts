@@ -28,6 +28,15 @@ export interface RegisterScheduleInput {
   taskPayload: TaskPayload;
 }
 
+export interface UpdateScheduleInput {
+  name?: string | undefined;
+  cronExpression?: string | undefined;
+  runAt?: string | undefined;
+  timezone?: string | undefined;
+  missedRunPolicy?: MissedRunPolicy | undefined;
+  taskPayload?: TaskPayload | undefined;
+}
+
 export class SchedulerEngine {
   private readonly jobs = new Map<string, ScheduleJob>();
   private readonly dispatchedKeys = new Set<string>(); // Idempotency set
@@ -197,6 +206,65 @@ export class SchedulerEngine {
     }
     job.lastBrief = brief;
     job.updatedAt = new Date().toISOString();
+    if (this.storage) {
+      void this.storage.updateJob(job).catch(() => {});
+    }
+    return job;
+  }
+
+  updateSchedule(id: string, updates: UpdateScheduleInput, now = new Date()): ScheduleJob {
+    const job = this.jobs.get(id);
+    if (!job) {
+      throw new SchedulerError(`Schedule with id "${id}" not found`);
+    }
+
+    if (updates.name !== undefined) {
+      const trimmed = updates.name.trim();
+      if (!trimmed) {
+        throw new SchedulerError('Field name tidak boleh kosong');
+      }
+      job.name = trimmed;
+    }
+
+    if (updates.timezone !== undefined) {
+      job.timezone = updates.timezone.trim() || 'Asia/Jakarta';
+    }
+
+    if (updates.missedRunPolicy !== undefined) {
+      job.missedRunPolicy = updates.missedRunPolicy;
+    }
+
+    if (updates.taskPayload !== undefined) {
+      job.taskPayload = updates.taskPayload;
+    }
+
+    if (job.type === 'recurring') {
+      if (updates.cronExpression !== undefined) {
+        const cron = updates.cronExpression.trim();
+        CronParser.parse(cron);
+        CronParser.validateMinimumInterval(cron, MIN_RECURRING_INTERVAL_MINUTES, job.timezone);
+        job.cronExpression = cron;
+      }
+      if (job.status === 'active' && job.cronExpression) {
+        job.nextRunAt = CronParser.getNextRun(job.cronExpression, now, job.timezone).toISOString();
+      }
+    } else if (job.type === 'one_off') {
+      if (updates.runAt !== undefined) {
+        const runDate = new Date(updates.runAt);
+        if (isNaN(runDate.getTime())) {
+          throw new SchedulerError(`Invalid runAt timestamp: "${updates.runAt}"`);
+        }
+        if (runDate.getTime() <= now.getTime()) {
+          throw new SchedulerError('Waktu eksekusi runAt harus berada di masa depan');
+        }
+        job.runAt = runDate.toISOString();
+        if (job.status === 'active') {
+          job.nextRunAt = job.runAt;
+        }
+      }
+    }
+
+    job.updatedAt = now.toISOString();
     if (this.storage) {
       void this.storage.updateJob(job).catch(() => {});
     }

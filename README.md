@@ -17,7 +17,7 @@ Sistem dirancang dengan pemisahan batas tanggung jawab (*separation of concerns*
   - **Agent Worker (`apps/agent-worker`)**: Pemroses tugas durable berbasis BullMQ, eksekutor generic loop, integrasi Playwright headless Chromium, dan penghubung runtime eksternal.
   - **Scheduler (`apps/scheduler`)**: Cron scheduler otomatis, deduplikasi event, dan notifikasi berulang via FCM/Telegram.
 - **9Router Gateway (`https://9router.ojixx.my.id/v1`)**: Satu-satunya pintu gerbang model LLM. Semua pemanggilan model dilakukan murni dari backend server; klien tidak pernah memegang API key eksternal.
-- **Runtime Bridge (`apps/runtime-bridge`)**: Jembatan loopback Unix socket/HTTP terisolasi di VPS untuk mengeksekusi agen coding berat (OpenMP / omp dan Hermes-agent) tanpa hak istimewa berlebih.
+- **Runtime Bridge (`apps/runtime-bridge`)**: Jembatan loopback HTTP terisolasi di VPS (port 9120) untuk mengeksekusi agen coding berat (OMP dan Hermes-agent) tanpa hak istimewa berlebih.
 
 ---
 
@@ -62,7 +62,7 @@ pnpm --filter @personal-ai-os/android start
 
 ## 🧪 Gerbang Kualitas & Verifikasi Otomatis
 
-Seluruh repositori dilindungi oleh gerbang kualitas (*quality gates*) terpadu yang memverifikasi lint, typecheck, seluruh test suite (566+ pengujian), build produksi, dan audit integritas referensi:
+Seluruh repositori dilindungi oleh gerbang kualitas (*quality gates*) terpadu yang memverifikasi lint, typecheck, seluruh test suite (665 pengujian: 656 lulus, 0 gagal, 9 dilewati bersyarat), build produksi, dan audit integritas referensi:
 
 ```bash
 # Menjalankan seluruh gerbang kualitas sekaligus:

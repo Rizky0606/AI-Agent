@@ -262,3 +262,63 @@ test('CodingAgent: Evaluator strictly BLOCKS completed status if security check 
     /Security issue|potensi hardcoded/i,
   );
 });
+
+test('CodingAgent: applies hashlineEdits accurately during implementation stage', async () => {
+  let hashlineCalled = false;
+  const mockEnv: CodingEnvironment = {
+    async getGitStatus() {
+      return { clean: true, branch: 'main', uncommittedFiles: [] };
+    },
+    async createIsolatedBranch() {},
+    async readFile() {
+      return 'line 1\nline 2 original\nline 3\n';
+    },
+    async writeFile() {},
+    async editFileHashline(filePath, edits) {
+      hashlineCalled = true;
+      assert.equal(filePath, 'src/math.ts');
+      assert.equal(edits.length, 1);
+      assert.equal(edits[0]?.lineAnchor, '2#abc');
+      return { filePath, linesModified: 1, totalLines: 3, sizeBytes: 30 };
+    },
+    async runLint() {
+      return { passed: true, output: '0 errors' };
+    },
+    async runTypecheck() {
+      return { passed: true, output: '0 errors' };
+    },
+    async runTests() {
+      return { passed: true, passedCount: 3, output: '3 passed' };
+    },
+    async runBuild() {
+      return { passed: true, output: 'build ok' };
+    },
+    async getDiff() {
+      return {
+        diffSummary: 'math.ts line 2 updated',
+        fullDiff: '- line 2 original\n+ line 2 modified',
+        changedFiles: ['src/math.ts'],
+      };
+    },
+  };
+
+  const agent = new CodingAgent();
+  const report = await agent.execute({
+    taskId: 'task-hashline-test',
+    userId: 'user-dev-1',
+    instructions: 'Patch line 2 in math.ts with hashline anchor',
+    hashlineEdits: [
+      {
+        path: 'src/math.ts',
+        edits: [{ lineAnchor: '2#abc', replacement: 'line 2 modified' }],
+      },
+    ],
+    mockEnvironment: mockEnv,
+  });
+
+  assert.equal(report.status, 'completed');
+  assert.equal(report.evaluationResult.passed, true);
+  assert.equal(hashlineCalled, true);
+  assert.ok(report.modifiedFiles.includes('src/math.ts'));
+});
+

@@ -47,9 +47,31 @@ export const MAX_RUNTIME_TEXT_LENGTH = 16_384; // 16 KB
 export const MAX_RUNTIME_DIFF_LENGTH = 32_768; // 32 KB
 export const TRUNCATION_INDICATOR = '... [dipotong karena melebihi batas ukuran]';
 
+const RUNTIME_SECRET_PATTERNS: Array<{ regex: RegExp; replacement: string }> = [
+  // Bearer / JWT Tokens
+  {
+    regex: /Bearer\s+[-A-Za-z0-9._~+/]+=*/gi,
+    replacement: 'Bearer [REDACTED]',
+  },
+  // API Keys (sk-..., etc.)
+  {
+    regex: /sk-[A-Za-z0-9_-]{16,}/gi,
+    replacement: '[REDACTED]',
+  },
+  // Generic token / secret / password assignments (e.g. token: "...", token sensitive-...)
+  {
+    regex: /(password|secret|passwd|token|apikey)\s*[:=]\s*["']?([^\s"',;]+)["']?/gi,
+    replacement: '$1: "[REDACTED]"',
+  },
+  {
+    regex: /\b(token|secret)\s+([A-Za-z0-9_.-]{10,})\b/gi,
+    replacement: '$1 [REDACTED]',
+  },
+];
+
 /**
  * Strips dangerous HTML tags, javascript pseudo-protocols, and inline event handlers
- * from untrusted runtime text.
+ * from untrusted runtime text, and redacts sensitive secrets/tokens.
  */
 export function sanitizeRuntimeText(
   text: unknown,
@@ -57,6 +79,11 @@ export function sanitizeRuntimeText(
 ): string {
   if (text === null || text === undefined) return '';
   let str = typeof text === 'string' ? text : String(text);
+
+  // Redact secrets, auth tokens, and API keys
+  for (const pattern of RUNTIME_SECRET_PATTERNS) {
+    str = str.replace(pattern.regex, pattern.replacement);
+  }
 
   // Strip script, iframe, object, embed tags and contents
   str = str.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');

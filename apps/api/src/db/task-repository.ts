@@ -19,6 +19,7 @@ export interface CreateTaskParams {
   kind: string;
   payload: Record<string, unknown>;
   conversationId?: string | null | undefined;
+  parentTaskId?: string | null | undefined;
   idempotencyKey?: string | null | undefined;
   priority?: number | undefined;
   maxAttempts?: number | undefined;
@@ -92,6 +93,7 @@ export class SqlTaskRepository implements TaskRepository {
         kind: params.kind,
         payload: params.payload,
         conversationId: params.conversationId ?? null,
+        parentTaskId: params.parentTaskId ?? null,
         idempotencyKey: params.idempotencyKey ?? null,
         priority: params.priority ?? 0,
         maxAttempts: params.maxAttempts ?? 3,
@@ -117,7 +119,11 @@ export class SqlTaskRepository implements TaskRepository {
 
   async listTasks(
     userId: string,
-    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+    filter?: {
+      projectId?: string | undefined;
+      conversationId?: string | undefined;
+      parentTaskId?: string | undefined;
+    },
   ): Promise<TaskRecord[]> {
     const conditions = [eq(tasks.userId, userId)];
     if (filter?.projectId) {
@@ -125,6 +131,9 @@ export class SqlTaskRepository implements TaskRepository {
     }
     if (filter?.conversationId) {
       conditions.push(eq(tasks.conversationId, filter.conversationId));
+    }
+    if (filter?.parentTaskId) {
+      conditions.push(eq(tasks.parentTaskId, filter.parentTaskId));
     }
 
     const rows = await this.db
@@ -134,6 +143,10 @@ export class SqlTaskRepository implements TaskRepository {
       .orderBy(desc(tasks.createdAt));
 
     return rows.map((r) => this.mapRow(r));
+  }
+
+  async listChildTasks(userId: string, parentTaskId: string): Promise<TaskRecord[]> {
+    return this.listTasks(userId, { parentTaskId });
   }
 
   async updateTaskStatus(
@@ -329,6 +342,7 @@ export class SqlTaskRepository implements TaskRepository {
       kind: row.kind,
       payload: row.payload as Record<string, unknown>,
       conversationId: row.conversationId,
+      parentTaskId: row.parentTaskId ?? null,
       progress: row.progress,
       attempt: row.attempt,
       maxAttempts: row.maxAttempts,
@@ -371,6 +385,7 @@ export class InMemoryTaskRepository implements TaskRepository {
       kind: params.kind,
       payload: params.payload,
       conversationId: params.conversationId ?? null,
+      parentTaskId: params.parentTaskId ?? null,
       progress: 0,
       attempt: 0,
       maxAttempts: params.maxAttempts ?? 3,
@@ -394,17 +409,26 @@ export class InMemoryTaskRepository implements TaskRepository {
 
   async listTasks(
     userId: string,
-    filter?: { projectId?: string | undefined; conversationId?: string | undefined },
+    filter?: {
+      projectId?: string | undefined;
+      conversationId?: string | undefined;
+      parentTaskId?: string | undefined;
+    },
   ): Promise<TaskRecord[]> {
     return [...this.tasks.values()]
       .filter(
         (t) =>
           t.userId === userId &&
           (!filter?.projectId || t.projectId === filter.projectId) &&
-          (!filter?.conversationId || t.conversationId === filter.conversationId),
+          (!filter?.conversationId || t.conversationId === filter.conversationId) &&
+          (!filter?.parentTaskId || t.parentTaskId === filter.parentTaskId),
       )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((t) => ({ ...t }));
+  }
+
+  async listChildTasks(userId: string, parentTaskId: string): Promise<TaskRecord[]> {
+    return this.listTasks(userId, { parentTaskId });
   }
 
   async updateTaskStatus(

@@ -3,6 +3,7 @@ export * from './manifest-validator.ts';
 export * from './skill-executor.ts';
 export * from './skill-loader.ts';
 export * from './skill-registry.ts';
+export * from './skill-evolution-engine.ts';
 
 // Built-in skills
 export * from './builtin/on-topic-guard.ts';

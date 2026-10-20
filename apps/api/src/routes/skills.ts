@@ -20,6 +20,7 @@ import type { AuthService } from '../auth/service.ts';
 import { AuthError } from '../auth/service.ts';
 import type { SkillRepository } from '../db/skill-repository.ts';
 import type { AuditRepository } from '../db/audit-repository.ts';
+import { sanitizeSensitiveJson } from '../services/sensitive-data-filter.ts';
 
 interface AuthUser {
   id: string;
@@ -271,6 +272,14 @@ export function registerSkillRoutes(
     },
   );
 
+  const isHermesReadOnly = (name: string): boolean => {
+    return (
+      name.startsWith('hermes_') ||
+      name.startsWith('hermes-') ||
+      HERMES_READONLY_SKILLS.some((s) => s.name === name || s.id === name)
+    );
+  };
+
   // 2d. Toggle Skill for a specific Project
   app.post(
     '/v1/projects/:projectId/skills/:name/toggle',
@@ -282,7 +291,7 @@ export function registerSkillRoutes(
       reply: FastifyReply,
     ) => {
       const user = await getUser(req);
-      if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
+      if (isHermesReadOnly(req.params.name)) {
         return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
       }
 
@@ -312,7 +321,7 @@ export function registerSkillRoutes(
     '/v1/skills/:name/enable',
     async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
       const user = await getUser(req);
-      if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
+      if (isHermesReadOnly(req.params.name)) {
         return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
       }
       try {
@@ -337,7 +346,7 @@ export function registerSkillRoutes(
     '/v1/skills/:name/disable',
     async (req: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
       const user = await getUser(req);
-      if (HERMES_READONLY_SKILLS.some((s) => s.name === req.params.name)) {
+      if (isHermesReadOnly(req.params.name)) {
         return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
       }
       try {
@@ -368,6 +377,9 @@ export function registerSkillRoutes(
       reply: FastifyReply,
     ) => {
       await getUser(req);
+      if (isHermesReadOnly(req.params.name)) {
+        return reply.code(403).send({ error: `Skill '${req.params.name}' berasal dari Hermes dan berstatus read-only.` });
+      }
       try {
         const rolledBack = await skillRepo.rollbackSkill(req.params.name, req.body?.targetVersion);
         return reply.code(200).send({
@@ -381,7 +393,7 @@ export function registerSkillRoutes(
     },
   );
 
-  // 6. Sync / Reload Skills from disk directory
+  // 6. Sync / Reload Skills from disk directory (Scope 2 & 3: sanitize secrets and protect Hermes catalog)
   app.post('/v1/skills/sync', async (req: FastifyRequest, reply: FastifyReply) => {
     await getUser(req);
     try {
@@ -389,7 +401,17 @@ export function registerSkillRoutes(
       const syncedSkills = [];
 
       for (const item of diskSkills) {
-        const saved = await skillRepo.upsertSkill(item.manifest);
+        // Scope 2: Skill Hermes eksternal harus tetap read-only di katalog. Jangan menulis ke folder skill Hermes secara otomatis.
+        if (
+          isHermesReadOnly(item.manifest.name) ||
+          item.manifest.metadata?.['source'] === 'hermes'
+        ) {
+          continue;
+        }
+
+        // Scope 3: Sinkronisasi skill/metadata harus menyaring konten sensitif
+        const sanitized = sanitizeSensitiveJson(item.manifest);
+        const saved = await skillRepo.upsertSkill(sanitized.cleanData);
         syncedSkills.push(saved);
       }
 

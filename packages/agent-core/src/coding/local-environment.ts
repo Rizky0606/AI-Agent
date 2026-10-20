@@ -2,6 +2,11 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import {
+  createHashlineEditTool,
+  type HashlineEditItem,
+  type HashlineEditOutput,
+} from '@personal-ai-os/tools';
 import type { CodingEnvironment } from './coding-agent.ts';
 
 const execFileAsync = promisify(execFile);
@@ -161,6 +166,17 @@ export class LocalCodingEnvironment implements CodingEnvironment {
       throw new Error(`Coding file path escapes the workspace: ${filePath}`);
     }
     await writeFile(target, content, 'utf8');
+  }
+
+  async editFileHashline(
+    filePath: string,
+    edits: HashlineEditItem[],
+  ): Promise<HashlineEditOutput> {
+    const tool = createHashlineEditTool(this.workspaceDir);
+    return tool.execute(
+      { filePath, edits },
+      { actor: { id: 'worker-local', role: 'system' } },
+    );
   }
 
   async runLint(): Promise<{ passed: boolean; output: string }> {

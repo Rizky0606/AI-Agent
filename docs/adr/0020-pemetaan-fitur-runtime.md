@@ -1,10 +1,11 @@
 # ADR 0020: Pemetaan Fitur Runtime Eksternal (omp, Hermes, pi.dev, Odysseus) & Strategi Integrasi Personal AI OS
 
-**Status**: Diusulkan (Proposed)  
-**Tanggal**: 15 Oktober 2026 (Sesi 11; Direvisi Sesi 19)  
+**Status**: Diusulkan (Proposed) — Direkonsiliasi Sesi 32/33  
+**Tanggal**: 15 Oktober 2026 (Sesi 11; Direvisi Sesi 19; Direkonsiliasi Sesi 32/33)  
 **Pengambil Keputusan**: Principal Software Architect & DevOps Engineer  
-**Konteks**: Sesi 11 — Riset dan ADR Pemetaan Fitur; Sesi 19 — Koreksi Penomoran dan Verifikasi Fakta  
-*Catatan Penomoran: Dinamai ulang menjadi ADR 0020 untuk menyelesaikan duplikasi penomoran ADR 0004 (ADR 0004 asli adalah Design System & Client Dependencies).*
+**Konteks**: Sesi 11 — Riset dan ADR Pemetaan Fitur; Sesi 19 — Koreksi Penomoran dan Verifikasi Fakta; Sesi 32/33 — Rekonsiliasi Hasil Audit Baseline  
+*Catatan Penomoran: Dinamai ulang menjadi ADR 0020 untuk menyelesaikan duplikasi penomoran ADR 0004.*  
+*Catatan Rekonsiliasi Realisasi: Usulan mode NDJSON RPC OMP pada Sesi 12 disederhanakan pada ADR 0013 menjadi mode batch one-shot per-run dengan flag sesi `--session <id>` (dan resume `--resume`). Pemanfaatan Hermes dibatasi pada CLI non-interaktif `-z` (port 9119 adalah dashboard manajemen tanpa route prompt). Evaluasi RPC dua arah sejati dialihkan ke usulan runtime ketiga `pi.dev` (ADR 0030).*
 
 ---
 

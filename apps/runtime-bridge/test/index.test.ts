@@ -22,6 +22,9 @@ await writeFile(
 const args = process.argv.slice(2);
 if (args.includes('--sleep')) {
   setTimeout(() => process.exit(0), 10000);
+} else if (args.includes('--huge-no-newline')) {
+  process.stdout.write('X'.repeat(200_000));
+  setTimeout(() => process.exit(0), 50);
 } else {
   // Check secret environment isolation
   if (process.env.DATABASE_URL || process.env.NINEROUTER_API_KEY || process.env.JWT_SECRET) {
@@ -31,6 +34,9 @@ if (args.includes('--sleep')) {
   const sessionId = sessionIdx !== -1 ? args[sessionIdx + 1] : undefined;
   if (sessionId) {
     console.log(JSON.stringify({ type: 'session', sessionId }));
+  }
+  if (args.includes('--resume')) {
+    console.log(JSON.stringify({ type: 'message_update', content: [{ type: 'text', text: 'Sesi ' + sessionId + ' dilanjutkan' }] }));
   }
   console.log(JSON.stringify({ type: 'message_update', content: [{ type: 'text', text: 'Analisis rencana selesai' }] }));
   console.log(JSON.stringify({ type: 'tool_start', tool: 'inspect_file', input: { path: 'src/main.ts' } }));
@@ -277,4 +283,91 @@ test('GET /v1/runtimes/hermes/skills returns read-only Hermes skills list', asyn
   assert.ok(names.includes('memory_recall'));
   assert.ok(data.skills.every((s) => s.isReadOnly === true));
 });
+
+test('runs fake omp with resume flag when resume is true and sessionId is present', async () => {
+  const response = await fetch(`${url}/v1/runs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      runtimeId: 'omp',
+      taskId: 't-omp-resume',
+      prompt: 'lanjutkan task',
+      workspaceId: 'project/task-omp',
+      sessionId: 'sess-persisten-123',
+      resume: true,
+    }),
+  });
+  assert.equal(response.status, 202);
+  const { runId } = (await response.json()) as { runId: string };
+
+  let record: Record<string, unknown> = {};
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    record = (await (await fetch(`${url}/v1/runs/${runId}`, { headers })).json()) as Record<string, unknown>;
+    if (record.status === 'completed' || record.status === 'failed') break;
+  }
+
+  assert.equal(record.status, 'completed');
+  const req = record.request as Record<string, unknown>;
+  assert.equal(req.sessionId, 'sess-persisten-123');
+  assert.equal(req.resume, true);
+  const events = record.events as Array<{ type: string; data: Record<string, unknown> }>;
+  const resumeTextEvt = events.find((e) => e.type === 'text' && String(e.data.text).includes('dilanjutkan'));
+  assert.ok(resumeTextEvt, 'should contain resume notification event');
+});
+
+test('output bounds: massive stream without newlines sets truncated and prevents unbounded buffer', async () => {
+  const response = await fetch(`${url}/v1/runs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      runtimeId: 'omp',
+      taskId: 't-omp-huge',
+      prompt: '--huge-no-newline',
+      workspaceId: 'project/task-omp-huge',
+    }),
+  });
+  assert.equal(response.status, 202);
+  const { runId } = (await response.json()) as { runId: string };
+
+  let record: Record<string, unknown> = {};
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    record = (await (await fetch(`${url}/v1/runs/${runId}`, { headers })).json()) as Record<string, unknown>;
+    if (record.status === 'completed' || record.status === 'failed') break;
+  }
+
+  assert.equal(record.status, 'completed');
+  // Truncated flag must be set due to exceeding MAX_LINE_BUFFER_BYTES without newline
+  assert.equal(record.truncated, true);
+  // Output length is strictly bounded
+  assert.ok(typeof record.output === 'string');
+  assert.ok(record.output.length <= 1_048_576);
+});
+
+test('audit: sanitizes log file without leaking prompts, outputs, tokens, or secrets', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const auditContent = await readFile(process.env.RUNTIME_AUDIT_FILE!, 'utf8');
+  assert.ok(auditContent.length > 0);
+
+  const lines = auditContent.trim().split('\n').filter(Boolean);
+  for (const line of lines) {
+    const entry = JSON.parse(line) as Record<string, unknown>;
+    // Required safe metadata
+    assert.ok(entry.timestamp);
+    assert.ok(entry.event);
+    assert.ok(entry.runId);
+    assert.ok(entry.taskId);
+    assert.ok(entry.runtimeId);
+    assert.ok(entry.status);
+
+    // Forbidden leak keys
+    assert.equal('prompt' in entry, false, 'Audit log must never log prompts');
+    assert.equal('output' in entry, false, 'Audit log must never log full outputs');
+    assert.equal('token' in entry, false, 'Audit log must never log tokens');
+    assert.equal('environment' in entry, false, 'Audit log must never log child process environment');
+    assert.equal('authorization' in entry, false, 'Audit log must never log authorization header');
+  }
+});
+
 

@@ -32,6 +32,7 @@ import {
   AgentRouter,
   CodingAgent,
   type CodingEnvironment,
+  type CodingExecutionReport,
   type CodingTaskInput,
   type CriterionCategory,
   DEFAULT_MAX_STEPS,
@@ -50,7 +51,10 @@ import {
   type ResearchTaskInput,
   type RuntimeManager,
   type RuntimeExecuteResult,
+  type SkillManifest,
   synthesizeGenericCriteria,
+  SubagentOrchestrator,
+  type ParentTaskPayload,
 } from '@personal-ai-os/agent-core';
 import type {
   ChatMessage,
@@ -116,6 +120,20 @@ export interface TaskExecutorOptions {
   modelGateway?: ModelGateway | undefined;
   defaultModel?: string | undefined;
   memoryProposalHandler?: ((proposal: MemoryCandidate) => Promise<unknown>) | undefined;
+  skillProposalHandler?: ((proposal: AutoProposeSkillPayload) => Promise<unknown>) | undefined;
+  taskQueue?: TaskQueueEnqueuer | undefined;
+  subagentOrchestrator?: SubagentOrchestrator | undefined;
+}
+
+export interface AutoProposeSkillPayload {
+  taskId: string;
+  userId: string;
+  skillName: string;
+  title: string;
+  description: string;
+  proposedManifest: SkillManifest;
+  promptInstructions: string;
+  extractedFromEvaluation: boolean;
 }
 
 export class TaskExecutor {
@@ -140,6 +158,9 @@ export class TaskExecutor {
   private readonly candidateExtractor = new MemoryCandidateExtractor();
   private readonly memoryProposalHandler?:
     ((proposal: MemoryCandidate) => Promise<unknown>) | undefined;
+  private readonly skillProposalHandler?:
+    ((proposal: AutoProposeSkillPayload) => Promise<unknown>) | undefined;
+  private readonly subagentOrchestrator: SubagentOrchestrator;
 
   constructor(
     taskRepo: TaskRepository,
@@ -147,6 +168,7 @@ export class TaskExecutor {
     options?: TaskExecutorOptions,
   ) {
     this.memoryProposalHandler = options?.memoryProposalHandler;
+    this.skillProposalHandler = options?.skillProposalHandler;
     this.taskRepo = taskRepo;
     this.broadcaster = broadcaster;
     this.guard = options?.guard;
@@ -170,6 +192,14 @@ export class TaskExecutor {
       new GenericAgent({ modelGateway: this.modelGateway, defaultModel: this.defaultModel });
     this.codingWorkspaceRoot =
       options?.codingWorkspaceRoot ?? process.env.CODING_WORKSPACE_ROOT ?? 'data/workspaces';
+    this.subagentOrchestrator =
+      options?.subagentOrchestrator ??
+      new SubagentOrchestrator({
+        taskRepo: this.taskRepo,
+        taskQueue: options?.taskQueue,
+        broadcaster: this.broadcaster,
+        codingWorkspaceRoot: this.codingWorkspaceRoot,
+      });
   }
 
   async execute(job: TaskJobData): Promise<void> {
@@ -198,6 +228,9 @@ export class TaskExecutor {
       task.status === 'paused' ||
       task.status === 'failed'
     ) {
+      if (task.status === 'cancelled') {
+        await this.subagentOrchestrator.cascadeCancellation(task.id, task.userId);
+      }
       defaultTracer.endSpan(span, { status: 'ok', attributes: { 'task.status': task.status } });
       return;
     }
@@ -346,7 +379,15 @@ export class TaskExecutor {
       // Ensure state is running when starting/resuming steps
       const currentStatusCheck = await this.taskRepo.getTask(task.userId, task.id);
       if (currentStatusCheck && currentStatusCheck.status === 'planning') {
-        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'running');
+        const payloadUpdates: Record<string, unknown> = {
+          ...currentStatusCheck.payload,
+        };
+        if (selectedRuntimeId) {
+          payloadUpdates['selectedRuntimeId'] = selectedRuntimeId;
+        }
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'running', {
+          payload: payloadUpdates,
+        });
       }
 
       // Determine task category
@@ -362,7 +403,11 @@ export class TaskExecutor {
         task.payload?.type === 'research' ||
         (task.payload?.intent === 'research' && !isSimulation);
 
-      const targetRuntime = selectedRuntimeId ?? (task.payload?.runtime as string) ?? this.preferredRuntimeId;
+      const targetRuntime =
+        selectedRuntimeId ??
+        (task.payload?.selectedRuntimeId as string) ??
+        (task.payload?.runtimeFallback ? 'native' : (task.payload?.runtime as string)) ??
+        this.preferredRuntimeId;
       const shouldUseRuntime =
         task.payload?.useRuntime === true ||
         task.payload?.runtime === 'omp' ||
@@ -371,6 +416,19 @@ export class TaskExecutor {
 
       if (shouldUseRuntime && targetRuntime && targetRuntime !== 'native' && this.runtimeManager?.getRuntime(targetRuntime)) {
         await this.executeRuntimeTrack(task, prompt, targetRuntime, span);
+        return;
+      }
+
+      // ========================================================
+      // PATH S: DURABLE SUBAGENT ORCHESTRATION TRACK
+      // ========================================================
+      const isOrchestratedTask =
+        task.kind.startsWith('orchestrated') ||
+        task.kind === 'subagent_parent' ||
+        Array.isArray(task.payload?.childPlan);
+
+      if (isOrchestratedTask) {
+        await this.executeOrchestratedTrack(task, span);
         return;
       }
 
@@ -504,6 +562,107 @@ export class TaskExecutor {
       }
     } catch (err) {
       console.error('Failed to extract memory proposal from task:', err);
+    }
+  }
+
+  private async proposeSkillFromCodingReport(
+    task: TaskRecord,
+    report: CodingExecutionReport,
+  ): Promise<void> {
+    if (!this.skillProposalHandler) return;
+    if (report.status !== 'completed' || report.evaluationResult?.passed !== true) return;
+
+    try {
+      const rawTitle =
+        (task.payload?.title as string) ||
+        (task.payload?.instructions as string) ||
+        'coding_patch';
+      const cleanSlug =
+        rawTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 30) || 'patch';
+      const skillName = `coding_${cleanSlug}_${task.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)}`;
+
+      const proposedManifest: SkillManifest = {
+        name: skillName,
+        version: '1.0.0',
+        description: `Skill terverifikasi untuk tugas: ${rawTitle.slice(0, 100)}`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instructions: { type: 'string' },
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            summary: { type: 'string' },
+          },
+        },
+        toolRequirements: ['workspace_read_file', 'hashline_edit'],
+        permissions: [
+          {
+            action: 'fs:read_file',
+            resource: 'workspace',
+            scope: 'workspace',
+            riskLevel: 'LOW',
+            reason: 'Membaca file workspace untuk verifikasi kode',
+          },
+          {
+            action: 'fs:edit_file',
+            resource: 'workspace',
+            scope: 'workspace',
+            riskLevel: 'MEDIUM',
+            reason: 'Menerapkan perbaikan kode menggunakan hashline anchor',
+          },
+        ],
+        compatibility: {
+          platforms: ['node', 'linux', 'windows'],
+        },
+        metadata: {
+          provenance: {
+            taskId: task.id,
+            userId: task.userId,
+            projectId: task.projectId,
+            extractedAt: new Date().toISOString(),
+          },
+          extractedFromTaskId: task.id,
+          extractedAt: new Date().toISOString(),
+          evaluatorScore: report.evaluationResult?.score ?? 1.0,
+          testCases: [
+            {
+              id: 'test-verify-1',
+              description: `Verifikasi perbaikan kode untuk "${rawTitle.slice(0, 50)}" lulus evaluasi`,
+              expectedOutput: 'Evaluator score >= 1.0',
+            },
+          ],
+          riskLevel: 'MEDIUM',
+          reason: `Pola perbaikan kode terverifikasi dari task sukses ${task.id} dengan file termodifikasi: ${report.modifiedFiles.join(', ')}`,
+        },
+      };
+
+      const promptInstructions = sanitizeRuntimeText(
+        `Langkah perbaikan terverifikasi untuk tugas ini:\n` +
+          `1. Periksa integritas git dan status workspace.\n` +
+          `2. Modifikasi file target: ${report.modifiedFiles.join(', ')}.\n` +
+          `3. Jalankan suite verifikasi (lint, typecheck, test) hingga lulus evaluator.`,
+      );
+
+      await this.skillProposalHandler({
+        taskId: task.id,
+        userId: task.userId,
+        skillName,
+        title: `Usulan Skill: ${rawTitle.slice(0, 50)}`,
+        description: report.summary,
+        proposedManifest,
+        promptInstructions,
+        extractedFromEvaluation: true,
+      });
+    } catch (err) {
+      console.error('Failed to auto-propose skill from completed coding task:', err);
     }
   }
 
@@ -687,7 +846,8 @@ export class TaskExecutor {
     });
     this.broadcaster.publish(doneEvt);
 
-    const output = result.output ?? '';
+    const rawOutput = result.output ?? '';
+    const output = sanitizeRuntimeText(rawOutput);
     const outputEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.tool_call', { tool: `runtime:${runtimeId}`, output, proposedActions: result.proposedActions ?? [], untrustedOutputWarning: result.untrustedOutputWarning === true });
     this.broadcaster.publish(outputEvent);
 
@@ -751,7 +911,8 @@ export class TaskExecutor {
 
     if (result.status !== 'completed') {
       const status = result.status === 'cancelled' ? 'cancelled' : 'failed';
-      const error = result.error ?? `Runtime ${runtimeId} returned ${result.status}.`;
+      const rawError = result.error ?? `Runtime ${runtimeId} returned ${result.status}.`;
+      const error = sanitizeRuntimeText(rawError);
       await this.taskRepo.updateTaskStatus(task.userId, task.id, status, { error });
       const failed = await this.taskRepo.createTaskEvent(task.userId, task.id, status === 'cancelled' ? 'task.cancelled' : 'task.failed', { runtimeId, error, retryable: false });
       this.broadcaster.publish(failed);
@@ -936,6 +1097,7 @@ export class TaskExecutor {
       );
       this.broadcaster.publish(completeEvent);
       await this.onTaskCompleted(task, { result: report.summary });
+      await this.proposeSkillFromCodingReport(task, report);
       defaultTracer.endSpan(span, { status: 'ok' });
     }
   }
@@ -2557,5 +2719,113 @@ export class TaskExecutor {
     const task = await this.taskRepo.getTask(userId, taskId);
     if (!task) return true;
     return task.status === 'cancelled' || task.status === 'paused';
+  }
+
+  private async executeOrchestratedTrack(
+    task: TaskRecord,
+    span: TelemetrySpan,
+  ): Promise<void> {
+    const payload = task.payload as unknown as ParentTaskPayload;
+    if (!payload || !Array.isArray(payload.childPlan)) {
+      const err = "Payload task terorkestrasi tidak valid: 'childPlan' harus berupa array.";
+      await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', { error: err });
+      defaultTracer.endSpan(span, { status: 'error', errorMessage: err });
+      return;
+    }
+
+    try {
+      // 1. Prepare child tasks with idempotency and isolation
+      const childTasks = await this.subagentOrchestrator.prepareChildTasks(task, payload);
+
+      // 2. Checkpoint indicating children prepared
+      const checkpoint = createVersionedCheckpoint({
+        version: (task.checkpoint?.version ?? 0) + 1,
+        stepIndex: 1,
+        totalSteps: childTasks.length,
+        lastExecutedAction: 'prepare_subagents',
+        actionType: 'system',
+        actionState: {
+          totalChildren: childTasks.length,
+          childTaskIds: childTasks.map((c) => c.id),
+        },
+      });
+      await this.taskRepo.updateTaskProgress(task.userId, task.id, 20, checkpoint);
+
+      // 3. Enqueue children to queue machinery
+      await this.subagentOrchestrator.enqueueChildTasks(childTasks);
+
+      // 4. Progress event
+      const progressEvt = await this.taskRepo.createTaskEvent(
+        task.userId,
+        task.id,
+        'subagent.progress',
+        {
+          parentTaskId: task.id,
+          totalChildren: childTasks.length,
+          childTaskIds: childTasks.map((c) => c.id),
+          message: `${childTasks.length} child task disiapkan dan dimasukkan ke antrean eksekusi.`,
+        },
+      );
+      this.broadcaster.publish(progressEvt);
+
+      // 5. Aggregate results from child tasks
+      const summary = await this.subagentOrchestrator.aggregateResults(task, payload.childPlan);
+
+      // 6. Check if all children reached terminal state
+      const terminalCount = summary.completedChildren + summary.failedChildren + summary.cancelledChildren;
+      if (summary.totalChildren > 0 && terminalCount === summary.totalChildren) {
+        if (summary.status === 'completed') {
+          await this.taskRepo.updateTaskStatus(task.userId, task.id, 'completed', {
+            progress: 100,
+            artifacts: summary.childrenResults.flatMap((c) => c.artifacts ?? []),
+          });
+          const completedEvt = await this.taskRepo.createTaskEvent(
+            task.userId,
+            task.id,
+            'task.completed',
+            {
+              parentTaskId: task.id,
+              summary,
+            },
+          );
+          this.broadcaster.publish(completedEvt);
+          defaultTracer.endSpan(span, { status: 'ok', attributes: { 'subagent.status': 'completed' } });
+          return;
+        }
+
+        const failureReason =
+          summary.notes ??
+          `Orkestrasi subagent gagal: ${summary.failedChildren} dari ${summary.totalChildren} child task gagal.`;
+        await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', {
+          error: failureReason,
+        });
+        const failedEvt = await this.taskRepo.createTaskEvent(
+          task.userId,
+          task.id,
+          'task.failed',
+          {
+            parentTaskId: task.id,
+            error: failureReason,
+            summary,
+          },
+        );
+        this.broadcaster.publish(failedEvt);
+        defaultTracer.endSpan(span, { status: 'error', errorMessage: failureReason });
+        return;
+      }
+
+      defaultTracer.endSpan(span, {
+        status: 'ok',
+        attributes: { 'subagent.status': 'running', 'children.count': childTasks.length },
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.taskRepo.updateTaskStatus(task.userId, task.id, 'failed', { error: message });
+      const failEvent = await this.taskRepo.createTaskEvent(task.userId, task.id, 'task.failed', {
+        error: message,
+      });
+      this.broadcaster.publish(failEvent);
+      defaultTracer.endSpan(span, { status: 'error', errorMessage: message });
+    }
   }
 }

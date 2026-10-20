@@ -1,5 +1,6 @@
 /* eslint no-empty: ["error", { "allowEmptyCatch": true }] */
 import { prepareWorkspace } from './workspace-manager.ts';
+import { OmpRpcSession } from './omp-rpc-adapter.ts';
 import { appendFile, readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -40,6 +41,7 @@ export interface RunRequest {
   resume?: boolean | undefined;
   timeoutMs?: number | undefined;
   environment?: Record<string, string> | undefined;
+  mode?: 'rpc' | 'oneshot' | undefined;
 }
 
 export interface RunRecord {
@@ -57,7 +59,8 @@ export interface RunRecord {
 type RunBody = Partial<Record<keyof RunRequest, unknown>>;
 type ActiveRun = {
   record: RunRecord;
-  child: ChildProcess;
+  child?: ChildProcess | undefined;
+  rpcSession?: OmpRpcSession | undefined;
   cancelRequested: boolean;
   eventListeners: Set<(event: NormalizedRuntimeEvent) => void>;
 };
@@ -67,13 +70,17 @@ const BIND = process.env.RUNTIME_BRIDGE_BIND ?? '172.20.0.1';
 const TOKEN_FILE = process.env.RUNTIME_BRIDGE_TOKEN_FILE ?? '/etc/personal-ai-os/runtime-bridge.token';
 const WORKSPACE_ROOT = resolve(process.env.RUNTIME_WORKSPACE_ROOT ?? '/srv/aios/workspaces');
 const AUDIT_FILE = process.env.RUNTIME_AUDIT_FILE ?? '/var/log/personal-ai-os/runtime-bridge.audit.jsonl';
-const MAX_OUTPUT = Number(process.env.RUNTIME_MAX_OUTPUT_BYTES ?? 1_048_576);
+export const MAX_OUTPUT = Number(process.env.RUNTIME_MAX_OUTPUT_BYTES ?? 1_048_576);
+export const MAX_LINE_BUFFER_BYTES = Number(process.env.RUNTIME_MAX_LINE_BYTES ?? 131_072);
+export const MAX_EVENTS_PER_RUN = Number(process.env.RUNTIME_MAX_EVENTS ?? 1_000);
 const DEFAULT_TIMEOUT = Number(process.env.RUNTIME_TIMEOUT_MS ?? 300_000);
 const MAX_TIMEOUT = Number(process.env.RUNTIME_MAX_TIMEOUT_MS ?? 900_000);
 const RUN_TTL = Number(process.env.RUNTIME_RUN_TTL_MS ?? 3_600_000);
 const MAX_QUEUE = Number(process.env.RUNTIME_MAX_QUEUE ?? 32);
 const MAX_CONCURRENCY = Number(process.env.RUNTIME_MAX_CONCURRENCY ?? 2);
 const RATE_LIMIT = Number(process.env.RUNTIME_RATE_LIMIT ?? 30);
+
+export const TOKEN_REGEX = /^[A-Za-z0-9._~+/-]{32,512}$/;
 
 const prompts = new Map<string, string>();
 const queue: RunRecord[] = [];
@@ -90,6 +97,16 @@ function json(res: ServerResponse, code: number, value: unknown): void {
 }
 
 function audit(event: string, record: RunRecord, extra?: Record<string, unknown>): void {
+  const safeExtra: Record<string, unknown> = {};
+  if (extra && typeof extra === 'object') {
+    const BLOCKED_AUDIT_KEYS = /^(prompt|output|token|environment|secret|authorization|key|password)/i;
+    for (const [k, v] of Object.entries(extra)) {
+      if (!BLOCKED_AUDIT_KEYS.test(k)) {
+        safeExtra[k] = v;
+      }
+    }
+  }
+
   void appendFile(
     AUDIT_FILE,
     `${JSON.stringify({
@@ -99,7 +116,11 @@ function audit(event: string, record: RunRecord, extra?: Record<string, unknown>
       taskId: record.request.taskId,
       runtimeId: record.request.runtimeId,
       status: record.status,
-      ...extra,
+      durationMs: record.durationMs,
+      exitCode: record.exitCode,
+      truncated: record.truncated,
+      eventCount: record.events.length,
+      ...safeExtra,
     })}\n`,
   ).catch((error: unknown) =>
     console.error(
@@ -119,16 +140,20 @@ async function loadToken(): Promise<Buffer> {
       throw new Error('bridge token permissions must be 0600');
     }
     const value = (await readFile(TOKEN_FILE, 'utf8')).trim();
-    if (!value || value.length < 32) throw new Error('bridge token is missing or too short');
+    if (!TOKEN_REGEX.test(value)) {
+      throw new Error('bridge token is missing, too short, or has invalid format');
+    }
     tokenCache = Buffer.from(value);
   }
   return tokenCache;
 }
 
-function authorized(req: IncomingMessage, expected: Buffer): boolean {
+export function authorized(req: IncomingMessage, expected: Buffer): boolean {
   const value = req.headers.authorization ?? '';
   if (!value.startsWith('Bearer ')) return false;
-  const got = Buffer.from(value.slice(7));
+  const tokenStr = value.slice(7).trim();
+  if (!TOKEN_REGEX.test(tokenStr)) return false;
+  const got = Buffer.from(tokenStr);
   const left = createHash('sha256').update(got).digest();
   const right = createHash('sha256').update(expected).digest();
   return timingSafeEqual(left, right);
@@ -178,6 +203,9 @@ function parseRun(value: unknown): RunRequest | undefined {
   if (x.environment && typeof x.environment === 'object') {
     request.environment = x.environment as Record<string, string>;
   }
+  if (x.mode === 'rpc' || x.mode === 'oneshot') {
+    request.mode = x.mode;
+  }
   return request;
 }
 
@@ -186,6 +214,9 @@ function command(request: RunRequest): { file: string; args: string[] } {
     const args = ['-p', request.prompt, '--mode', 'json'];
     if (request.sessionId) {
       args.push('--session', request.sessionId);
+      if (request.resume) {
+        args.push('--resume');
+      }
     } else {
       args.push('--no-session');
     }
@@ -222,6 +253,7 @@ function trimRuns(): void {
 export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
   const trimmed = line.trim();
   if (!trimmed || !trimmed.startsWith('{')) return undefined;
+  if (trimmed.length > MAX_LINE_BUFFER_BYTES) return undefined;
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
     const type = String(parsed.type ?? '');
@@ -241,16 +273,17 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
         text = parsed.text;
       }
       if (text) {
-        return { id, type: 'text', timestamp, data: { text }, raw: parsed };
+        const boundedText = text.length > 65_536 ? text.slice(0, 65_536) : text;
+        return { id, type: 'text', timestamp, data: { text: boundedText }, raw: parsed };
       }
     } else if (type === 'tool_start') {
-      const toolName = String(parsed.tool ?? parsed.name ?? 'tool');
+      const toolName = String(parsed.tool ?? parsed.name ?? 'tool').slice(0, 128);
       if (toolName === 'task') {
         const inputObj = typeof parsed.input === 'object' && parsed.input !== null ? (parsed.input as Record<string, unknown>) : {};
         const subTask = typeof inputObj['task'] === 'string'
-          ? inputObj['task']
+          ? inputObj['task'].slice(0, 1024)
           : typeof inputObj['prompt'] === 'string'
-            ? inputObj['prompt']
+            ? inputObj['prompt'].slice(0, 1024)
             : 'Tugas sub-agent paralel';
         return {
           id,
@@ -268,7 +301,7 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
       if (toolName === 'todo' || toolName === 'plan') {
         const inputObj = typeof parsed.input === 'object' && parsed.input !== null ? (parsed.input as Record<string, unknown>) : {};
         const rawTodos = inputObj['todos'] ?? inputObj['items'] ?? inputObj['plan'];
-        const planItems = Array.isArray(rawTodos) ? rawTodos.map(String) : undefined;
+        const planItems = Array.isArray(rawTodos) ? rawTodos.slice(0, 100).map((s) => String(s).slice(0, 512)) : undefined;
         return {
           id,
           type: 'plan',
@@ -292,7 +325,7 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
         raw: parsed,
       };
     } else if (type === 'tool_end') {
-      const toolName = String(parsed.tool ?? parsed.name ?? 'tool');
+      const toolName = String(parsed.tool ?? parsed.name ?? 'tool').slice(0, 128);
       if (toolName === 'task') {
         return {
           id,
@@ -309,7 +342,7 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
       if (toolName === 'todo' || toolName === 'plan') {
         const outputObj = typeof parsed.output === 'object' && parsed.output !== null ? (parsed.output as Record<string, unknown>) : {};
         const rawTodos = outputObj['todos'] ?? outputObj['items'] ?? outputObj['plan'];
-        const planItems = Array.isArray(rawTodos) ? rawTodos.map(String) : undefined;
+        const planItems = Array.isArray(rawTodos) ? rawTodos.slice(0, 100).map((s) => String(s).slice(0, 512)) : undefined;
         return {
           id,
           type: 'plan',
@@ -334,7 +367,7 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
       };
     } else if (type === 'plan') {
       const rawTodos = (parsed as Record<string, unknown>)['todos'] ?? (parsed as Record<string, unknown>)['items'] ?? (parsed as Record<string, unknown>)['plan'];
-      const planItems = Array.isArray(rawTodos) ? rawTodos.map(String) : undefined;
+      const planItems = Array.isArray(rawTodos) ? rawTodos.slice(0, 100).map((s) => String(s).slice(0, 512)) : undefined;
       return {
         id,
         type: 'plan',
@@ -342,18 +375,20 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
         data: {
           toolName: 'plan',
           planItems,
-          text: typeof parsed.text === 'string' ? parsed.text : undefined,
+          text: typeof parsed.text === 'string' ? parsed.text.slice(0, 65_536) : undefined,
         },
         raw: parsed,
       };
     } else if (type === 'file_edit' || type === 'patch' || type === 'diff') {
+      const diffVal = typeof parsed.diff === 'string' ? parsed.diff : typeof parsed.patch === 'string' ? parsed.patch : undefined;
+      const boundedDiff = diffVal && diffVal.length > 65_536 ? diffVal.slice(0, 65_536) : diffVal;
       return {
         id,
         type: 'file_edit',
         timestamp,
         data: {
-          path: typeof parsed.path === 'string' ? parsed.path : undefined,
-          diff: typeof parsed.diff === 'string' ? parsed.diff : typeof parsed.patch === 'string' ? parsed.patch : undefined,
+          path: typeof parsed.path === 'string' ? parsed.path.slice(0, 1024) : undefined,
+          diff: boundedDiff,
         },
         raw: parsed,
       };
@@ -363,7 +398,7 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
         type: 'error',
         timestamp,
         data: {
-          error: String(parsed.error ?? parsed.message ?? 'Unknown runtime error'),
+          error: String(parsed.error ?? parsed.message ?? 'Unknown runtime error').slice(0, 4096),
         },
         raw: parsed,
       };
@@ -374,7 +409,19 @@ export function parseOmpLine(line: string): NormalizedRuntimeEvent | undefined {
   return undefined;
 }
 
-function cleanEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
+const ALLOWED_EXTRA_KEYS = new Set([
+  'NODE_ENV',
+  'CI',
+  'TERM',
+  'DEBUG',
+  'LANG',
+  'SAFE_PROJECT_NAME',
+]);
+const ALLOWED_EXTRA_PREFIXES = ['SAFE_', 'PROJECT_', 'TASK_', 'APP_'];
+const FORBIDDEN_ENV_REGEX = /^(NODE_OPTIONS|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_|BUN_|PERL|PYTHON|RUBY|GIT_|SSH_|AWS_|DOCKER_|PATH|HOME|USERPROFILE|COMSPEC|SHELL|PROMPT)/i;
+const SECRET_ENV_REGEX = /(secret|token|key|password|database|ninerouter|auth|fcm|cred)/i;
+
+export function cleanEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   const sep = process.platform === 'win32' ? ';' : ':';
   const defaultPath = process.platform === 'win32' ? (process.env.PATH ?? '') : '/usr/local/bin:/usr/bin:/bin';
   const env: NodeJS.ProcessEnv = {
@@ -386,10 +433,15 @@ function cleanEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
     COMSPEC: process.env.COMSPEC,
     PATHEXT: process.env.PATHEXT,
   };
-  if (extra) {
-    const blocked = [/secret/i, /token/i, /key/i, /password/i, /database/i, /ninerouter/i, /auth/i, /fcm/i];
+
+  if (extra && typeof extra === 'object') {
     for (const [k, v] of Object.entries(extra)) {
-      if (typeof v === 'string' && !blocked.some((re) => re.test(k))) {
+      if (typeof v !== 'string') continue;
+      if (v.includes('\0') || v.includes('\n') || v.includes('\r')) continue;
+      if (FORBIDDEN_ENV_REGEX.test(k) || SECRET_ENV_REGEX.test(k)) continue;
+
+      const isAllowed = ALLOWED_EXTRA_KEYS.has(k) || ALLOWED_EXTRA_PREFIXES.some((prefix) => k.startsWith(prefix));
+      if (isAllowed) {
         env[k] = v;
       }
     }
@@ -430,6 +482,83 @@ function pump(): void {
   }
 }
 
+async function executeOmpRpc(record: RunRecord, cwd: string, prompt: string): Promise<void> {
+  const started = Date.now();
+  let session: OmpRpcSession | undefined;
+  let current: ActiveRun | undefined;
+
+  try {
+    session = new OmpRpcSession({
+      workspaceDir: cwd,
+      sessionId: record.request.sessionId,
+      resume: record.request.resume,
+      env: cleanEnv(record.request.environment),
+      commandTimeoutMs: record.request.timeoutMs ?? DEFAULT_TIMEOUT,
+      onEvent: (event) => {
+        record.events.push(event);
+        if (current) {
+          for (const listener of current.eventListeners) {
+            listener(event);
+          }
+        }
+      },
+    });
+
+    current = {
+      record,
+      rpcSession: session,
+      cancelRequested: false,
+      eventListeners: new Set(),
+    };
+    activeRuns.set(record.id, current);
+    record.status = 'running';
+    audit('run_started', record);
+
+    await session.start();
+    if (session.getSessionId()) {
+      record.request.sessionId = session.getSessionId();
+    }
+
+    if (current.cancelRequested) {
+      record.status = 'cancelled';
+      await session.close();
+      return;
+    }
+
+    const response = await session.prompt(prompt);
+    record.durationMs = Date.now() - started;
+    if (session.getSessionId()) {
+      record.request.sessionId = session.getSessionId();
+    }
+
+    if (current.cancelRequested) {
+      record.status = 'cancelled';
+    } else if (!response.success) {
+      record.status = 'failed';
+      record.error = response.error ?? 'OMP RPC prompt returned failure';
+    } else {
+      record.status = 'completed';
+      record.output = typeof response.data === 'object' ? JSON.stringify(response.data) : String(response.data ?? 'completed');
+    }
+  } catch (err) {
+    record.durationMs = Date.now() - started;
+    if (current?.cancelRequested) {
+      record.status = 'cancelled';
+    } else {
+      record.status = 'failed';
+      record.error = err instanceof Error ? err.message : 'OMP RPC execution error';
+    }
+  } finally {
+    if (session) {
+      await session.close().catch(() => {});
+    }
+    prompts.delete(record.id);
+    finishedAt.set(record.id, Date.now());
+    audit(`run_${record.status}`, record);
+    activeRuns.delete(record.id);
+  }
+}
+
 async function execute(record: RunRecord): Promise<void> {
   const started = Date.now();
   let current: ActiveRun | undefined;
@@ -439,13 +568,22 @@ async function execute(record: RunRecord): Promise<void> {
       return;
     }
     const prompt = prompts.get(record.id) ?? '';
+
+    if (record.request.mode === 'rpc' && record.request.runtimeId === 'omp') {
+      await executeOmpRpc(record, cwd, prompt);
+      return;
+    }
+
     const fullRequest: RunRequest = { ...record.request, prompt };
     const spec = command(fullRequest);
-    const child = spawn(spec.file, spec.args, {
+    const isWin = process.platform === 'win32';
+    const spawnFile = isWin ? (process.env.COMSPEC || 'cmd.exe') : spec.file;
+    const spawnArgs = isWin ? ['/d', '/s', '/c', spec.file, ...spec.args] : spec.args;
+    const child = spawn(spawnFile, spawnArgs, {
       cwd,
       env: cleanEnv(record.request.environment),
-      detached: process.platform !== 'win32',
-      shell: process.platform === 'win32',
+      detached: !isWin,
+      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     current = { record, child, cancelRequested: false, eventListeners: new Set() };
@@ -458,17 +596,39 @@ async function execute(record: RunRecord): Promise<void> {
 
     child.stdout?.on('data', (chunk: Buffer) => {
       boundedAppend(state, chunk);
-      lineBuffer += chunk.toString('utf8');
-      let newlineIdx: number;
-      while ((newlineIdx = lineBuffer.indexOf('\n')) !== -1) {
-        const line = lineBuffer.slice(0, newlineIdx);
-        lineBuffer = lineBuffer.slice(newlineIdx + 1);
-        const parsedEvent = parseOmpLine(line);
-        if (parsedEvent) {
-          record.events.push(parsedEvent);
-          for (const listener of current!.eventListeners) {
-            listener(parsedEvent);
+
+      // Guard against unbounded lineBuffer when output lacks newlines
+      if (lineBuffer.length + chunk.length > MAX_LINE_BUFFER_BYTES && !chunk.includes(0x0a)) {
+        state.truncated = true;
+        lineBuffer = ''; // Flush oversized non-newline line
+      } else {
+        lineBuffer += chunk.toString('utf8');
+        let newlineIdx: number;
+        while ((newlineIdx = lineBuffer.indexOf('\n')) !== -1) {
+          const line = lineBuffer.slice(0, newlineIdx);
+          lineBuffer = lineBuffer.slice(newlineIdx + 1);
+
+          if (line.length > MAX_LINE_BUFFER_BYTES) {
+            state.truncated = true;
+            continue;
           }
+
+          const parsedEvent = parseOmpLine(line);
+          if (parsedEvent) {
+            if (record.events.length < MAX_EVENTS_PER_RUN) {
+              record.events.push(parsedEvent);
+              for (const listener of current!.eventListeners) {
+                listener(parsedEvent);
+              }
+            } else {
+              record.truncated = true;
+            }
+          }
+        }
+
+        if (lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
+          state.truncated = true;
+          lineBuffer = lineBuffer.slice(-MAX_LINE_BUFFER_BYTES);
         }
       }
     });
@@ -482,13 +642,17 @@ async function execute(record: RunRecord): Promise<void> {
 
     const { promise, resolve: finish } = Promise.withResolvers<{ code: number | null; signal: NodeJS.Signals | null }>();
     child.once('close', (code, signal) => finish({ code, signal }));
+    child.once('error', (err) => {
+      record.error = `spawn failed: ${err.message}`;
+      finish({ code: 1, signal: null });
+    });
 
     try {
       const result = await promise;
       // Process any remaining tail in lineBuffer
-      if (lineBuffer.trim().length > 0) {
+      if (lineBuffer.trim().length > 0 && lineBuffer.length <= MAX_LINE_BUFFER_BYTES) {
         const parsedEvent = parseOmpLine(lineBuffer);
-        if (parsedEvent) {
+        if (parsedEvent && record.events.length < MAX_EVENTS_PER_RUN) {
           record.events.push(parsedEvent);
           for (const listener of current.eventListeners) {
             listener(parsedEvent);
@@ -566,11 +730,14 @@ async function main(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return;
   }
   if (!authorized(req, expected)) {
+    // Record rate limiting against unauthorized brute-force attempts
+    rateLimited();
     json(res, 401, { error: 'unauthorized' });
     return;
   }
   trimRuns();
-  const pathname = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`).pathname;
+  // Safe URI pathname extraction independent of host header
+  const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
   try {
     if (req.method === 'GET' && pathname === '/health') {
       return json(res, 200, {
@@ -645,6 +812,7 @@ async function main(req: IncomingMessage, res: ServerResponse): Promise<void> {
         ...(parsed.resume ? { resume: true } : {}),
         ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
         ...(parsed.environment ? { environment: parsed.environment } : {}),
+        ...(parsed.mode ? { mode: parsed.mode } : {}),
       };
       const record: RunRecord = {
         id: randomUUID(),
@@ -661,13 +829,28 @@ async function main(req: IncomingMessage, res: ServerResponse): Promise<void> {
       pump();
       return json(res, 202, { runId: record.id });
     }
-    const match = pathname.match(/^\/v1\/runs\/([^/]+)(\/cancel|\/events)?$/);
+    const match = pathname.match(/^\/v1\/runs\/([^/]+)(\/cancel|\/events|\/steer)?$/);
     const id = match?.[1];
     const record = id ? runs.get(id) : undefined;
     if (!record) return json(res, 404, { error: 'not found' });
     const active = id ? activeRuns.get(id) : undefined;
     if (match?.[2] === '/events' && req.method === 'GET') return sse(res, record);
     if (!match?.[2] && req.method === 'GET') return json(res, 200, record);
+    if (match?.[2] === '/steer' && req.method === 'POST') {
+      if (!active || !active.rpcSession) {
+        return json(res, 400, { error: 'run is not active in RPC mode' });
+      }
+      const payload = (await body(req)) as { message?: unknown };
+      if (typeof payload?.message !== 'string' || !payload.message.trim()) {
+        return json(res, 400, { error: 'invalid steer message' });
+      }
+      try {
+        const steerRes = await active.rpcSession.steer(payload.message.trim());
+        return json(res, 202, { success: steerRes.success, status: 'steered' });
+      } catch (err) {
+        return json(res, 500, { error: err instanceof Error ? err.message : 'steer failed' });
+      }
+    }
     if (match?.[2] === '/cancel' && req.method === 'POST') {
       if (record.status === 'cancelled' || record.status === 'completed' || record.status === 'failed') {
         return json(res, 202, record);
@@ -679,7 +862,13 @@ async function main(req: IncomingMessage, res: ServerResponse): Promise<void> {
       if (index >= 0) queue.splice(index, 1);
       if (active) {
         active.cancelRequested = true;
-        killProcess(active.child);
+        if (active.rpcSession) {
+          void active.rpcSession.abort().catch(() => {});
+          void active.rpcSession.close().catch(() => {});
+        }
+        if (active.child) {
+          killProcess(active.child);
+        }
       }
       audit('run_cancelled', record);
       return json(res, 202, record);

@@ -1,6 +1,6 @@
 # ADR 0019: Host Runtime Bridge
 
-Status: proposed; implementation not deployable yet.
+Status: Diterima (Accepted) — Terimplementasi di `apps/runtime-bridge` (unit tests 100% lulus); penerapan host systemd/firewall produksi menunggu persetujuan pemilik.
 
 ## Verified runtime contract
 

@@ -43,6 +43,8 @@ import { SqlNotificationRepository } from './db/notification-repository.ts';
 import { SqlCompareRepository } from './db/compare-repository.ts';
 import { SqlPromptTemplateRepository } from './db/prompt-template-repository.ts';
 import { SqlSkillProposalRepository } from './db/skill-proposal-repository.ts';
+import { SqlChannelPairingRepository } from './db/channel-pairing-repository.ts';
+import { TelegramChannelAdapter, TelegramPairingManager } from './channels/telegram/index.ts';
 import { DeviceConnectionManager } from './services/device-connection-manager.ts';
 import { ModelRouter } from './services/model-router.ts';
 import { BullMqTaskQueue } from './services/task-queue.ts';
@@ -114,6 +116,19 @@ const mcpRepository = new SqlMcpRepository(db);
 const compareRepository = new SqlCompareRepository(db);
 const promptTemplateRepository = new SqlPromptTemplateRepository(db);
 const skillProposalRepository = new SqlSkillProposalRepository(db);
+const channelPairingRepository = new SqlChannelPairingRepository(db);
+const telegramPairingManager = new TelegramPairingManager({ storage: channelPairingRepository });
+const telegramChannelAdapter = new TelegramChannelAdapter({
+  config: {
+    mode: (process.env.TELEGRAM_CHANNEL_MODE as 'notification-only' | 'interactive-chat') ?? 'notification-only',
+    botToken: process.env.TELEGRAM_ALERT_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN,
+    secretToken: process.env.TELEGRAM_WEBHOOK_SECRET,
+    webhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
+    maxMessageLength: Number(process.env.TELEGRAM_MAX_MESSAGE_LENGTH ?? 4096),
+    rateLimitPerMinute: Number(process.env.TELEGRAM_RATE_LIMIT_PER_MINUTE ?? 10),
+  },
+  pairingManager: telegramPairingManager,
+});
 const toolRegistry = createDefaultToolRegistry({
   guard: new SecuredCapabilityGuard(new PermissionEngine(), { auditLogger: auditRepository }),
 });
@@ -345,6 +360,10 @@ const app = await buildApp({
   skillProposals: {
     proposalRepo: skillProposalRepository,
     skillRepo: skillRepository,
+  },
+  telegram: {
+    channelAdapter: telegramChannelAdapter,
+    pairingManager: telegramPairingManager,
   },
 });
 

@@ -41,6 +41,7 @@ export interface TaskModel {
   payload: Record<string, unknown>;
   /** Chat conversation that spawned this task, when it was launched from one. */
   conversationId?: string | null | undefined;
+  parentTaskId?: string | null | undefined;
   progress: number;
   attempt: number;
   maxAttempts: number;
@@ -67,6 +68,11 @@ export type TaskEventType =
   | 'task.cancelled'
   | 'task.paused'
   | 'task.resumed'
+  | 'subagent.spawned'
+  | 'subagent.progress'
+  | 'subagent.completed'
+  | 'subagent.failed'
+  | 'subagent.cancelled'
   | 'runtime.step'
   | 'research.started'
   | 'research.plan'
